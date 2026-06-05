@@ -4,3 +4,4 @@ httpx
 pyyaml
 python-multipart
 Pillow
+python-dotenv

@@ -1,6 +1,5 @@
 # Gemini API Configuration
 gemini:
-  api_key: "AIzaSyC8De_GApHOA5C1JlLWmoF0-7ItXnEZKxM" #"AIzaSyCjkTTVwlH4YnKxt59RhLHVkroTJCalRQQ"
   default_model: "gemini-2.5-flash-lite"
 
 # Available models and their token limits
@@ -162,6 +161,72 @@ prompt_template: |
     WRONG: [185, 605, 155, 171] ← these are pixel values, NOT normalized.
     CORRECT: [0.29, 0.79, 0.24, 0.22] ← these are normalized (value / image_dimension).
     If you output pixel values instead of normalized values, the plan is INVALID.
+
+# Verification settings
+verify:
+  enabled: true
+  max_retries: 3
+
+# Verification prompt template — {instruction}, {plan_json}, {available_methods} are replaced at runtime
+verify_prompt_template: |
+  You are a robotic plan verifier. Your job is to verify whether a plan is correct.
+
+  ## Instruction
+  {instruction}
+
+  ## Plan to Verify
+  Steps are executed in order from step_index 1, 2, 3, ... Read them sequentially.
+  {plan_json}
+
+  ## Available Methods
+  {available_methods}
+
+  ## CORRECT Patterns — Do NOT reject these
+
+  **Pick up object → place in OPEN container (bowl, tray, bin):**
+  This 4-step pattern is CORRECT:
+  1. ik_reach_object_v1 → target object
+  2. act_gripper_grasp_v1 → target object
+  3. ik_reach_object_v1 → open container (e.g. bowl)
+  4. act_gripper_release_v1 → open container
+  Note: reaching the container AFTER grasping the object is correct. The robot needs to move to the container to place the object.
+
+  **Pick up object → place in CLOSED container (drawer, door):**
+  This 8-step pattern is CORRECT:
+  1. ik_reach_object_v1 → drawer/door
+  2. act_drawer_open_v1 / act_door_open_v1 → drawer/door
+  3. ik_reach_object_v1 → target object
+  4. act_gripper_grasp_v1 → target object
+  5. ik_reach_object_v1 → opened drawer/door
+  6. act_gripper_release_v1 → opened drawer/door
+  7. ik_reach_object_v1 → drawer/door
+  8. act_drawer_close_v1 / act_door_close_v1 → drawer/door
+
+  ## Verification Checklist
+
+  1. **Step ordering**: Steps are executed sequentially by step_index. Verify the ORDER is logical.
+     - For OPEN containers: reach object → grasp → reach container → release. (4 steps)
+     - For CLOSED containers: open container → reach object → grasp → reach container → release → close. (8 steps)
+
+  2. **Action sequencing**: Every `act_*` step MUST be immediately preceded by `ik_reach_object_v1` targeting the SAME object/location.
+
+  3. **Bounding boxes**: Do the target_bbox values approximately match the objects visible in the image?
+     - Values must be normalized [0, 1].
+     - Small variations in bbox coordinates are acceptable.
+
+  4. **Method validity**: All method_id values must be from the available methods list.
+
+  5. **Completeness**: Does the plan accomplish the instruction?
+
+  ## IMPORTANT
+  - Read the steps IN ORDER (step_index 1, 2, 3...). Do not confuse the order.
+  - A plan that picks up FIRST then reaches the destination is CORRECT for open containers.
+  - Only reject a plan if there is a clear, specific error.
+
+  ## Output
+  Output ONLY valid JSON. No explanations, no markdown fences.
+
+  {"verified": true, "reason": "brief reason"} or {"verified": false, "reason": "specific error"}
 
 # Data storage
 storage:

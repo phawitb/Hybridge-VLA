@@ -324,10 +324,11 @@
         <a href="#doc-config">4. Configuration (config.yaml)</a>
         <a href="#doc-api">5. API Reference</a>
         <a href="#doc-prompt">6. Prompt Engineering</a>
-        <a href="#doc-methods">7. Robot Methods</a>
-        <a href="#doc-storage">8. Data Storage</a>
-        <a href="#doc-frontend">9. Frontend</a>
-        <a href="#doc-run">10. Running the Server</a>
+        <a href="#doc-verify">7. Verification Process</a>
+        <a href="#doc-methods">8. Robot Methods</a>
+        <a href="#doc-storage">9. Data Storage</a>
+        <a href="#doc-frontend">10. Frontend</a>
+        <a href="#doc-run">11. Running the Server</a>
       </div>
 
       <!-- 1 -->
@@ -426,7 +427,23 @@ Hybridge-VLA/<br>
   {available_methods}
   ...</code></pre>
 
-      <h3>4.5 Storage</h3>
+      <h3>4.5 Verification</h3>
+      <pre><code>verify:
+  enabled: true    # Enable/disable plan verification
+  max_retries: 3   # Max infer+verify attempts
+
+verify_prompt_template: |
+  You are a robotic plan verifier...
+  ## Instruction
+  {instruction}
+  ## Plan to Verify
+  {plan_json}
+  ## Available Methods
+  {available_methods}
+  ...</code></pre>
+      <p>See <a href="#doc-verify">Section 7: Verification Process</a> for full details.</p>
+
+      <h3>4.6 Storage</h3>
       <pre><code>storage:
   results_dir: "data/results"   # JSON result files
   images_dir: "data/images"     # Uploaded images</code></pre>
@@ -444,7 +461,8 @@ Hybridge-VLA/<br>
   "default_model": "gemini-2.5-flash-lite",
   "default_instruction": "pick up the red cube to the second drawer",
   "available_methods": ["ik_reach_object_v1", "act_gripper_grasp_v1", ...],
-  "prompt_template": "You are a robotic task planner..."
+  "prompt_template": "You are a robotic task planner...",
+  "verify": {"enabled": true, "max_retries": 3}
 }</code></pre>
 
       <h3>5.2 <span class="badge badge-post">POST</span> /api/infer</h3>
@@ -479,6 +497,11 @@ Hybridge-VLA/<br>
         "method_id": "ik_reach_object_v1"
       }
     ]
+  },
+  "bbox_auto_normalized": false,
+  "verify": {
+    "enabled": true, "passed": true, "attempts": 1, "max_retries": 3,
+    "history": [{"attempt":1, "infer_elapsed":2.31, "verify_result":{"verified":true, "reason":"..."}}]
   },
   "token_usage": {
     "input": 1234,
@@ -557,7 +580,54 @@ width    = box_width / image_width
 height   = box_height / image_height</code></pre>
 
       <!-- 7 -->
-      <h2 id="doc-methods">7. Robot Methods</h2>
+      <h2 id="doc-verify">7. Verification Process</h2>
+      <p>After generating a plan, the system can send the plan back to Gemini for verification. If verification fails, the system retries the entire inference up to a configurable number of times.</p>
+
+      <h3>7.1 How It Works</h3>
+      <ol>
+        <li><strong>Infer</strong> &mdash; Call Gemini with image + prompt to generate a plan.</li>
+        <li><strong>Parse</strong> &mdash; Extract JSON from the response.</li>
+        <li><strong>Normalize</strong> &mdash; Auto-fix pixel bboxes to [0,1] if needed.</li>
+        <li><strong>Verify</strong> &mdash; Send the plan + image + instruction back to Gemini with a verification prompt.</li>
+        <li><strong>Retry</strong> &mdash; If verification fails, repeat from step 1 (up to <code>max_retries</code> times).</li>
+      </ol>
+
+      <h3>7.2 Configuration</h3>
+      <pre><code>verify:
+  enabled: true    # Set to false to skip verification
+  max_retries: 3   # Max number of infer+verify attempts</code></pre>
+
+      <h3>7.3 Verification Prompt</h3>
+      <p>The <code>verify_prompt_template</code> in <code>config.yaml</code> uses three placeholders:</p>
+      <ul>
+        <li><code>{instruction}</code> &mdash; the user's instruction</li>
+        <li><code>{plan_json}</code> &mdash; the generated plan as JSON</li>
+        <li><code>{available_methods}</code> &mdash; bullet list of valid methods</li>
+      </ul>
+      <p>The verifier checks: bounding box accuracy, action sequencing, method validity, logic correctness, and completeness.</p>
+
+      <h3>7.4 Verify Result in API Response</h3>
+      <pre><code>"verify": {
+  "enabled": true,
+  "passed": true,
+  "attempts": 1,
+  "max_retries": 3,
+  "history": [
+    {
+      "attempt": 1,
+      "infer_elapsed": 2.31,
+      "raw_response": "...",
+      "verify_result": {
+        "verified": true,
+        "reason": "Plan correctly sequences all actions..."
+      }
+    }
+  ]
+}</code></pre>
+      <p>If <code>passed</code> is <code>false</code>, the plan was not verified after all attempts. The <code>history</code> array shows each attempt's result and reason.</p>
+
+      <!-- 8 -->
+      <h2 id="doc-methods">8. Robot Methods</h2>
       <table>
         <tr><th>Method ID</th><th>Description</th><th>Precondition</th></tr>
         <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td><td>None — this IS the precondition</td></tr>
@@ -569,14 +639,14 @@ height   = box_height / image_height</code></pre>
         <tr><td><code>act_door_close_v1</code></td><td>Close a door</td><td>Must reach door first</td></tr>
       </table>
 
-      <!-- 8 -->
-      <h2 id="doc-storage">8. Data Storage</h2>
+      <!-- 9 -->
+      <h2 id="doc-storage">9. Data Storage</h2>
       <p>Each inference saves two files:</p>
 
-      <h3>8.1 Image File</h3>
+      <h3>9.1 Image File</h3>
       <p>Saved to <code>data/images/{timestamp}_{uuid}.{ext}</code></p>
 
-      <h3>8.2 Result JSON</h3>
+      <h3>9.2 Result JSON</h3>
       <p>Saved to <code>data/results/{timestamp}_{uuid}.json</code></p>
       <pre><code>{
   "id": "1717574400_a1b2c3d4",       // Unique ID (used as filename)
@@ -586,8 +656,17 @@ height   = box_height / image_height</code></pre>
   "methods": ["ik_reach_object_v1"],  // Methods available
   "prompt": "You are a robotic...",   // Full prompt sent
   "image": "1717574400_a1b2c3d4.jpg", // Image filename
+  "image_size": [640, 480],           // [width, height] in pixels
   "raw_response": "...",              // Raw Gemini text output
   "plan": { ... } | null,            // Parsed plan or null
+  "bbox_auto_normalized": false,      // True if pixel bboxes were auto-fixed
+  "verify": {                         // Verification result
+    "enabled": true,
+    "passed": true,
+    "attempts": 1,
+    "max_retries": 3,
+    "history": [...]                  // Per-attempt details (see section 7.4)
+  },
   "token_usage": {
     "input": 1234,
     "output": 567,
@@ -595,14 +674,14 @@ height   = box_height / image_height</code></pre>
     "limit": 1048576,
     "remaining": 1047342
   },
-  "elapsed": 2.45                     // API call time in seconds
+  "elapsed": 2.45                     // Total time in seconds (all attempts)
 }</code></pre>
 
-      <!-- 9 -->
-      <h2 id="doc-frontend">9. Frontend</h2>
+      <!-- 10 -->
+      <h2 id="doc-frontend">10. Frontend</h2>
       <p>Single-page app in <code>static/index.html</code> with 3 tabs:</p>
 
-      <h3>9.1 Tab 0 — Test Gemini API</h3>
+      <h3>10.1 Tab 0 — Test Gemini API</h3>
       <ul>
         <li><strong>Token Usage:</strong> persisted in <code>localStorage</code>, restored on page load</li>
         <li><strong>Model selector:</strong> populated from <code>/api/config</code></li>
@@ -613,7 +692,7 @@ height   = box_height / image_height</code></pre>
         <li><strong>Result:</strong> canvas with bounding boxes + step cards + raw response</li>
       </ul>
 
-      <h3>9.2 Tab 1 — Visualize</h3>
+      <h3>10.2 Tab 1 — Visualize</h3>
       <ul>
         <li>Grid of all historical results with bbox overlays on thumbnails</li>
         <li>Filter by model</li>
@@ -621,22 +700,22 @@ height   = box_height / image_height</code></pre>
         <li>Delete individual results</li>
       </ul>
 
-      <h3>9.3 Tab 2 — Documents</h3>
+      <h3>10.3 Tab 2 — Documents</h3>
       <p>This page. Full system documentation.</p>
 
-      <!-- 10 -->
-      <h2 id="doc-run">10. Running the Server</h2>
-      <h3>10.1 Install Dependencies</h3>
+      <!-- 11 -->
+      <h2 id="doc-run">11. Running the Server</h2>
+      <h3>11.1 Install Dependencies</h3>
       <pre><code>pip install -r requirements.txt</code></pre>
-      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code></p>
+      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code>, <code>Pillow</code></p>
 
-      <h3>10.2 Start Server</h3>
+      <h3>11.2 Start Server</h3>
       <pre><code>python main.py</code></pre>
       <p>Or with uvicorn directly:</p>
       <pre><code>uvicorn main:app --host 0.0.0.0 --port 8000 --reload</code></pre>
       <p>The server runs at <code>http://localhost:8000</code></p>
 
-      <h3>10.3 Configuration Changes</h3>
+      <h3>11.3 Configuration Changes</h3>
       <p>Edit <code>config.yaml</code> and refresh the browser. The server reloads the config on every API call — no restart needed.</p>
 
     </div>
@@ -712,7 +791,15 @@ function togglePrompt() {
 
 // ---- Token persistence ----
 function saveTokens(u) { localStorage.setItem('vla_tokens', JSON.stringify(u)); }
-function restoreTokens() { try { const s = localStorage.getItem('vla_tokens'); if (s) updateTokenUI(JSON.parse(s)); } catch(_){} }
+async function restoreTokens() {
+  try {
+    const r = await fetch('/api/token-usage');
+    const u = await r.json();
+    updateTokenUI(u);
+  } catch(_) {
+    try { const s = localStorage.getItem('vla_tokens'); if (s) updateTokenUI(JSON.parse(s)); } catch(_){}
+  }
+}
 function fmt(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n); }
 function updateTokenUI(u) {
   document.getElementById('tokIn').textContent = fmt(u.input);
@@ -796,8 +883,19 @@ async function submit() {
       document.getElementById('resultSection').classList.add('visible');
     }
     let statusMsg = `Done in ${d.elapsed}s`;
-    if (d.bbox_auto_normalized) {
-      statusMsg += ' | bbox was in pixels — auto-normalized to [0,1]';
+    if (d.bbox_auto_normalized) statusMsg += ' | bbox auto-normalized';
+    // Verify info
+    const v = d.verify;
+    if (v && v.enabled) {
+      if (v.passed) {
+        statusMsg += ` | Verified (attempt ${v.attempts}/${v.max_retries})`;
+      } else {
+        statusMsg += ` | Verification FAILED after ${v.attempts} attempt${v.attempts>1?'s':''}`;
+      }
+    } else if (v && !v.enabled) {
+      statusMsg += ' | Verify disabled';
+    }
+    if ((d.bbox_auto_normalized) || (v && v.enabled && !v.passed)) {
       st.textContent = statusMsg; st.className='status error';
     } else {
       st.textContent = statusMsg; st.className='status';
@@ -919,7 +1017,8 @@ function renderGrid() {
         <div class="viz-card-model">${r.model}</div>
         <div class="viz-card-time">${timeStr}</div>
         <div class="viz-card-stats">
-          <span>${nSteps} steps</span><span>${r.elapsed}s</span><span>${r.token_usage?.total??'?'} tokens</span>${r.bbox_auto_normalized?'<span style="color:#d93025;font-weight:600">bbox auto-fixed</span>':''}
+          <span>${nSteps} steps</span><span>${r.elapsed}s</span><span>${r.token_usage?.total??'?'} tokens</span>${r.bbox_auto_normalized?'<span style="color:#d93025;font-weight:600">bbox auto-fixed</span>':''}${r.verify?.enabled?(r.verify.passed?`<span style="color:#34a853;font-weight:600">Verified (${r.verify.attempts}/${r.verify.max_retries})</span>`:`<span style="color:#d93025;font-weight:600">Verify failed</span>`):''}
+
         </div>
       </div>
       <div class="viz-card-actions">
@@ -952,6 +1051,27 @@ function openModal(id) {
 
   const methodsHtml = (r.methods||[]).map(m=>`<span class="method-chip">${m}</span>`).join(' ');
 
+  // Verify section for modal
+  let verifyHtml = '';
+  const vf = r.verify;
+  if (vf && vf.enabled) {
+    const badge = vf.passed
+      ? `<span style="color:#34a853;font-weight:700">PASSED</span> on attempt ${vf.attempts}/${vf.max_retries}`
+      : `<span style="color:#d93025;font-weight:700">FAILED</span> after ${vf.attempts} attempt${vf.attempts>1?'s':''}`;
+    const histHtml = (vf.history||[]).map(h => {
+      const vr = h.verify_result || {};
+      const icon = vr.verified ? '&#10003;' : '&#10007;';
+      const color = vr.verified ? '#34a853' : '#d93025';
+      return `<div style="margin-bottom:6px;padding:6px 10px;background:#f9f9f9;border-radius:6px;border-left:3px solid ${color}">
+        <span style="color:${color};font-weight:700">${icon}</span> <strong>Attempt ${h.attempt}</strong> (${h.infer_elapsed||'?'}s)
+        <div style="font-size:0.78rem;color:#555;margin-top:2px">${esc(vr.reason||'')}</div>
+      </div>`;
+    }).join('');
+    verifyHtml = `<div style="margin-top:14px"><div class="form-label" style="margin-bottom:4px">Verification &mdash; ${badge}</div>${histHtml}</div>`;
+  } else if (vf && !vf.enabled) {
+    verifyHtml = `<div style="margin-top:14px"><div class="form-label" style="margin-bottom:4px">Verification &mdash; <span style="color:#888">Disabled</span></div></div>`;
+  }
+
   document.getElementById('modalBody').innerHTML = `
     <h2 style="font-size:1.1rem;margin-bottom:2px">${esc(r.instruction||'')}</h2>
     <p style="font-size:0.78rem;color:#888;margin-bottom:14px">${r.model} &mdash; ${ts} &mdash; ${r.elapsed}s &mdash; ${r.token_usage?.total??'?'} tokens${r.bbox_auto_normalized?' &mdash; <span style="color:#d93025;font-weight:600">bbox auto-normalized (was pixels)</span>':''}</p>
@@ -962,6 +1082,7 @@ function openModal(id) {
         ${stepsHtml}
       </div>
     </div>
+    ${verifyHtml}
     <div style="margin-top:14px"><div class="form-label" style="margin-bottom:4px">Methods</div>${methodsHtml}</div>
     <div style="margin-top:12px"><div class="form-label" style="margin-bottom:4px">Raw Response</div>
       <pre style="background:#f5f5f5;padding:10px;border-radius:6px;font-size:0.78rem;max-height:180px;overflow:auto;white-space:pre-wrap">${esc(r.raw_response)}</pre>
