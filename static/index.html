@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hybridge VLA</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; min-height: 100vh; display: flex; }
+
+  .sidebar {
+    width: 220px; min-height: 100vh; background: #fff; border-right: 1px solid #e0e0e0;
+    display: flex; flex-direction: column; flex-shrink: 0; position: fixed; left: 0; top: 0; bottom: 0; z-index: 10;
+  }
+  .sidebar-header { padding: 20px 16px; font-size: 1.1rem; font-weight: 700; color: #1a73e8; border-bottom: 1px solid #e0e0e0; }
+  .sidebar-nav { flex: 1; padding: 8px 0; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    font-size: 0.9rem; color: #555; cursor: pointer; border-left: 3px solid transparent; transition: all 0.15s;
+  }
+  .nav-item:hover { background: #f0f4ff; color: #1a73e8; }
+  .nav-item.active { background: #e8f0fe; color: #1a73e8; border-left-color: #1a73e8; font-weight: 600; }
+  .nav-section { padding: 16px 16px 6px; font-size: 0.7rem; text-transform: uppercase; color: #999; font-weight: 600; letter-spacing: 0.5px; }
+
+  .main { flex: 1; margin-left: 220px; padding: 24px 32px; overflow-y: auto; min-height: 100vh; }
+  .page { display: none; max-width: 960px; }
+  .page.active { display: block; }
+  .page-title { font-size: 1.3rem; font-weight: 700; color: #222; margin-bottom: 18px; }
+  .page-title span { color: #1a73e8; }
+
+  /* Form */
+  .form-group { margin-bottom: 14px; }
+  .form-label { display: block; font-size: 0.78rem; color: #777; margin-bottom: 5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  select, textarea, input[type=text] {
+    width: 100%; padding: 9px 12px; background: #fff; border: 1px solid #d0d0d0;
+    border-radius: 8px; color: #222; font-size: 0.9rem; outline: none; transition: border-color 0.2s;
+  }
+  select:focus, textarea:focus, input[type=text]:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.1); }
+  textarea { resize: vertical; min-height: 80px; font-family: inherit; font-size: 0.85rem; }
+
+  .image-upload {
+    border: 2px dashed #ccc; border-radius: 8px; padding: 18px; text-align: center;
+    cursor: pointer; transition: border-color 0.2s; position: relative; background: #fafafa;
+  }
+  .image-upload:hover { border-color: #1a73e8; background: #f0f4ff; }
+  .image-upload.warn { border-color: #d93025; background: #fef0ef; }
+  .image-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .image-upload p { color: #999; font-size: 0.85rem; }
+  .image-upload .icon { font-size: 1.6rem; margin-bottom: 4px; color: #bbb; }
+
+  .preview-wrap { margin-top: 8px; display: flex; gap: 8px; }
+  .preview-wrap .pv { position: relative; width: 80px; height: 80px; border-radius: 6px; overflow: hidden; border: 1px solid #d0d0d0; }
+  .preview-wrap .pv img { width: 100%; height: 100%; object-fit: cover; }
+  .preview-wrap .pv .rm {
+    position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,0.6); color: #fff;
+    border: none; border-radius: 50%; width: 18px; height: 18px; cursor: pointer; font-size: 0.65rem; line-height: 18px;
+  }
+
+  /* Methods chips */
+  .methods-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .method-chip {
+    display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+    background: #e8f0fe; color: #1a73e8; border-radius: 14px; font-size: 0.78rem; font-weight: 500;
+  }
+  .method-chip .chip-rm { cursor: pointer; font-size: 0.85rem; color: #1a73e8; opacity: 0.6; background: none; border: none; }
+  .method-chip .chip-rm:hover { opacity: 1; }
+  .method-add { display: flex; gap: 6px; margin-top: 6px; }
+  .method-add input { width: 220px; padding: 5px 10px; font-size: 0.82rem; border-radius: 6px; }
+  .method-add button { padding: 5px 12px; font-size: 0.8rem; border-radius: 6px; }
+
+  /* Buttons */
+  .btn { background: #1a73e8; color: #fff; border: none; padding: 9px 24px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .btn:hover { background: #1557b0; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-sm { padding: 5px 14px; font-size: 0.78rem; border-radius: 6px; }
+  .btn-outline { background: transparent; color: #1a73e8; border: 1px solid #1a73e8; }
+  .btn-outline:hover { background: #e8f0fe; }
+  .btn-danger { background: #d93025; }
+  .btn-danger:hover { background: #b71c1c; }
+  .btn-ghost { background: none; border: none; color: #1a73e8; cursor: pointer; font-size: 0.8rem; font-weight: 500; padding: 4px 8px; }
+  .btn-ghost:hover { background: #e8f0fe; border-radius: 6px; }
+
+  .status { font-size: 0.82rem; color: #888; }
+  .status.error { color: #d93025; }
+  .actions { display: flex; gap: 12px; align-items: center; }
+
+  /* Token card */
+  .token-card { margin-bottom: 16px; background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 12px 14px; }
+  .token-card .card-title { font-size: 0.72rem; color: #1a73e8; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.3px; }
+  .token-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .token-stat { text-align: center; }
+  .token-stat .value { font-size: 1.1rem; font-weight: 700; color: #222; }
+  .token-stat .lbl { font-size: 0.68rem; color: #888; margin-top: 1px; }
+  .token-bar-wrap { margin-top: 8px; }
+  .token-bar-label { display: flex; justify-content: space-between; font-size: 0.68rem; color: #888; margin-bottom: 2px; }
+  .token-bar { height: 5px; background: #e8e8e8; border-radius: 3px; overflow: hidden; }
+  .token-bar-fill { height: 100%; background: #1a73e8; border-radius: 3px; transition: width 0.4s; }
+  .token-bar-fill.warn { background: #f9ab00; }
+  .token-bar-fill.danger { background: #d93025; }
+
+  /* Collapsible prompt */
+  .collapse-header {
+    display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+    padding: 8px 0;
+  }
+  .collapse-header .arrow { font-size: 0.7rem; transition: transform 0.2s; color: #999; }
+  .collapse-header.open .arrow { transform: rotate(90deg); }
+  .collapse-body { display: none; }
+  .collapse-body.open { display: block; }
+
+  /* Plan result */
+  .result-section { margin-top: 18px; display: none; }
+  .result-section.visible { display: block; }
+  .result-row { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .result-canvas-wrap { flex-shrink: 0; border: 1px solid #d0d0d0; border-radius: 8px; overflow: hidden; background: #fff; }
+  .result-canvas-wrap canvas { display: block; }
+  .result-details { flex: 1; min-width: 300px; }
+
+  /* Step cards */
+  .step-card {
+    background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 10px 14px;
+    margin-bottom: 6px; display: flex; gap: 10px; align-items: flex-start;
+  }
+  .step-idx {
+    width: 28px; height: 28px; border-radius: 50%; background: #e8f0fe; color: #1a73e8;
+    font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .step-body { flex: 1; min-width: 0; }
+  .step-desc { font-size: 0.85rem; font-weight: 600; color: #222; }
+  .step-method { font-size: 0.75rem; color: #1a73e8; font-family: 'SF Mono','Menlo', monospace; margin-top: 2px; }
+  .step-bbox { font-size: 0.72rem; color: #888; font-family: 'SF Mono','Menlo', monospace; }
+  .step-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 9px; }
+
+  /* Raw response */
+  .raw-box {
+    margin-top: 14px; background: #fff; border: 1px solid #d0d0d0; border-radius: 8px;
+    padding: 12px; white-space: pre-wrap; font-size: 0.8rem; line-height: 1.4;
+    max-height: 250px; overflow-y: auto; display: none;
+  }
+  .raw-box.visible { display: block; }
+  .raw-box .lbl { font-size: 0.68rem; color: #1a73e8; font-weight: 600; margin-bottom: 4px; display: block; }
+
+  /* Visualize */
+  .viz-controls { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
+  .viz-controls select { width: auto; min-width: 150px; }
+  .viz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .viz-card {
+    background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; overflow: hidden;
+    cursor: pointer; transition: box-shadow 0.2s;
+  }
+  .viz-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+  .viz-card canvas { width: 100%; height: 170px; border-bottom: 1px solid #eee; display: block; }
+  .viz-card-body { padding: 10px 12px; }
+  .viz-card-instr { font-size: 0.85rem; font-weight: 600; color: #222; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .viz-card-model { font-size: 0.72rem; color: #1a73e8; font-weight: 600; }
+  .viz-card-time { font-size: 0.68rem; color: #999; }
+  .viz-card-stats { font-size: 0.68rem; color: #888; margin-top: 3px; display: flex; gap: 10px; }
+  .viz-card-actions { padding: 0 12px 8px; display: flex; gap: 6px; }
+  .empty-state { text-align: center; padding: 50px 20px; color: #bbb; }
+
+  /* Modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100;
+    justify-content: center; align-items: center;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px; max-width: 900px; width: 95%; max-height: 90vh;
+    overflow-y: auto; padding: 24px; position: relative;
+  }
+  .modal-close { position: absolute; top: 10px; right: 14px; background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #999; }
+  .modal-close:hover { color: #222; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Docs */
+  .doc { max-width: 780px; }
+  .doc h2 { font-size: 1.1rem; font-weight: 700; color: #1a73e8; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0; }
+  .doc h2:first-child { margin-top: 0; }
+  .doc h3 { font-size: 0.95rem; font-weight: 700; color: #333; margin: 18px 0 6px; }
+  .doc p, .doc li { font-size: 0.88rem; line-height: 1.65; color: #444; }
+  .doc p { margin-bottom: 8px; }
+  .doc ul, .doc ol { padding-left: 20px; margin-bottom: 10px; }
+  .doc li { margin-bottom: 4px; }
+  .doc code {
+    background: #eef3fc; color: #1a56c4; padding: 1px 6px; border-radius: 4px;
+    font-family: 'SF Mono','Menlo',monospace; font-size: 0.82rem;
+  }
+  .doc pre {
+    background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 8px;
+    padding: 14px; margin: 8px 0 14px; overflow-x: auto;
+    font-size: 0.8rem; line-height: 1.5; font-family: 'SF Mono','Menlo',monospace;
+  }
+  .doc pre code { background: none; padding: 0; color: #333; }
+  .doc table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 0.84rem; }
+  .doc th { text-align: left; background: #f0f4ff; color: #1a73e8; font-weight: 600; padding: 8px 10px; border-bottom: 2px solid #d0d8f0; }
+  .doc td { padding: 7px 10px; border-bottom: 1px solid #e8e8e8; color: #444; }
+  .doc .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+  .doc .badge-get { background: #e6f4ea; color: #1e8e3e; }
+  .doc .badge-post { background: #e8f0fe; color: #1a73e8; }
+  .doc .badge-del { background: #fce8e6; color: #d93025; }
+  .doc .file-tree { background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 18px; font-family: 'SF Mono','Menlo',monospace; font-size: 0.82rem; line-height: 1.7; margin: 8px 0 14px; }
+  .doc-toc { background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; }
+  .doc-toc .toc-title { font-size: 0.78rem; font-weight: 600; color: #777; text-transform: uppercase; margin-bottom: 8px; }
+  .doc-toc a { display: block; font-size: 0.85rem; color: #1a73e8; text-decoration: none; padding: 3px 0; }
+  .doc-toc a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">Hybridge VLA</div>
+  <div class="sidebar-nav">
+    <div class="nav-section">Tools</div>
+    <div class="nav-item active" data-tab="test-api"><span class="nav-icon">0</span> Test Gemini API</div>
+    <div class="nav-item" data-tab="visualize"><span class="nav-icon">1</span> Visualize</div>
+    <div class="nav-item" data-tab="docs"><span class="nav-icon">2</span> Documents</div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Tab 0: Test API -->
+  <div class="page active" id="page-test-api">
+    <div class="page-title"><span>Test</span> Gemini API</div>
+
+    <div class="token-card" id="tokenCard">
+      <div class="card-title">Token Usage</div>
+      <div class="token-grid">
+        <div class="token-stat"><div class="value" id="tokIn">-</div><div class="lbl">Input</div></div>
+        <div class="token-stat"><div class="value" id="tokOut">-</div><div class="lbl">Output</div></div>
+        <div class="token-stat"><div class="value" id="tokTot">-</div><div class="lbl">Total</div></div>
+        <div class="token-stat"><div class="value" id="tokRem">-</div><div class="lbl">Remaining</div></div>
+      </div>
+      <div class="token-bar-wrap">
+        <div class="token-bar-label"><span>Usage</span><span id="tokPct">0%</span></div>
+        <div class="token-bar"><div class="token-bar-fill" id="tokBar" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="form-group">
+        <label class="form-label">Model</label>
+        <select id="model"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Instruction</label>
+        <input type="text" id="instruction" placeholder="e.g. pick up the red cube to the second drawer">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Methods</label>
+      <div class="methods-wrap" id="methodsWrap"></div>
+      <div class="method-add">
+        <input type="text" id="methodInput" placeholder="Add method...">
+        <button class="btn btn-sm" onclick="addMethod()">Add</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Image (required)</label>
+      <div class="image-upload" id="dropZone">
+        <div class="icon">+</div>
+        <p>Click or drag & drop image</p>
+        <input type="file" id="imageInput" accept="image/*">
+      </div>
+      <div class="preview-wrap" id="previewWrap"></div>
+    </div>
+
+    <div class="form-group">
+      <div class="collapse-header" id="promptToggle" onclick="togglePrompt()">
+        <span class="arrow">&#9654;</span>
+        <span class="form-label" style="margin:0;cursor:pointer">Prompt (auto-generated from template)</span>
+      </div>
+      <div class="collapse-body" id="promptBody">
+        <textarea id="prompt" style="min-height:200px;font-size:0.8rem;line-height:1.4"></textarea>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="submitBtn">Submit</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <!-- Result: plan visualization -->
+    <div class="result-section" id="resultSection">
+      <div class="result-row">
+        <div class="result-canvas-wrap"><canvas id="bboxCanvas"></canvas></div>
+        <div class="result-details" id="resultSteps"></div>
+      </div>
+    </div>
+
+    <div class="raw-box" id="rawBox">
+      <span class="lbl">Raw Response</span>
+      <div id="rawText"></div>
+    </div>
+  </div>
+
+  <!-- Tab 1: Visualize -->
+  <div class="page" id="page-visualize">
+    <div class="page-title"><span>Visualize</span> Results</div>
+    <div class="viz-controls">
+      <select id="vizFilter"><option value="">All Models</option></select>
+      <button class="btn btn-sm btn-outline" onclick="loadResults()">Refresh</button>
+      <span style="flex:1"></span>
+      <span class="status" id="vizCount"></span>
+    </div>
+    <div class="viz-grid" id="vizGrid"></div>
+    <div class="empty-state" id="vizEmpty" style="display:none"><p>No results yet.</p></div>
+  </div>
+
+  <!-- Tab 2: Documents -->
+  <div class="page" id="page-docs">
+    <div class="page-title"><span>Documents</span></div>
+    <div class="doc">
+
+      <div class="doc-toc">
+        <div class="toc-title">Table of Contents</div>
+        <a href="#doc-overview">1. System Overview</a>
+        <a href="#doc-arch">2. Architecture</a>
+        <a href="#doc-project">3. Project Structure</a>
+        <a href="#doc-config">4. Configuration (config.yaml)</a>
+        <a href="#doc-api">5. API Reference</a>
+        <a href="#doc-prompt">6. Prompt Engineering</a>
+        <a href="#doc-methods">7. Robot Methods</a>
+        <a href="#doc-storage">8. Data Storage</a>
+        <a href="#doc-frontend">9. Frontend</a>
+        <a href="#doc-run">10. Running the Server</a>
+      </div>
+
+      <!-- 1 -->
+      <h2 id="doc-overview">1. System Overview</h2>
+      <p>
+        <strong>Hybridge VLA</strong> is a Vision-Language-Action system that converts natural language instructions
+        into structured robotic execution plans. It uses Google Gemini VLM models to analyze images and generate
+        step-by-step plans with bounding box coordinates for a single-arm robot with one gripper.
+      </p>
+      <p>The system provides:</p>
+      <ul>
+        <li>A web UI to test Gemini API with custom instructions, methods, and images</li>
+        <li>Automatic prompt generation from a configurable template</li>
+        <li>Plan visualization with bounding boxes overlaid on images</li>
+        <li>Result storage and historical review</li>
+      </ul>
+
+      <!-- 2 -->
+      <h2 id="doc-arch">2. Architecture</h2>
+      <pre><code>User (Browser)
+    |
+    |  HTTP
+    v
+FastAPI Server (main.py)
+    |
+    |--- GET  /              → Serve frontend (static/index.html)
+    |--- GET  /api/config    → Return models, methods, prompt template
+    |--- POST /api/infer     → Send image+prompt to Gemini, parse plan, store result
+    |--- GET  /api/results   → List all stored results
+    |--- GET  /api/results/:id → Get single result
+    |--- DEL  /api/results/:id → Delete result + image
+    |
+    |  HTTPS (Gemini API)
+    v
+Google Gemini VLM
+    |
+    v
+JSON Plan Response → parsed, stored, visualized</code></pre>
+
+      <!-- 3 -->
+      <h2 id="doc-project">3. Project Structure</h2>
+      <div class="file-tree">
+Hybridge-VLA/<br>
+├── config.yaml &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# All configuration (API key, models, methods, prompt)<br>
+├── main.py &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# FastAPI backend<br>
+├── requirements.txt &nbsp;&nbsp;&nbsp;&nbsp;# Python dependencies<br>
+├── static/<br>
+│ &nbsp;&nbsp;└── index.html &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Single-page frontend (HTML/CSS/JS)<br>
+├── data/<br>
+│ &nbsp;&nbsp;├── images/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Uploaded images (auto-saved)<br>
+│ &nbsp;&nbsp;└── results/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# JSON result files (1 per inference)<br>
+└── test_cam0.jpg &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Sample test image
+      </div>
+
+      <!-- 4 -->
+      <h2 id="doc-config">4. Configuration (config.yaml)</h2>
+      <p>All settings are centralized in <code>config.yaml</code>. The server reloads this file on every request, so changes take effect immediately without restart.</p>
+
+      <h3>4.1 Gemini Settings</h3>
+      <pre><code>gemini:
+  api_key: "AIzaSy..."    # Your Gemini API key
+  default_model: "gemini-2.5-flash-lite"</code></pre>
+
+      <h3>4.2 Models</h3>
+      <p>Each model entry defines <code>id</code>, <code>name</code>, <code>group</code> (for dropdown grouping), and <code>input_limit</code> (max input tokens for the usage bar).</p>
+      <pre><code>models:
+  - id: "gemini-2.5-flash-lite"
+    name: "Gemini 2.5 Flash-Lite"
+    group: "Gemini 2.5"
+    input_limit: 1048576</code></pre>
+
+      <h3>4.3 Available Methods</h3>
+      <p>The list of valid <code>method_id</code> values for the robot. Displayed as editable chips in the UI and injected into the prompt via <code>{available_methods}</code>.</p>
+      <pre><code>available_methods:
+  - ik_reach_object_v1
+  - act_gripper_grasp_v1
+  - act_gripper_release_v1
+  - act_drawer_open_v1
+  - act_drawer_close_v1
+  - act_door_open_v1
+  - act_door_close_v1</code></pre>
+
+      <h3>4.4 Prompt Template</h3>
+      <p>Uses two placeholders replaced at runtime by the frontend:</p>
+      <ul>
+        <li><code>{instruction}</code> — the user's natural language instruction</li>
+        <li><code>{available_methods}</code> — bullet list of methods</li>
+      </ul>
+      <pre><code>prompt_template: |
+  You are a robotic task planner for a VLA system.
+  ...
+  ## Input
+  {instruction}
+  ...
+  ## Available Methods
+  {available_methods}
+  ...</code></pre>
+
+      <h3>4.5 Storage</h3>
+      <pre><code>storage:
+  results_dir: "data/results"   # JSON result files
+  images_dir: "data/images"     # Uploaded images</code></pre>
+
+      <!-- 5 -->
+      <h2 id="doc-api">5. API Reference</h2>
+
+      <h3>5.1 <span class="badge badge-get">GET</span> /api/config</h3>
+      <p>Returns application configuration (models, default model, methods, prompt template). API key is NOT exposed.</p>
+      <p><strong>Response:</strong></p>
+      <pre><code>{
+  "models": [
+    {"id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash-Lite", "group": "Gemini 2.5", "input_limit": 1048576}
+  ],
+  "default_model": "gemini-2.5-flash-lite",
+  "default_instruction": "pick up the red cube to the second drawer",
+  "available_methods": ["ik_reach_object_v1", "act_gripper_grasp_v1", ...],
+  "prompt_template": "You are a robotic task planner..."
+}</code></pre>
+
+      <h3>5.2 <span class="badge badge-post">POST</span> /api/infer</h3>
+      <p>Run inference: sends image + prompt to Gemini, parses response, saves result.</p>
+      <p><strong>Content-Type:</strong> <code>multipart/form-data</code></p>
+      <table>
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>Gemini model ID (e.g. <code>gemini-2.5-flash-lite</code>)</td></tr>
+        <tr><td><code>instruction</code></td><td>string</td><td>Yes</td><td>Natural language instruction</td></tr>
+        <tr><td><code>methods</code></td><td>string</td><td>Yes</td><td>Comma-separated method IDs</td></tr>
+        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>Full prompt text (with instruction + methods already injected)</td></tr>
+        <tr><td><code>image</code></td><td>file</td><td>Yes</td><td>Image file (JPEG/PNG)</td></tr>
+      </table>
+      <p><strong>Response (success):</strong></p>
+      <pre><code>{
+  "id": "1717574400_a1b2c3d4",
+  "timestamp": 1717574400.123,
+  "model": "gemini-2.5-flash-lite",
+  "instruction": "pick up the pink bow to the green bowl",
+  "methods": ["ik_reach_object_v1", "act_gripper_grasp_v1", ...],
+  "prompt": "You are a robotic task planner...",
+  "image": "1717574400_a1b2c3d4.jpg",
+  "raw_response": "{\"task_id\": ...}",
+  "plan": {
+    "task_id": "pink_bow_to_green_bowl",
+    "total_steps": 4,
+    "steps": [
+      {
+        "step_index": 1,
+        "description": "Reach the pink bow",
+        "target_bbox": [0.48, 0.47, 0.08, 0.08],
+        "method_id": "ik_reach_object_v1"
+      }
+    ]
+  },
+  "token_usage": {
+    "input": 1234,
+    "output": 567,
+    "total": 1801,
+    "limit": 1048576,
+    "remaining": 1047342
+  },
+  "elapsed": 2.45
+}</code></pre>
+      <p><strong>Response (error):</strong></p>
+      <pre><code>{"error": "API key not valid.", "elapsed": 0.12}</code></pre>
+
+      <h3>5.3 <span class="badge badge-get">GET</span> /api/results</h3>
+      <p>List stored results, newest first.</p>
+      <table>
+        <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
+        <tr><td><code>limit</code></td><td>int</td><td>50</td><td>Max items to return</td></tr>
+        <tr><td><code>offset</code></td><td>int</td><td>0</td><td>Skip first N items</td></tr>
+      </table>
+      <p><strong>Response:</strong></p>
+      <pre><code>{
+  "total": 42,
+  "items": [ { ...result object... }, ... ]
+}</code></pre>
+
+      <h3>5.4 <span class="badge badge-get">GET</span> /api/results/{result_id}</h3>
+      <p>Get a single result by ID.</p>
+      <p><strong>Response:</strong> Same structure as a single item from <code>/api/infer</code>.</p>
+
+      <h3>5.5 <span class="badge badge-del">DELETE</span> /api/results/{result_id}</h3>
+      <p>Delete a result and its associated image.</p>
+      <p><strong>Response:</strong> <code>{"ok": true}</code> or <code>{"error": "Not found"}</code></p>
+
+      <h3>5.6 Static Files</h3>
+      <table>
+        <tr><th>Path</th><th>Description</th></tr>
+        <tr><td><code>/static/*</code></td><td>Frontend files</td></tr>
+        <tr><td><code>/data/images/*</code></td><td>Uploaded images (served directly)</td></tr>
+      </table>
+
+      <!-- 6 -->
+      <h2 id="doc-prompt">6. Prompt Engineering</h2>
+      <p>The prompt is designed around strict action sequencing rules for a single-arm robot.</p>
+
+      <h3>6.1 Core Principle</h3>
+      <p>Every <code>act_*</code> step MUST be preceded by <code>ik_reach_object_v1</code>. The robot must reach the target before interacting with it. This is enforced via:</p>
+      <ul>
+        <li>Explicit action patterns in the prompt</li>
+        <li>A worked example showing the pattern</li>
+        <li>A closing recap reinforcing the rule</li>
+      </ul>
+
+      <h3>6.2 Action Patterns</h3>
+      <table>
+        <tr><th>Task</th><th>Step 1</th><th>Step 2</th></tr>
+        <tr><td>Pick up object</td><td><code>ik_reach_object_v1</code> → object</td><td><code>act_gripper_grasp_v1</code> → object</td></tr>
+        <tr><td>Place / release</td><td><code>ik_reach_object_v1</code> → destination</td><td><code>act_gripper_release_v1</code> → destination</td></tr>
+        <tr><td>Open drawer</td><td><code>ik_reach_object_v1</code> → drawer</td><td><code>act_drawer_open_v1</code> → drawer</td></tr>
+        <tr><td>Close drawer</td><td><code>ik_reach_object_v1</code> → drawer</td><td><code>act_drawer_close_v1</code> → drawer</td></tr>
+        <tr><td>Open/close door</td><td><code>ik_reach_object_v1</code> → door</td><td><code>act_door_*_v1</code> → door</td></tr>
+      </table>
+
+      <h3>6.3 Container Logic</h3>
+      <table>
+        <tr><th>Container Type</th><th>Behavior</th></tr>
+        <tr><td>CLOSED (drawer, door)</td><td>Must open BEFORE picking up the object</td></tr>
+        <tr><td>OPEN (bowl, tray, bin)</td><td>Pick up object first, then reach container, then release</td></tr>
+      </table>
+
+      <h3>6.4 Bounding Box Format</h3>
+      <p>YOLO format: <code>[x_center, y_center, width, height]</code>, all normalized to <code>[0, 1]</code>.</p>
+      <pre><code>x_center = box_center_x / image_width
+y_center = box_center_y / image_height
+width    = box_width / image_width
+height   = box_height / image_height</code></pre>
+
+      <!-- 7 -->
+      <h2 id="doc-methods">7. Robot Methods</h2>
+      <table>
+        <tr><th>Method ID</th><th>Description</th><th>Precondition</th></tr>
+        <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td><td>None — this IS the precondition</td></tr>
+        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper to grasp object</td><td>Must reach object first</td></tr>
+        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper to release held object</td><td>Must reach destination first</td></tr>
+        <tr><td><code>act_drawer_open_v1</code></td><td>Pull drawer open</td><td>Must reach drawer first</td></tr>
+        <tr><td><code>act_drawer_close_v1</code></td><td>Push drawer closed</td><td>Must reach drawer first</td></tr>
+        <tr><td><code>act_door_open_v1</code></td><td>Open a door</td><td>Must reach door first</td></tr>
+        <tr><td><code>act_door_close_v1</code></td><td>Close a door</td><td>Must reach door first</td></tr>
+      </table>
+
+      <!-- 8 -->
+      <h2 id="doc-storage">8. Data Storage</h2>
+      <p>Each inference saves two files:</p>
+
+      <h3>8.1 Image File</h3>
+      <p>Saved to <code>data/images/{timestamp}_{uuid}.{ext}</code></p>
+
+      <h3>8.2 Result JSON</h3>
+      <p>Saved to <code>data/results/{timestamp}_{uuid}.json</code></p>
+      <pre><code>{
+  "id": "1717574400_a1b2c3d4",       // Unique ID (used as filename)
+  "timestamp": 1717574400.123,        // Unix timestamp
+  "model": "gemini-2.5-flash-lite",   // Model used
+  "instruction": "pick up the...",    // User instruction
+  "methods": ["ik_reach_object_v1"],  // Methods available
+  "prompt": "You are a robotic...",   // Full prompt sent
+  "image": "1717574400_a1b2c3d4.jpg", // Image filename
+  "raw_response": "...",              // Raw Gemini text output
+  "plan": { ... } | null,            // Parsed plan or null
+  "token_usage": {
+    "input": 1234,
+    "output": 567,
+    "total": 1801,
+    "limit": 1048576,
+    "remaining": 1047342
+  },
+  "elapsed": 2.45                     // API call time in seconds
+}</code></pre>
+
+      <!-- 9 -->
+      <h2 id="doc-frontend">9. Frontend</h2>
+      <p>Single-page app in <code>static/index.html</code> with 3 tabs:</p>
+
+      <h3>9.1 Tab 0 — Test Gemini API</h3>
+      <ul>
+        <li><strong>Token Usage:</strong> persisted in <code>localStorage</code>, restored on page load</li>
+        <li><strong>Model selector:</strong> populated from <code>/api/config</code></li>
+        <li><strong>Instruction:</strong> text input, auto-injected into prompt template</li>
+        <li><strong>Methods:</strong> chip-based, add/remove dynamically, auto-injected into prompt</li>
+        <li><strong>Image:</strong> required, drag & drop or click to upload</li>
+        <li><strong>Prompt:</strong> collapsible, auto-generated, editable for overrides</li>
+        <li><strong>Result:</strong> canvas with bounding boxes + step cards + raw response</li>
+      </ul>
+
+      <h3>9.2 Tab 1 — Visualize</h3>
+      <ul>
+        <li>Grid of all historical results with bbox overlays on thumbnails</li>
+        <li>Filter by model</li>
+        <li>Click to open detail modal (full steps, raw response, prompt)</li>
+        <li>Delete individual results</li>
+      </ul>
+
+      <h3>9.3 Tab 2 — Documents</h3>
+      <p>This page. Full system documentation.</p>
+
+      <!-- 10 -->
+      <h2 id="doc-run">10. Running the Server</h2>
+      <h3>10.1 Install Dependencies</h3>
+      <pre><code>pip install -r requirements.txt</code></pre>
+      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code></p>
+
+      <h3>10.2 Start Server</h3>
+      <pre><code>python main.py</code></pre>
+      <p>Or with uvicorn directly:</p>
+      <pre><code>uvicorn main:app --host 0.0.0.0 --port 8000 --reload</code></pre>
+      <p>The server runs at <code>http://localhost:8000</code></p>
+
+      <h3>10.3 Configuration Changes</h3>
+      <p>Edit <code>config.yaml</code> and refresh the browser. The server reloads the config on every API call — no restart needed.</p>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal"><button class="modal-close" onclick="closeModal()">&times;</button><div id="modalBody"></div></div>
+</div>
+
+<script>
+const COLORS = ['#e8453c','#1a73e8','#34a853','#f9ab00','#a142f4','#e8710a','#00bcd4','#e91e90','#8bc34a','#795548'];
+let cfg = null, imageFile = null, methods = [], allResults = [];
+
+// ---- Init ----
+async function init() {
+  const r = await fetch('/api/config');
+  cfg = await r.json();
+  buildModelSelect();
+  document.getElementById('instruction').value = cfg.default_instruction;
+  methods = [...cfg.available_methods];
+  renderMethods();
+  rebuildPrompt();
+  restoreTokens();
+  setupEvents();
+}
+
+function buildModelSelect() {
+  const sel = document.getElementById('model');
+  const groups = {};
+  cfg.models.forEach(m => { (groups[m.group] ??= []).push(m); });
+  sel.innerHTML = '';
+  for (const [g, ms] of Object.entries(groups)) {
+    const og = document.createElement('optgroup'); og.label = g;
+    ms.forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; if (m.id === cfg.default_model) o.selected = true; og.appendChild(o); });
+    sel.appendChild(og);
+  }
+}
+
+// ---- Methods ----
+function renderMethods() {
+  const w = document.getElementById('methodsWrap');
+  w.innerHTML = methods.map((m, i) =>
+    `<span class="method-chip">${m}<button class="chip-rm" onclick="removeMethod(${i})">&times;</button></span>`
+  ).join('');
+  rebuildPrompt();
+}
+function removeMethod(i) { methods.splice(i, 1); renderMethods(); }
+function addMethod() {
+  const inp = document.getElementById('methodInput');
+  const v = inp.value.trim();
+  if (v && !methods.includes(v)) { methods.push(v); renderMethods(); }
+  inp.value = '';
+}
+
+// ---- Prompt template ----
+function rebuildPrompt() {
+  if (!cfg) return;
+  const instr = document.getElementById('instruction').value.trim() || cfg.default_instruction;
+  const methodStr = methods.map(m => `* ${m}`).join('\n');
+  const prompt = cfg.prompt_template
+    .replace('{instruction}', instr)
+    .replace('{available_methods}', methodStr);
+  document.getElementById('prompt').value = prompt;
+}
+
+function togglePrompt() {
+  document.getElementById('promptToggle').classList.toggle('open');
+  document.getElementById('promptBody').classList.toggle('open');
+}
+
+// ---- Token persistence ----
+function saveTokens(u) { localStorage.setItem('vla_tokens', JSON.stringify(u)); }
+function restoreTokens() { try { const s = localStorage.getItem('vla_tokens'); if (s) updateTokenUI(JSON.parse(s)); } catch(_){} }
+function fmt(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n); }
+function updateTokenUI(u) {
+  document.getElementById('tokIn').textContent = fmt(u.input);
+  document.getElementById('tokOut').textContent = fmt(u.output);
+  document.getElementById('tokTot').textContent = fmt(u.total);
+  document.getElementById('tokRem').textContent = fmt(u.remaining);
+  const p = Math.min(100, (u.input / u.limit) * 100);
+  document.getElementById('tokPct').textContent = p.toFixed(1)+'%';
+  const b = document.getElementById('tokBar');
+  b.style.width = p+'%'; b.className = 'token-bar-fill'+(p>80?' danger':p>50?' warn':'');
+  saveTokens(u);
+}
+
+// ---- Events ----
+function setupEvents() {
+  // Tabs
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById('page-'+el.dataset.tab).classList.add('active');
+      el.classList.add('active');
+      if (el.dataset.tab === 'visualize') loadResults();
+    });
+  });
+  // Image
+  const dz = document.getElementById('dropZone');
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.style.borderColor='#1a73e8'; });
+  dz.addEventListener('dragleave', () => { dz.style.borderColor='#ccc'; });
+  dz.addEventListener('drop', e => { e.preventDefault(); dz.style.borderColor='#ccc'; dz.classList.remove('warn'); if(e.dataTransfer.files[0]) setImage(e.dataTransfer.files[0]); });
+  document.getElementById('imageInput').addEventListener('change', e => { dz.classList.remove('warn'); if(e.target.files[0]) setImage(e.target.files[0]); e.target.value=''; });
+  // Instruction change -> rebuild prompt
+  document.getElementById('instruction').addEventListener('input', rebuildPrompt);
+  // Method input enter
+  document.getElementById('methodInput').addEventListener('keydown', e => { if(e.key==='Enter') addMethod(); });
+  // Submit
+  document.getElementById('submitBtn').addEventListener('click', submit);
+  document.getElementById('instruction').addEventListener('keydown', e => { if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) submit(); });
+  // Modal
+  document.getElementById('modalOverlay').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+  document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+}
+
+function setImage(f) {
+  if (!f.type.startsWith('image/')) return;
+  imageFile = f;
+  document.getElementById('previewWrap').innerHTML =
+    `<div class="pv"><img src="${URL.createObjectURL(f)}"><button class="rm" onclick="clearImage()">x</button></div>`;
+}
+function clearImage() { imageFile = null; document.getElementById('previewWrap').innerHTML = ''; }
+
+// ---- Submit ----
+async function submit() {
+  const st = document.getElementById('status'), btn = document.getElementById('submitBtn');
+  rebuildPrompt();
+  const instruction = document.getElementById('instruction').value.trim();
+  if (!instruction) { st.textContent='Enter an instruction.'; st.className='status error'; return; }
+  if (!imageFile) { st.textContent='Image is required.'; st.className='status error'; document.getElementById('dropZone').classList.add('warn'); return; }
+
+  btn.disabled = true; st.textContent='Sending...'; st.className='status';
+  document.getElementById('resultSection').classList.remove('visible');
+  document.getElementById('rawBox').classList.remove('visible');
+
+  const fd = new FormData();
+  fd.append('model', document.getElementById('model').value);
+  fd.append('instruction', instruction);
+  fd.append('methods', methods.join(','));
+  fd.append('prompt', document.getElementById('prompt').value);
+  fd.append('image', imageFile);
+
+  try {
+    const r = await fetch('/api/infer', { method:'POST', body: fd });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    updateTokenUI(d.token_usage);
+    document.getElementById('rawText').textContent = d.raw_response;
+    document.getElementById('rawBox').classList.add('visible');
+    if (d.plan && d.plan.steps) {
+      drawPlan(`/data/images/${d.image}`, d.plan.steps, 'bboxCanvas');
+      renderSteps(d.plan, 'resultSteps');
+      document.getElementById('resultSection').classList.add('visible');
+    }
+    let statusMsg = `Done in ${d.elapsed}s`;
+    if (d.bbox_auto_normalized) {
+      statusMsg += ' | bbox was in pixels — auto-normalized to [0,1]';
+      st.textContent = statusMsg; st.className='status error';
+    } else {
+      st.textContent = statusMsg; st.className='status';
+    }
+  } catch(e) { st.textContent = e.message; st.className='status error'; }
+  finally { btn.disabled = false; }
+}
+
+// ---- Draw plan on canvas ----
+function drawPlan(imgUrl, steps, canvasId, maxW=540) {
+  const canvas = document.getElementById(canvasId), ctx = canvas.getContext('2d');
+  const img = new Image(); img.crossOrigin='anonymous';
+  img.onload = () => {
+    const s = img.width > maxW ? maxW/img.width : 1;
+    canvas.width = img.width*s; canvas.height = img.height*s;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    steps.forEach((step, i) => {
+      const box = step.target_bbox;
+      if (!box || !Array.isArray(box) || box.length < 4) return;
+      const [xc,yc,w,h] = box;
+      const color = COLORS[i % COLORS.length];
+      const px=(xc-w/2)*canvas.width, py=(yc-h/2)*canvas.height, pw=w*canvas.width, ph=h*canvas.height;
+      // Box
+      ctx.strokeStyle=color; ctx.lineWidth=2; ctx.strokeRect(px,py,pw,ph);
+      // Label
+      const label = `${step.step_index}`;
+      ctx.font='bold 12px sans-serif';
+      const tw=ctx.measureText(label).width+8, ly=py>18?py-18:py;
+      ctx.fillStyle=color; ctx.fillRect(px,ly,tw,17);
+      ctx.fillStyle='#fff'; ctx.fillText(label, px+4, ly+13);
+      // Center dot
+      const cx=xc*canvas.width, cy=yc*canvas.height;
+      ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+      // Crosshair
+      ctx.strokeStyle=color; ctx.lineWidth=1; ctx.setLineDash([3,2]);
+      ctx.beginPath(); ctx.moveTo(cx-10,cy); ctx.lineTo(cx+10,cy); ctx.moveTo(cx,cy-10); ctx.lineTo(cx,cy+10); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  };
+  img.src = imgUrl;
+}
+
+function drawOnCard(canvas, imgUrl, steps, maxW) {
+  const ctx = canvas.getContext('2d');
+  const img = new Image(); img.crossOrigin='anonymous';
+  img.onload = () => {
+    const s = maxW/img.width;
+    canvas.width = img.width*s; canvas.height = img.height*s;
+    canvas.style.height = canvas.height+'px';
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    (steps||[]).forEach((step,i) => {
+      const box = step.target_bbox;
+      if (!box||!Array.isArray(box)||box.length<4) return;
+      const [xc,yc,w,h]=box, color=COLORS[i%COLORS.length];
+      ctx.strokeStyle=color; ctx.lineWidth=2;
+      ctx.strokeRect((xc-w/2)*canvas.width,(yc-h/2)*canvas.height,w*canvas.width,h*canvas.height);
+      ctx.beginPath(); ctx.arc(xc*canvas.width,yc*canvas.height,3,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.stroke();
+    });
+  };
+  img.src = imgUrl;
+}
+
+function renderSteps(plan, containerId) {
+  const c = document.getElementById(containerId);
+  const hdr = `<div style="font-size:0.8rem;color:#888;margin-bottom:8px">Task: <strong style="color:#222">${esc(plan.task_id||'')}</strong> &mdash; ${plan.total_steps} steps</div>`;
+  const cards = (plan.steps||[]).map((s,i) => {
+    const color = COLORS[i%COLORS.length];
+    const bboxStr = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
+    return `<div class="step-card">
+      <div class="step-dot" style="background:${color}"></div>
+      <div class="step-idx">${s.step_index}</div>
+      <div class="step-body">
+        <div class="step-desc">${esc(s.description)}</div>
+        <div class="step-method">${esc(s.method_id)}</div>
+        <div class="step-bbox">bbox: ${bboxStr}</div>
+      </div>
+    </div>`;
+  }).join('');
+  c.innerHTML = hdr + cards;
+}
+
+// ---- Visualize ----
+async function loadResults() {
+  const r = await fetch('/api/results?limit=200');
+  const d = await r.json();
+  allResults = d.items;
+  populateFilter(); renderGrid();
+}
+
+function populateFilter() {
+  const sel = document.getElementById('vizFilter'), cur = sel.value;
+  const ms = [...new Set(allResults.map(r=>r.model))];
+  sel.innerHTML='<option value="">All Models</option>';
+  ms.forEach(m => { const o=document.createElement('option'); o.value=m; o.textContent=m; if(m===cur) o.selected=true; sel.appendChild(o); });
+  sel.onchange = renderGrid;
+}
+
+function renderGrid() {
+  const f = document.getElementById('vizFilter').value;
+  const items = f ? allResults.filter(r=>r.model===f) : allResults;
+  const grid = document.getElementById('vizGrid'), empty = document.getElementById('vizEmpty');
+  document.getElementById('vizCount').textContent = `${items.length} result${items.length!==1?'s':''}`;
+  if (!items.length) { grid.innerHTML=''; empty.style.display='block'; return; }
+  empty.style.display='none'; grid.innerHTML='';
+
+  items.forEach(r => {
+    const card = document.createElement('div'); card.className='viz-card';
+    const ts = new Date(r.timestamp*1000);
+    const timeStr = ts.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' '+ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    const nSteps = r.plan?.total_steps ?? r.plan?.steps?.length ?? '-';
+    const cid = `vc-${r.id}`;
+
+    card.innerHTML = `
+      <canvas id="${cid}" style="width:100%;height:170px;display:block;border-bottom:1px solid #eee;cursor:pointer"></canvas>
+      <div class="viz-card-body" style="cursor:pointer">
+        <div class="viz-card-instr">${esc(r.instruction||'')}</div>
+        <div class="viz-card-model">${r.model}</div>
+        <div class="viz-card-time">${timeStr}</div>
+        <div class="viz-card-stats">
+          <span>${nSteps} steps</span><span>${r.elapsed}s</span><span>${r.token_usage?.total??'?'} tokens</span>${r.bbox_auto_normalized?'<span style="color:#d93025;font-weight:600">bbox auto-fixed</span>':''}
+        </div>
+      </div>
+      <div class="viz-card-actions">
+        <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openModal('${r.id}')">Details</button>
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteResult('${r.id}')">Delete</button>
+      </div>`;
+    card.addEventListener('click', e => { if(e.target.tagName==='BUTTON') return; openModal(r.id); });
+    grid.appendChild(card);
+
+    requestAnimationFrame(() => {
+      const cvs = document.getElementById(cid);
+      if (cvs) drawOnCard(cvs, `/data/images/${r.image}`, r.plan?.steps||[], cvs.clientWidth);
+    });
+  });
+}
+
+// ---- Modal ----
+function openModal(id) {
+  const r = allResults.find(x=>x.id===id);
+  if (!r) return;
+  const ts = new Date(r.timestamp*1000).toLocaleString();
+  const cid = 'mc-'+r.id;
+
+  const stepsHtml = (r.plan?.steps||[]).map((s,i) => {
+    const color=COLORS[i%COLORS.length];
+    const bb = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
+    return `<div class="step-card"><div class="step-dot" style="background:${color}"></div><div class="step-idx">${s.step_index}</div>
+      <div class="step-body"><div class="step-desc">${esc(s.description)}</div><div class="step-method">${esc(s.method_id)}</div><div class="step-bbox">bbox: ${bb}</div></div></div>`;
+  }).join('');
+
+  const methodsHtml = (r.methods||[]).map(m=>`<span class="method-chip">${m}</span>`).join(' ');
+
+  document.getElementById('modalBody').innerHTML = `
+    <h2 style="font-size:1.1rem;margin-bottom:2px">${esc(r.instruction||'')}</h2>
+    <p style="font-size:0.78rem;color:#888;margin-bottom:14px">${r.model} &mdash; ${ts} &mdash; ${r.elapsed}s &mdash; ${r.token_usage?.total??'?'} tokens${r.bbox_auto_normalized?' &mdash; <span style="color:#d93025;font-weight:600">bbox auto-normalized (was pixels)</span>':''}</p>
+    <div class="result-row">
+      <div class="result-canvas-wrap"><canvas id="${cid}"></canvas></div>
+      <div class="result-details" style="min-width:280px">
+        <div style="font-size:0.78rem;color:#888;margin-bottom:6px">${r.plan?.total_steps??'-'} steps &mdash; ${esc(r.plan?.task_id||'')}</div>
+        ${stepsHtml}
+      </div>
+    </div>
+    <div style="margin-top:14px"><div class="form-label" style="margin-bottom:4px">Methods</div>${methodsHtml}</div>
+    <div style="margin-top:12px"><div class="form-label" style="margin-bottom:4px">Raw Response</div>
+      <pre style="background:#f5f5f5;padding:10px;border-radius:6px;font-size:0.78rem;max-height:180px;overflow:auto;white-space:pre-wrap">${esc(r.raw_response)}</pre>
+    </div>
+    <div style="margin-top:10px"><div class="form-label" style="margin-bottom:4px">Prompt</div>
+      <pre style="background:#f5f5f5;padding:10px;border-radius:6px;font-size:0.75rem;max-height:140px;overflow:auto;white-space:pre-wrap">${esc(r.prompt)}</pre>
+    </div>`;
+
+  document.getElementById('modalOverlay').classList.add('visible');
+  requestAnimationFrame(() => {
+    const cvs = document.getElementById(cid);
+    if (cvs) drawOnCard(cvs, `/data/images/${r.image}`, r.plan?.steps||[], 480);
+  });
+}
+function closeModal() { document.getElementById('modalOverlay').classList.remove('visible'); }
+
+async function deleteResult(id) {
+  if (!confirm('Delete this result?')) return;
+  await fetch(`/api/results/${id}`, {method:'DELETE'});
+  loadResults();
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+init();
+</script>
+</body>
+</html>

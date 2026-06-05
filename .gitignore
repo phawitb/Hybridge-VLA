@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+data/images/
+data/results/
+*.png
+*.jpg
+!test_cam0.jpg
