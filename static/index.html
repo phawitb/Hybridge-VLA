@@ -246,6 +246,27 @@
     .cal-slider-col { flex: none; }
     .cal-row-cams { grid-template-columns: 1fr; }
   }
+
+  /* Calibrate */
+  .cb-canvas-wrap { position: relative; display: inline-block; border: 1px solid #d0d0d0; border-radius: 8px; overflow: hidden; background: #111; cursor: crosshair; }
+  .cb-canvas-wrap img { display: block; max-width: 100%; }
+  .cb-canvas-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .cb-points-list { margin-top: 14px; }
+  .cb-point-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; margin-bottom: 6px;
+  }
+  .cb-point-row.active { border-color: #1a73e8; background: #f0f4ff; }
+  .cb-point-row.done { border-color: #34a853; background: #e6f4ea; }
+  .cb-point-idx {
+    width: 28px; height: 28px; border-radius: 50%; background: #e8f0fe; color: #1a73e8;
+    font-weight: 700; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .cb-point-row.done .cb-point-idx { background: #e6f4ea; color: #1e8e3e; }
+  .cb-point-info { flex: 1; font-size: 0.82rem; color: #555; }
+  .cb-point-info code { background: #eef3fc; color: #1a56c4; padding: 1px 6px; border-radius: 4px; font-size: 0.78rem; }
+  .cb-wizard-step { margin-bottom: 14px; padding: 14px; background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; }
+  .cb-wizard-step h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -256,6 +277,7 @@
     <div class="nav-section">Menu</div>
     <div class="nav-item active" data-tab="test-api">Step1-Planing(Gemini)</div>
     <div class="nav-item" data-tab="cam-calib">Camera & Teleop</div>
+    <div class="nav-item" data-tab="calibrate">Calibrate</div>
   </div>
 </div>
 
@@ -817,6 +839,69 @@ height   = box_height / image_height</code></pre>
     </div>
   </div>
 
+  <!-- Calibrate -->
+  <div class="page" id="page-calibrate">
+    <div class="page-title"><span>Camera</span> Calibrate</div>
+
+    <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn btn-sm" id="cbCaptureBtn" onclick="cbCapture()">Capture</button>
+      <button class="btn btn-sm btn-danger" onclick="cbReset()">Reset</button>
+      <span class="cal-status off" id="cbStatus">Not calibrated</span>
+    </div>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;max-width:960px">
+      <!-- Left: camera image with click overlay -->
+      <div style="flex:1;min-width:320px">
+        <div class="cb-canvas-wrap" id="cbCanvasWrap" onclick="cbClickImage(event)" style="display:none">
+          <img id="cbImage" alt="top view">
+          <canvas id="cbOverlay"></canvas>
+        </div>
+        <div id="cbPlaceholder" style="background:#f5f5f5;border:1px solid #d0d0d0;border-radius:8px;padding:40px;text-align:center;color:#999;font-size:0.88rem">
+          Start robot in <strong>Camera & Teleop</strong> tab first, then press <strong>Capture</strong> to take a snapshot.
+        </div>
+      </div>
+
+      <!-- Right: points list + actions -->
+      <div style="flex:0 0 300px;min-width:250px">
+        <div class="cb-wizard-step">
+          <h3>Calibration Points</h3>
+          <p style="font-size:0.8rem;color:#777;margin-bottom:10px">
+            1. Click 4 points on the image<br>
+            2. For each point, move the robot arm (gripper closed) to that spot<br>
+            3. Press "Save Position" to record<br>
+            4. After 4 points, press "Compute"
+          </p>
+          <div id="cbPointsList"></div>
+          <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn btn-sm" id="cbSaveBtn" onclick="cbSavePoint()" disabled>Save Position</button>
+            <button class="btn btn-sm" id="cbComputeBtn" onclick="cbCompute()" disabled style="background:#34a853">Compute</button>
+          </div>
+        </div>
+
+        <!-- Saved calibration data -->
+        <div class="cb-wizard-step" id="cbDataSection" style="display:none">
+          <h3>Calibration Data</h3>
+          <div id="cbDataList" style="font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;max-height:200px;overflow-y:auto"></div>
+        </div>
+
+        <!-- After calibration: click-to-move -->
+        <div class="cb-wizard-step" id="cbMoveSection" style="display:none">
+          <h3>Click to Move</h3>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Height above surface</label>
+            <input type="number" id="cbHeight" value="10" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <span style="font-size:0.82rem;color:#888">cm</span>
+          </div>
+          <p style="font-size:0.8rem;color:#777;margin-bottom:8px">
+            Click on the image to move the robot arm to that position.
+          </p>
+          <div id="cbMoveStatus" style="font-size:0.82rem;color:#555"></div>
+          <div id="cbLivePos" style="margin-top:8px;font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;color:#555"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Modal -->
@@ -1321,6 +1406,296 @@ fetch("/api/robot/status").then(r=>r.json()).then(d=>{
     document.getElementById("calStatus").className="cal-status on";
     document.getElementById("calBody").style.display="block";
     calConnectWs();
+  }
+}).catch(()=>{});
+
+// ---- Calibrate ----
+let cbPixels = [];      // [{u, v}] — clicked pixel coords
+let cbJoints = [];      // [null or {joints, robot_xy, robot_z}] — saved robot data per point
+let cbCalibrated = false;
+let cbImageNatW = 0, cbImageNatH = 0;
+
+const CB_COLORS = ['#e8453c', '#1a73e8', '#34a853', '#f9ab00'];
+
+async function cbCapture() {
+  // Check robot connected first
+  const st = await fetch("/api/robot/status").then(r=>r.json());
+  if (!st.connected) { alert("Robot not connected. Go to Camera & Teleop tab and press Start first."); return; }
+  const r = await fetch("/api/calibrate/capture", {method:"POST"});
+  const d = await r.json();
+  if (!d.ok) { alert(d.error); return; }
+  const img = document.getElementById("cbImage");
+  img.src = "data:image/jpeg;base64," + d.image;
+  img.onload = () => {
+    cbImageNatW = img.naturalWidth;
+    cbImageNatH = img.naturalHeight;
+    const canvas = document.getElementById("cbOverlay");
+    canvas.width = cbImageNatW;
+    canvas.height = cbImageNatH;
+    cbDrawOverlay();
+  };
+  document.getElementById("cbCanvasWrap").style.display = "inline-block";
+  document.getElementById("cbPlaceholder").style.display = "none";
+}
+
+function cbClickImage(e) {
+  if (cbPixels.length >= 4 && !cbCalibrated) return;
+  const wrap = document.getElementById("cbCanvasWrap");
+  const img = document.getElementById("cbImage");
+  const rect = img.getBoundingClientRect();
+  const scaleX = cbImageNatW / rect.width;
+  const scaleY = cbImageNatH / rect.height;
+  const u = Math.round((e.clientX - rect.left) * scaleX);
+  const v = Math.round((e.clientY - rect.top) * scaleY);
+
+  if (cbCalibrated) {
+    cbMoveTo(u, v);
+    return;
+  }
+
+  // Must save current point before clicking next
+  if (cbPixels.length > 0 && cbJoints[cbPixels.length - 1] === null) return;
+  if (cbPixels.length >= 4) return;
+  cbPixels.push({u, v});
+  cbJoints.push(null);
+  cbDrawOverlay();
+  cbUpdateUI();
+}
+
+function cbDrawOverlay() {
+  const canvas = document.getElementById("cbOverlay");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  cbPixels.forEach((p, i) => {
+    const color = CB_COLORS[i % CB_COLORS.length];
+    // Crosshair
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(p.u - 15, p.v); ctx.lineTo(p.u + 15, p.v); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.u, p.v - 15); ctx.lineTo(p.u, p.v + 15); ctx.stroke();
+    // Circle
+    ctx.beginPath(); ctx.arc(p.u, p.v, 10, 0, 2 * Math.PI); ctx.stroke();
+    // Label
+    ctx.fillStyle = color;
+    ctx.font = "bold 16px sans-serif";
+    ctx.fillText((i + 1).toString(), p.u + 14, p.v - 10);
+  });
+}
+
+function cbUpdateUI() {
+  const list = document.getElementById("cbPointsList");
+  list.innerHTML = "";
+  for (let i = 0; i < 4; i++) {
+    const px = cbPixels[i];
+    const jt = cbJoints[i];
+    const done = jt !== null;
+    const active = px && !done && cbPixels.length === i + 1;
+    const row = document.createElement("div");
+    row.className = "cb-point-row" + (done ? " done" : "") + (active ? " active" : "");
+    const pxText = px ? `pixel (${px.u}, ${px.v})` : "not set";
+    const jtText = done ? `saved` : (px ? "move arm here" : "click image");
+    row.innerHTML = `<div class="cb-point-idx">${i + 1}</div>
+      <div class="cb-point-info"><code>${pxText}</code><br><span style="font-size:0.75rem;color:${done ? '#1e8e3e' : '#999'}">${jtText}</span></div>`;
+    list.appendChild(row);
+  }
+  // Enable/disable buttons
+  const currentIdx = cbPixels.length - 1;
+  const canSave = currentIdx >= 0 && cbJoints[currentIdx] === null;
+  document.getElementById("cbSaveBtn").disabled = !canSave;
+  const allDone = cbJoints.length === 4 && cbJoints.every(j => j !== null);
+  document.getElementById("cbComputeBtn").disabled = !allDone;
+
+  // Show saved calibration data
+  cbShowData();
+}
+
+function cbShowData() {
+  const sec = document.getElementById("cbDataSection");
+  const el = document.getElementById("cbDataList");
+  const saved = cbJoints.filter(j => j !== null);
+  if (saved.length === 0) { sec.style.display = "none"; return; }
+  sec.style.display = "block";
+  let html = "";
+  for (let i = 0; i < cbPixels.length; i++) {
+    if (!cbJoints[i]) continue;
+    const px = cbPixels[i];
+    const jt = cbJoints[i].joints;
+    html += `<div style="margin-bottom:8px;padding:6px 8px;background:#f8f8f8;border-radius:6px">`;
+    html += `<strong style="color:${CB_COLORS[i]}">Point ${i+1}</strong> — pixel (${px.u}, ${px.v})<br>`;
+    for (const [k, v] of Object.entries(jt)) {
+      const unit = k === "gripper" ? "%" : "°";
+      html += `  ${k}: <strong>${v}${unit}</strong><br>`;
+    }
+    html += `</div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function cbSavePoint() {
+  const idx = cbPixels.length - 1;
+  if (idx < 0 || cbJoints[idx] !== null) return;
+
+  const btn = document.getElementById("cbSaveBtn");
+  btn.disabled = true;
+  btn.textContent = "Reading...";
+
+  const r = await fetch("/api/calibrate/save-point", {method: "POST"});
+  const d = await r.json();
+  btn.textContent = "Save Position";
+
+  if (!d.ok) { alert(d.error); btn.disabled = false; return; }
+
+  cbJoints[idx] = {
+    joints: d.joints,
+  };
+  cbDrawOverlay();
+  cbUpdateUI();
+}
+
+async function cbCompute() {
+  // First save all points to backend
+  const points = cbPixels.map((px, i) => ({
+    pixel: [px.u, px.v],
+    joints: cbJoints[i].joints,
+  }));
+
+  await fetch("/api/calibrate/save-all", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({points}),
+  });
+
+  const r = await fetch("/api/calibrate/compute", {method: "POST"});
+  const d = await r.json();
+  if (!d.ok) { alert(d.error); return; }
+
+  cbCalibrated = true;
+  document.getElementById("cbStatus").textContent = "Calibrated";
+  document.getElementById("cbStatus").className = "cal-status on";
+  document.getElementById("cbMoveSection").style.display = "block";
+  document.getElementById("cbComputeBtn").disabled = true;
+  document.getElementById("cbSaveBtn").disabled = true;
+  cbShowData();
+}
+
+let cbLiveTimer = null;
+
+async function cbMoveTo(u, v) {
+  const st = document.getElementById("cbMoveStatus");
+  const lp = document.getElementById("cbLivePos");
+  st.textContent = `Moving to pixel (${u}, ${v})...`;
+  lp.innerHTML = "";
+
+  const heightCm = parseFloat(document.getElementById("cbHeight").value) || 0;
+  const r = await fetch("/api/calibrate/move-to", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pixel: [u, v], height_cm: heightCm}),
+  });
+  const d = await r.json();
+  if (!d.ok) {
+    st.innerHTML = `<span style="color:#d93025">${d.error}</span>`;
+    return;
+  }
+
+  // Show target joints
+  let targetHtml = `<strong>Target:</strong> pixel (${u}, ${v})<br>`;
+  for (const [k, val] of Object.entries(d.target_joints)) {
+    const unit = k === "gripper" ? "%" : "°";
+    targetHtml += `  ${k}: <strong>${val}${unit}</strong><br>`;
+  }
+  st.innerHTML = targetHtml;
+
+  // Draw target on overlay
+  cbDrawOverlay();
+  const canvas = document.getElementById("cbOverlay");
+  const ctx = canvas.getContext("2d");
+  ctx.strokeStyle = "#e91e90";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(u, v, 12, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(u - 18, v); ctx.lineTo(u + 18, v); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(u, v - 18); ctx.lineTo(u, v + 18); ctx.stroke();
+
+  // Start real-time position polling
+  cbStartLivePos(d.target_joints);
+}
+
+function cbStartLivePos(targetJoints) {
+  if (cbLiveTimer) clearInterval(cbLiveTimer);
+  const lp = document.getElementById("cbLivePos");
+  let settled = 0;
+
+  cbLiveTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/robot/status");
+      const s = await r.json();
+      if (!s.connected) { cbStopLivePos(); return; }
+
+      // Use the WebSocket data if available, otherwise read via save-point
+      const pr = await fetch("/api/calibrate/save-point", {method: "POST"});
+      const pd = await pr.json();
+      if (!pd.ok) return;
+
+      const cur = pd.joints;
+      let html = `<strong>Current:</strong><br>`;
+      let allClose = true;
+      for (const [k, val] of Object.entries(cur)) {
+        const target = targetJoints[k];
+        const diff = Math.abs(val - target);
+        const color = diff < 2 ? "#1e8e3e" : diff < 10 ? "#f9ab00" : "#d93025";
+        const unit = k === "gripper" ? "%" : "°";
+        html += `  ${k}: <span style="color:${color};font-weight:700">${val}${unit}</span> (diff: ${diff.toFixed(1)})<br>`;
+        if (diff > 3) allClose = false;
+      }
+      lp.innerHTML = html;
+
+      if (allClose) {
+        settled++;
+        if (settled >= 3) cbStopLivePos();
+      } else {
+        settled = 0;
+      }
+    } catch (_) {}
+  }, 300);
+
+  // Auto-stop after 10 seconds
+  setTimeout(() => cbStopLivePos(), 10000);
+}
+
+function cbStopLivePos() {
+  if (cbLiveTimer) { clearInterval(cbLiveTimer); cbLiveTimer = null; }
+}
+
+
+function cbReset() {
+  if (!confirm("Reset all calibration data?")) return;
+  cbPixels = [];
+  cbJoints = [];
+  cbCalibrated = false;
+  cbStopLivePos();
+  document.getElementById("cbStatus").textContent = "Not calibrated";
+  document.getElementById("cbStatus").className = "cal-status off";
+  document.getElementById("cbMoveSection").style.display = "none";
+  document.getElementById("cbDataSection").style.display = "none";
+  cbDrawOverlay();
+  cbUpdateUI();
+  fetch("/api/calibrate/reset", {method: "POST"});
+}
+
+// Load existing calibration on page load
+fetch("/api/calibrate/status").then(r=>r.json()).then(d=>{
+  if (d.points && d.points.length > 0) {
+    cbPixels = d.points.map(p => ({u: p.pixel[0], v: p.pixel[1]}));
+    cbJoints = d.points.map(p => ({joints: p.joints}));
+    if (d.calibrated) {
+      cbCalibrated = true;
+      document.getElementById("cbStatus").textContent = "Calibrated";
+      document.getElementById("cbStatus").className = "cal-status on";
+      document.getElementById("cbMoveSection").style.display = "block";
+    }
+    cbUpdateUI();
   }
 }).catch(()=>{});
 </script>

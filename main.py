@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -11,10 +12,11 @@ import uuid
 from pathlib import Path
 
 import httpx
+import numpy as np
 import yaml
 from dotenv import load_dotenv
 from PIL import Image
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -579,6 +581,187 @@ async def teleop_stop():
     teleop_state["running"] = False
     print("[Teleop] Stopped")
     return {"ok": True, "message": "Teleop stopped"}
+
+
+# ══════════ Interpolation IK from calibration points ══════════
+
+
+def interpolate_joints_from_pixel(pixel_uv, points, height_cm=0.0):
+    """Interpolate joint angles from 4 calibration points using bilinear interpolation.
+
+    For each joint, fit: value = a + b*u + c*v + d*u*v
+    using the 4 calibration point pairs (pixel → joint_value).
+
+    height_cm: gripper height above calibrated surface (cm).
+               Adjusts shoulder_lift to raise the arm.
+    """
+    if len(points) < 4:
+        return None
+
+    u, v = pixel_uv
+    pixels = np.array([p["pixel"] for p in points[:4]], dtype=np.float64)
+
+    # Build coefficient matrix: [1, u, v, u*v] for each calibration point
+    A = np.column_stack([
+        np.ones(4),
+        pixels[:, 0],
+        pixels[:, 1],
+        pixels[:, 0] * pixels[:, 1],
+    ])
+
+    joint_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+    result = {}
+
+    for jname in joint_names:
+        values = np.array([p["joints"][jname] for p in points[:4]], dtype=np.float64)
+        try:
+            coeffs = np.linalg.solve(A, values)
+            result[jname] = round(float(coeffs[0] + coeffs[1] * u + coeffs[2] * v + coeffs[3] * u * v), 2)
+        except np.linalg.LinAlgError:
+            return None
+
+    # Adjust height: raise arm by offsetting shoulder_lift
+    # SO101 effective arm length ≈ 0.25m (upper_arm + lower_arm)
+    # Δshoulder_lift ≈ arctan(height / arm_reach) in degrees
+    if height_cm > 0:
+        h = height_cm / 100.0  # convert to meters
+        arm_len = 0.25
+        offset_deg = math.degrees(math.atan2(h, arm_len))
+        result["shoulder_lift"] = round(result["shoulder_lift"] - offset_deg, 2)
+
+    return result
+
+
+# ══════════ Calibration ══════════
+
+CALIB_FILE = ROOT / "data" / "calibration.json"
+
+calib_state = {
+    "points": [],       # list of {pixel: [u,v], joints: {...}, robot_xy: [x,y]}
+    "homography": None,  # 3x3 matrix (list of lists)
+    "z_fixed": None,
+}
+
+
+def load_calibration():
+    """Load calibration from file if exists."""
+    global calib_state
+    if CALIB_FILE.exists():
+        calib_state = json.loads(CALIB_FILE.read_text())
+
+
+def save_calibration():
+    """Save calibration to file."""
+    CALIB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CALIB_FILE.write_text(json.dumps(calib_state, indent=2))
+
+
+# Load calibration on startup
+load_calibration()
+
+
+@app.get("/api/calibrate/status")
+async def calibrate_status():
+    return {
+        "points": calib_state["points"],
+        "calibrated": calib_state["homography"] is not None,
+        "z_fixed": calib_state["z_fixed"],
+    }
+
+
+@app.post("/api/calibrate/capture")
+async def calibrate_capture():
+    """Capture a snapshot from the top camera for calibration."""
+    import cv2
+    st = cam_state.get("top")
+    if not st:
+        return {"ok": False, "error": "Top camera not available"}
+    with st["lock"]:
+        f = st["frame"]
+    if f is None:
+        return {"ok": False, "error": "No frame available"}
+    _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+    return {"ok": True, "image": b64}
+
+
+@app.post("/api/calibrate/save-point")
+async def calibrate_save_point():
+    """Save the current robot position for the latest pixel point."""
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+
+    joints = robot_get_positions()
+
+    return {
+        "ok": True,
+        "joints": joints,
+    }
+
+
+@app.post("/api/calibrate/compute")
+async def calibrate_compute():
+    """Validate calibration points and save."""
+    points = calib_state["points"]
+    if len(points) < 4:
+        return {"ok": False, "error": f"Need 4 points, have {len(points)}"}
+
+    for i, p in enumerate(points):
+        if "joints" not in p:
+            return {"ok": False, "error": f"Point {i + 1} missing robot position"}
+
+    calib_state["homography"] = True  # flag as calibrated
+    save_calibration()
+
+    return {"ok": True}
+
+
+@app.post("/api/calibrate/reset")
+async def calibrate_reset():
+    """Reset calibration data."""
+    calib_state["points"] = []
+    calib_state["homography"] = None
+    calib_state["z_fixed"] = None
+    save_calibration()
+    return {"ok": True}
+
+
+
+@app.post("/api/calibrate/move-to")
+async def calibrate_move_to(request: Request):
+    """Click on top view → move robot to that position using interpolation from calibration points."""
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+    if not calib_state["homography"]:
+        return {"ok": False, "error": "Not calibrated"}
+
+    data = await request.json()
+    pixel = data.get("pixel")  # [u, v]
+    if not pixel:
+        return {"ok": False, "error": "No pixel coordinate"}
+
+    height_cm = data.get("height_cm", 0.0)
+    joints = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
+    if joints is None:
+        return {"ok": False, "error": "Interpolation failed — need 4 valid calibration points"}
+
+    robot_send_positions(joints)
+    return {
+        "ok": True,
+        "pixel": pixel,
+        "target_joints": joints,
+    }
+
+
+# ── Calibrate JSON API (receive JSON body) ──
+
+@app.post("/api/calibrate/save-all")
+async def calibrate_save_all(request: Request):
+    """Save all calibration points at once: {points: [{pixel, joints, robot_xy, robot_z}, ...]}"""
+    data = await request.json()
+    calib_state["points"] = data.get("points", [])
+    save_calibration()
+    return {"ok": True}
 
 
 if __name__ == "__main__":
