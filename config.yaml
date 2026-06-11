@@ -232,3 +232,22 @@ verify_prompt_template: |
 storage:
   results_dir: "data/results"
   images_dir: "data/images"
+
+# Robot / Camera Calibrate (press Start in UI to connect)
+robot:
+  port: "/dev/tty.usbmodem5B141122411"
+  id: "my_awesome_follower_arm"
+  cameras:
+    top:
+      index: 0
+      w: 640
+      h: 480
+    wrist:
+      index: 1
+      w: 640
+      h: 480
+
+# Teleop (leader arm controls follower)
+teleop:
+  type: "so101_leader"
+  port: "/dev/tty.usbmodem5B140300651"

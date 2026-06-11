@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hybridge VLA</title>
+
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #222; min-height: 100vh; display: flex; }
@@ -27,6 +28,17 @@
   .page.active { display: block; }
   .page-title { font-size: 1.3rem; font-weight: 700; color: #222; margin-bottom: 18px; }
   .page-title span { color: #1a73e8; }
+
+  /* Inner tabs */
+  .inner-tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 2px solid #e0e0e0; }
+  .inner-tab {
+    padding: 8px 20px; font-size: 0.88rem; font-weight: 600; color: #888; background: none;
+    border: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s;
+  }
+  .inner-tab:hover { color: #1a73e8; }
+  .inner-tab.active { color: #1a73e8; border-bottom-color: #1a73e8; }
+  .inner-page { display: none; }
+  .inner-page.active { display: block; }
 
   /* Form */
   .form-group { margin-bottom: 14px; }
@@ -205,6 +217,35 @@
   .doc-toc .toc-title { font-size: 0.78rem; font-weight: 600; color: #777; text-transform: uppercase; margin-bottom: 8px; }
   .doc-toc a { display: block; font-size: 0.85rem; color: #1a73e8; text-decoration: none; padding: 3px 0; }
   .doc-toc a:hover { text-decoration: underline; }
+
+  /* Camera & Teleop */
+  .cal-status { font-size: 0.78rem; display: inline-block; padding: 3px 12px; border-radius: 12px; font-weight: 600; }
+  .cal-status.on { background: #e6f4ea; color: #1e8e3e; }
+  .cal-status.off { background: #fce8e6; color: #d93025; }
+
+  .cal-row-top { display: flex; gap: 14px; margin-bottom: 14px; }
+  .cal-slider-col { flex: 0 0 280px; display: flex; flex-direction: column; gap: 6px; }
+  .cal-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 4px; }
+  .cal-joint { background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 8px 12px; }
+  .cal-joint-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .cal-joint-name { font-weight: 600; font-size: 0.8rem; color: #555; }
+  .cal-joint-val { font-family: 'SF Mono','Menlo',monospace; font-size: 0.88rem; color: #1a73e8; font-weight: 700; min-width: 55px; text-align: right; }
+  .cal-slider { -webkit-appearance: none; width: 100%; height: 5px; border-radius: 3px; background: #e0e0e0; outline: none; }
+  .cal-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; cursor: grab; border: 2px solid #4a90e2; }
+  .cal-slider::-webkit-slider-thumb:active { transform: scale(1.15); cursor: grabbing; }
+  .cal-slider.grip::-webkit-slider-thumb { background: #e8453c; border-color: #f06050; }
+
+  .cal-row-cams { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .cal-cam-box { background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 10px; }
+  .cal-cam-box h3 { font-size: 0.82rem; color: #1a73e8; font-weight: 600; margin-bottom: 6px; }
+  .cal-cam-wrap { width: 100%; background: #111; border-radius: 6px; overflow: hidden; aspect-ratio: 4/3; }
+  .cal-cam-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+  @media (max-width: 750px) {
+    .cal-row-top { flex-direction: column; }
+    .cal-slider-col { flex: none; }
+    .cal-row-cams { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -212,18 +253,25 @@
 <div class="sidebar">
   <div class="sidebar-header">Hybridge VLA</div>
   <div class="sidebar-nav">
-    <div class="nav-section">Tools</div>
-    <div class="nav-item active" data-tab="test-api"><span class="nav-icon">0</span> Test Gemini API</div>
-    <div class="nav-item" data-tab="visualize"><span class="nav-icon">1</span> Visualize</div>
-    <div class="nav-item" data-tab="docs"><span class="nav-icon">2</span> Documents</div>
+    <div class="nav-section">Menu</div>
+    <div class="nav-item active" data-tab="test-api">Step1-Planing(Gemini)</div>
+    <div class="nav-item" data-tab="cam-calib">Camera & Teleop</div>
   </div>
 </div>
 
 <div class="main">
 
-  <!-- Tab 0: Test API -->
+  <!-- Step1: Planing (Gemini) -->
   <div class="page active" id="page-test-api">
-    <div class="page-title"><span>Test</span> Gemini API</div>
+    <div class="page-title"><span>Step1</span> Planing (Gemini)</div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="planing">Planing</button>
+      <button class="inner-tab" data-inner="history">History</button>
+      <button class="inner-tab" data-inner="documents">Documents</button>
+    </div>
+
+    <div class="inner-page active" id="inner-planing">
 
     <div class="token-card" id="tokenCard">
       <div class="card-title">Token Usage</div>
@@ -296,11 +344,10 @@
       <span class="lbl">Raw Response</span>
       <div id="rawText"></div>
     </div>
-  </div>
 
-  <!-- Tab 1: Visualize -->
-  <div class="page" id="page-visualize">
-    <div class="page-title"><span>Visualize</span> Results</div>
+    </div><!-- end inner-planing -->
+
+    <div class="inner-page" id="inner-history">
     <div class="viz-controls">
       <select id="vizFilter"><option value="">All Models</option></select>
       <button class="btn btn-sm btn-outline" onclick="loadResults()">Refresh</button>
@@ -309,11 +356,9 @@
     </div>
     <div class="viz-grid" id="vizGrid"></div>
     <div class="empty-state" id="vizEmpty" style="display:none"><p>No results yet.</p></div>
-  </div>
+    </div><!-- end inner-history -->
 
-  <!-- Tab 2: Documents -->
-  <div class="page" id="page-docs">
-    <div class="page-title"><span>Documents</span></div>
+    <div class="inner-page" id="inner-documents">
     <div class="doc">
 
       <div class="doc-toc">
@@ -321,7 +366,7 @@
         <a href="#doc-overview">1. System Overview</a>
         <a href="#doc-arch">2. Architecture</a>
         <a href="#doc-project">3. Project Structure</a>
-        <a href="#doc-config">4. Configuration (config.yaml)</a>
+        <a href="#doc-config">4. Configuration</a>
         <a href="#doc-api">5. API Reference</a>
         <a href="#doc-prompt">6. Prompt Engineering</a>
         <a href="#doc-verify">7. Verification Process</a>
@@ -340,8 +385,10 @@
       </p>
       <p>The system provides:</p>
       <ul>
-        <li>A web UI to test Gemini API with custom instructions, methods, and images</li>
+        <li>Plan generation from natural language instructions via Gemini VLM</li>
         <li>Automatic prompt generation from a configurable template</li>
+        <li>Plan verification with auto-retry</li>
+        <li>Auto-normalization of pixel bounding boxes to [0,1]</li>
         <li>Plan visualization with bounding boxes overlaid on images</li>
         <li>Result storage and historical review</li>
       </ul>
@@ -354,10 +401,11 @@
     v
 FastAPI Server (main.py)
     |
-    |--- GET  /              → Serve frontend (static/index.html)
-    |--- GET  /api/config    → Return models, methods, prompt template
-    |--- POST /api/infer     → Send image+prompt to Gemini, parse plan, store result
-    |--- GET  /api/results   → List all stored results
+    |--- GET  /                → Serve frontend (static/index.html)
+    |--- GET  /api/config      → Return models, methods, prompt template, verify config
+    |--- POST /api/infer       → Infer + verify loop → parse plan → store result
+    |--- GET  /api/token-usage → Latest token usage from most recent result
+    |--- GET  /api/results     → List all stored results
     |--- GET  /api/results/:id → Get single result
     |--- DEL  /api/results/:id → Delete result + image
     |
@@ -366,13 +414,16 @@ FastAPI Server (main.py)
 Google Gemini VLM
     |
     v
-JSON Plan Response → parsed, stored, visualized</code></pre>
+JSON Plan Response → parsed → verified → stored → visualized</code></pre>
+      <p><strong>Inference flow:</strong></p>
+      <pre><code>Image + Prompt → Gemini → Parse JSON → Auto-normalize bbox → Verify → (retry if failed) → Save result</code></pre>
 
       <!-- 3 -->
       <h2 id="doc-project">3. Project Structure</h2>
       <div class="file-tree">
 Hybridge-VLA/<br>
-├── config.yaml &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# All configuration (API key, models, methods, prompt)<br>
+├── .env &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# GEMINI_API_KEY (not in git)<br>
+├── config.yaml &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# All configuration (models, methods, prompts, verify)<br>
 ├── main.py &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# FastAPI backend<br>
 ├── requirements.txt &nbsp;&nbsp;&nbsp;&nbsp;# Python dependencies<br>
 ├── static/<br>
@@ -384,15 +435,18 @@ Hybridge-VLA/<br>
       </div>
 
       <!-- 4 -->
-      <h2 id="doc-config">4. Configuration (config.yaml)</h2>
-      <p>All settings are centralized in <code>config.yaml</code>. The server reloads this file on every request, so changes take effect immediately without restart.</p>
+      <h2 id="doc-config">4. Configuration</h2>
+      <p>Settings are split between <code>.env</code> (secrets) and <code>config.yaml</code> (everything else). The server reloads <code>config.yaml</code> on every request &mdash; no restart needed.</p>
 
-      <h3>4.1 Gemini Settings</h3>
+      <h3>4.1 API Key (.env)</h3>
+      <p>The Gemini API key is stored in <code>.env</code> (excluded from git via <code>.gitignore</code>):</p>
+      <pre><code>GEMINI_API_KEY=AIzaSy...</code></pre>
+
+      <h3>4.2 Gemini Settings</h3>
       <pre><code>gemini:
-  api_key: "AIzaSy..."    # Your Gemini API key
   default_model: "gemini-2.5-flash-lite"</code></pre>
 
-      <h3>4.2 Models</h3>
+      <h3>4.3 Models</h3>
       <p>Each model entry defines <code>id</code>, <code>name</code>, <code>group</code> (for dropdown grouping), and <code>input_limit</code> (max input tokens for the usage bar).</p>
       <pre><code>models:
   - id: "gemini-2.5-flash-lite"
@@ -400,7 +454,7 @@ Hybridge-VLA/<br>
     group: "Gemini 2.5"
     input_limit: 1048576</code></pre>
 
-      <h3>4.3 Available Methods</h3>
+      <h3>4.4 Available Methods</h3>
       <p>The list of valid <code>method_id</code> values for the robot. Displayed as editable chips in the UI and injected into the prompt via <code>{available_methods}</code>.</p>
       <pre><code>available_methods:
   - ik_reach_object_v1
@@ -411,39 +465,21 @@ Hybridge-VLA/<br>
   - act_door_open_v1
   - act_door_close_v1</code></pre>
 
-      <h3>4.4 Prompt Template</h3>
+      <h3>4.5 Prompt Template</h3>
       <p>Uses two placeholders replaced at runtime by the frontend:</p>
       <ul>
-        <li><code>{instruction}</code> — the user's natural language instruction</li>
-        <li><code>{available_methods}</code> — bullet list of methods</li>
+        <li><code>{instruction}</code> &mdash; the user's natural language instruction</li>
+        <li><code>{available_methods}</code> &mdash; bullet list of methods</li>
       </ul>
-      <pre><code>prompt_template: |
-  You are a robotic task planner for a VLA system.
-  ...
-  ## Input
-  {instruction}
-  ...
-  ## Available Methods
-  {available_methods}
-  ...</code></pre>
 
-      <h3>4.5 Verification</h3>
+      <h3>4.6 Verification</h3>
       <pre><code>verify:
   enabled: true    # Enable/disable plan verification
-  max_retries: 3   # Max infer+verify attempts
-
-verify_prompt_template: |
-  You are a robotic plan verifier...
-  ## Instruction
-  {instruction}
-  ## Plan to Verify
-  {plan_json}
-  ## Available Methods
-  {available_methods}
-  ...</code></pre>
+  max_retries: 3   # Max infer+verify attempts</code></pre>
+      <p>The <code>verify_prompt_template</code> uses three placeholders: <code>{instruction}</code>, <code>{plan_json}</code>, <code>{available_methods}</code>.</p>
       <p>See <a href="#doc-verify">Section 7: Verification Process</a> for full details.</p>
 
-      <h3>4.6 Storage</h3>
+      <h3>4.7 Storage</h3>
       <pre><code>storage:
   results_dir: "data/results"   # JSON result files
   images_dir: "data/images"     # Uploaded images</code></pre>
@@ -452,95 +488,119 @@ verify_prompt_template: |
       <h2 id="doc-api">5. API Reference</h2>
 
       <h3>5.1 <span class="badge badge-get">GET</span> /api/config</h3>
-      <p>Returns application configuration (models, default model, methods, prompt template). API key is NOT exposed.</p>
+      <p>Returns application configuration. API key is NOT exposed.</p>
       <p><strong>Response:</strong></p>
       <pre><code>{
-  "models": [
-    {"id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash-Lite", "group": "Gemini 2.5", "input_limit": 1048576}
-  ],
+  "models": [...],
   "default_model": "gemini-2.5-flash-lite",
   "default_instruction": "pick up the red cube to the second drawer",
-  "available_methods": ["ik_reach_object_v1", "act_gripper_grasp_v1", ...],
+  "available_methods": ["ik_reach_object_v1", ...],
   "prompt_template": "You are a robotic task planner...",
   "verify": {"enabled": true, "max_retries": 3}
 }</code></pre>
 
       <h3>5.2 <span class="badge badge-post">POST</span> /api/infer</h3>
-      <p>Run inference: sends image + prompt to Gemini, parses response, saves result.</p>
+      <p>Run inference: sends image + prompt to Gemini, parses plan, verifies, retries if needed, saves result.</p>
       <p><strong>Content-Type:</strong> <code>multipart/form-data</code></p>
       <table>
-        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
-        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>Gemini model ID (e.g. <code>gemini-2.5-flash-lite</code>)</td></tr>
-        <tr><td><code>instruction</code></td><td>string</td><td>Yes</td><td>Natural language instruction</td></tr>
-        <tr><td><code>methods</code></td><td>string</td><td>Yes</td><td>Comma-separated method IDs</td></tr>
-        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>Full prompt text (with instruction + methods already injected)</td></tr>
-        <tr><td><code>image</code></td><td>file</td><td>Yes</td><td>Image file (JPEG/PNG)</td></tr>
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th><th>Example</th></tr>
+        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>Gemini model ID</td><td><code>gemini-2.5-flash-lite</code></td></tr>
+        <tr><td><code>instruction</code></td><td>string</td><td>Yes</td><td>Natural language instruction</td><td><code>pick up the red cube to the second drawer</code></td></tr>
+        <tr><td><code>methods</code></td><td>string</td><td>Yes</td><td>Comma-separated method IDs</td><td><code>ik_reach_object_v1,act_gripper_grasp_v1</code></td></tr>
+        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>Full prompt text</td><td style="max-width:300px"><details><summary style="cursor:pointer;color:#1a73e8;font-size:0.78rem">View full prompt</summary><pre style="white-space:pre-wrap;font-size:0.72rem;max-height:300px;overflow:auto;margin-top:6px">You are a robotic task planner for a Vision-Language-Action (VLA) system.
+
+## Task
+Convert a natural language instruction into a step-by-step robotic execution plan.
+
+## Input
+pick up the red cube to the second drawer
+
+## Robot Constraints
+- Single arm with ONE gripper. No dual-hand manipulation.
+- Cannot hold an object AND operate a drawer/door at the same time.
+
+## MANDATORY Action Sequencing Rules
+Every physical interaction MUST be preceded by ik_reach_object_v1 targeting that object.
+
+## Execution Rules
+- CLOSED containers (drawers, doors) MUST be opened BEFORE picking up the object.
+- OPEN containers (bowls, trays, bins) do NOT need to be opened or reached first.
+- ik_reach_object_v1 MUST appear before EVERY act_* step.
+
+## Available Methods
+* ik_reach_object_v1
+* act_gripper_grasp_v1
+* act_gripper_release_v1
+* act_drawer_open_v1
+* act_drawer_close_v1
+* act_door_open_v1
+* act_door_close_v1
+
+## Output Format
+Output ONLY valid JSON.
+{"task_id": "...", "total_steps": N, "steps": [...]}</pre></details></td></tr>
+        <tr><td><code>image</code></td><td>file</td><td>Yes</td><td>Image file (JPEG/PNG)</td><td><code>scene.jpg</code></td></tr>
       </table>
       <p><strong>Response (success):</strong></p>
       <pre><code>{
   "id": "1717574400_a1b2c3d4",
   "timestamp": 1717574400.123,
   "model": "gemini-2.5-flash-lite",
-  "instruction": "pick up the pink bow to the green bowl",
-  "methods": ["ik_reach_object_v1", "act_gripper_grasp_v1", ...],
-  "prompt": "You are a robotic task planner...",
+  "instruction": "pick up the red cube to the second drawer",
+  "methods": ["ik_reach_object_v1", ...],
+  "prompt": "...",
   "image": "1717574400_a1b2c3d4.jpg",
-  "raw_response": "{\"task_id\": ...}",
+  "image_size": [640, 480],
+  "raw_response": "...",
   "plan": {
-    "task_id": "pink_bow_to_green_bowl",
-    "total_steps": 4,
+    "task_id": "red_cube_to_second_drawer",
+    "total_steps": 8,
     "steps": [
-      {
-        "step_index": 1,
-        "description": "Reach the pink bow",
-        "target_bbox": [0.48, 0.47, 0.08, 0.08],
-        "method_id": "ik_reach_object_v1"
-      }
+      {"step_index": 1, "description": "Reach the second drawer handle",
+       "target_bbox": [0.18, 0.62, 0.20, 0.14], "method_id": "ik_reach_object_v1"},
+      ...
     ]
   },
   "bbox_auto_normalized": false,
   "verify": {
     "enabled": true, "passed": true, "attempts": 1, "max_retries": 3,
-    "history": [{"attempt":1, "infer_elapsed":2.31, "verify_result":{"verified":true, "reason":"..."}}]
+    "history": [{"attempt":1, "infer_elapsed":2.31,
+      "verify_result":{"verified":true, "reason":"..."}}]
   },
-  "token_usage": {
-    "input": 1234,
-    "output": 567,
-    "total": 1801,
-    "limit": 1048576,
-    "remaining": 1047342
-  },
+  "token_usage": {"input": 1234, "output": 567, "total": 1801,
+    "limit": 1048576, "remaining": 1047342},
   "elapsed": 2.45
 }</code></pre>
       <p><strong>Response (error):</strong></p>
       <pre><code>{"error": "API key not valid.", "elapsed": 0.12}</code></pre>
 
-      <h3>5.3 <span class="badge badge-get">GET</span> /api/results</h3>
+      <h3>5.3 <span class="badge badge-get">GET</span> /api/token-usage</h3>
+      <p>Returns token usage from the most recent inference result. Called on page load to restore the token usage bar.</p>
+      <p><strong>Response:</strong></p>
+      <pre><code>{"input": 1234, "output": 567, "total": 1801, "limit": 1048576, "remaining": 1047342}</code></pre>
+
+      <h3>5.4 <span class="badge badge-get">GET</span> /api/results</h3>
       <p>List stored results, newest first.</p>
       <table>
-        <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th></tr>
-        <tr><td><code>limit</code></td><td>int</td><td>50</td><td>Max items to return</td></tr>
-        <tr><td><code>offset</code></td><td>int</td><td>0</td><td>Skip first N items</td></tr>
+        <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th><th>Example</th></tr>
+        <tr><td><code>limit</code></td><td>int</td><td>50</td><td>Max items to return</td><td><code>10</code></td></tr>
+        <tr><td><code>offset</code></td><td>int</td><td>0</td><td>Skip first N items</td><td><code>20</code></td></tr>
       </table>
       <p><strong>Response:</strong></p>
-      <pre><code>{
-  "total": 42,
-  "items": [ { ...result object... }, ... ]
-}</code></pre>
+      <pre><code>{"total": 42, "items": [...]}</code></pre>
 
-      <h3>5.4 <span class="badge badge-get">GET</span> /api/results/{result_id}</h3>
-      <p>Get a single result by ID.</p>
-      <p><strong>Response:</strong> Same structure as a single item from <code>/api/infer</code>.</p>
+      <h3>5.5 <span class="badge badge-get">GET</span> /api/results/{result_id}</h3>
+      <p>Get a single result by ID. Same structure as <code>/api/infer</code> response.</p>
 
-      <h3>5.5 <span class="badge badge-del">DELETE</span> /api/results/{result_id}</h3>
+      <h3>5.6 <span class="badge badge-del">DELETE</span> /api/results/{result_id}</h3>
       <p>Delete a result and its associated image.</p>
       <p><strong>Response:</strong> <code>{"ok": true}</code> or <code>{"error": "Not found"}</code></p>
 
-      <h3>5.6 Static Files</h3>
+      <h3>5.7 Static Files</h3>
       <table>
-        <tr><th>Path</th><th>Description</th></tr>
-        <tr><td><code>/static/*</code></td><td>Frontend files</td></tr>
-        <tr><td><code>/data/images/*</code></td><td>Uploaded images (served directly)</td></tr>
+        <tr><th>Path</th><th>Description</th><th>Example</th></tr>
+        <tr><td><code>/static/*</code></td><td>Frontend files</td><td><code>/static/index.html</code></td></tr>
+        <tr><td><code>/data/images/*</code></td><td>Uploaded images (served directly)</td><td><code>/data/images/1717574400_a1b2c3d4.jpg</code></td></tr>
       </table>
 
       <!-- 6 -->
@@ -557,23 +617,23 @@ verify_prompt_template: |
 
       <h3>6.2 Action Patterns</h3>
       <table>
-        <tr><th>Task</th><th>Step 1</th><th>Step 2</th></tr>
-        <tr><td>Pick up object</td><td><code>ik_reach_object_v1</code> → object</td><td><code>act_gripper_grasp_v1</code> → object</td></tr>
-        <tr><td>Place / release</td><td><code>ik_reach_object_v1</code> → destination</td><td><code>act_gripper_release_v1</code> → destination</td></tr>
-        <tr><td>Open drawer</td><td><code>ik_reach_object_v1</code> → drawer</td><td><code>act_drawer_open_v1</code> → drawer</td></tr>
-        <tr><td>Close drawer</td><td><code>ik_reach_object_v1</code> → drawer</td><td><code>act_drawer_close_v1</code> → drawer</td></tr>
-        <tr><td>Open/close door</td><td><code>ik_reach_object_v1</code> → door</td><td><code>act_door_*_v1</code> → door</td></tr>
+        <tr><th>Task</th><th>Step 1</th><th>Step 2</th><th>Example</th></tr>
+        <tr><td>Pick up object</td><td><code>ik_reach_object_v1</code> &rarr; object</td><td><code>act_gripper_grasp_v1</code> &rarr; object</td><td>Reach red cube &rarr; Grasp red cube</td></tr>
+        <tr><td>Place / release</td><td><code>ik_reach_object_v1</code> &rarr; destination</td><td><code>act_gripper_release_v1</code> &rarr; destination</td><td>Reach green bowl &rarr; Release into bowl</td></tr>
+        <tr><td>Open drawer</td><td><code>ik_reach_object_v1</code> &rarr; drawer</td><td><code>act_drawer_open_v1</code> &rarr; drawer</td><td>Reach drawer handle &rarr; Open drawer</td></tr>
+        <tr><td>Close drawer</td><td><code>ik_reach_object_v1</code> &rarr; drawer</td><td><code>act_drawer_close_v1</code> &rarr; drawer</td><td>Reach drawer handle &rarr; Close drawer</td></tr>
+        <tr><td>Open/close door</td><td><code>ik_reach_object_v1</code> &rarr; door</td><td><code>act_door_*_v1</code> &rarr; door</td><td>Reach door &rarr; Open door</td></tr>
       </table>
 
       <h3>6.3 Container Logic</h3>
       <table>
-        <tr><th>Container Type</th><th>Behavior</th></tr>
-        <tr><td>CLOSED (drawer, door)</td><td>Must open BEFORE picking up the object</td></tr>
-        <tr><td>OPEN (bowl, tray, bin)</td><td>Pick up object first, then reach container, then release</td></tr>
+        <tr><th>Container Type</th><th>Behavior</th><th>Example</th></tr>
+        <tr><td>CLOSED (drawer, door)</td><td>Must open BEFORE picking up the object</td><td>Open drawer &rarr; pick cube &rarr; place in drawer &rarr; close drawer (8 steps)</td></tr>
+        <tr><td>OPEN (bowl, tray, bin)</td><td>Pick up object first, then reach container, then release</td><td>Pick cube &rarr; reach bowl &rarr; release into bowl (4 steps)</td></tr>
       </table>
 
       <h3>6.4 Bounding Box Format</h3>
-      <p>YOLO format: <code>[x_center, y_center, width, height]</code>, all normalized to <code>[0, 1]</code>.</p>
+      <p>YOLO format: <code>[x_center, y_center, width, height]</code>, all normalized to <code>[0, 1]</code>. If the model returns pixel values (any value &gt; 1.0), the server auto-normalizes them using the image dimensions.</p>
       <pre><code>x_center = box_center_x / image_width
 y_center = box_center_y / image_height
 width    = box_width / image_width
@@ -581,7 +641,7 @@ height   = box_height / image_height</code></pre>
 
       <!-- 7 -->
       <h2 id="doc-verify">7. Verification Process</h2>
-      <p>After generating a plan, the system can send the plan back to Gemini for verification. If verification fails, the system retries the entire inference up to a configurable number of times.</p>
+      <p>After generating a plan, the system sends the plan back to Gemini for verification. If verification fails, the entire inference is retried (up to <code>max_retries</code> times).</p>
 
       <h3>7.1 How It Works</h3>
       <ol>
@@ -604,7 +664,7 @@ height   = box_height / image_height</code></pre>
         <li><code>{plan_json}</code> &mdash; the generated plan as JSON</li>
         <li><code>{available_methods}</code> &mdash; bullet list of valid methods</li>
       </ul>
-      <p>The verifier checks: bounding box accuracy, action sequencing, method validity, logic correctness, and completeness.</p>
+      <p>The verifier checks: step ordering, action sequencing, bounding box accuracy, method validity, and completeness. It includes correct patterns for both OPEN and CLOSED containers to reduce false rejections.</p>
 
       <h3>7.4 Verify Result in API Response</h3>
       <pre><code>"verify": {
@@ -629,14 +689,14 @@ height   = box_height / image_height</code></pre>
       <!-- 8 -->
       <h2 id="doc-methods">8. Robot Methods</h2>
       <table>
-        <tr><th>Method ID</th><th>Description</th><th>Precondition</th></tr>
-        <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td><td>None — this IS the precondition</td></tr>
-        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper to grasp object</td><td>Must reach object first</td></tr>
-        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper to release held object</td><td>Must reach destination first</td></tr>
-        <tr><td><code>act_drawer_open_v1</code></td><td>Pull drawer open</td><td>Must reach drawer first</td></tr>
-        <tr><td><code>act_drawer_close_v1</code></td><td>Push drawer closed</td><td>Must reach drawer first</td></tr>
-        <tr><td><code>act_door_open_v1</code></td><td>Open a door</td><td>Must reach door first</td></tr>
-        <tr><td><code>act_door_close_v1</code></td><td>Close a door</td><td>Must reach door first</td></tr>
+        <tr><th>Method ID</th><th>Description</th><th>Precondition</th><th>Example</th></tr>
+        <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td><td>None &mdash; this IS the precondition</td><td>Reach the red cube</td></tr>
+        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper to grasp object</td><td>Must reach object first</td><td>Grasp the red cube</td></tr>
+        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper to release held object</td><td>Must reach destination first</td><td>Release into the green bowl</td></tr>
+        <tr><td><code>act_drawer_open_v1</code></td><td>Pull drawer open</td><td>Must reach drawer first</td><td>Open the second drawer</td></tr>
+        <tr><td><code>act_drawer_close_v1</code></td><td>Push drawer closed</td><td>Must reach drawer first</td><td>Close the second drawer</td></tr>
+        <tr><td><code>act_door_open_v1</code></td><td>Open a door</td><td>Must reach door first</td><td>Open the cabinet door</td></tr>
+        <tr><td><code>act_door_close_v1</code></td><td>Close a door</td><td>Must reach door first</td><td>Close the cabinet door</td></tr>
       </table>
 
       <!-- 9 -->
@@ -649,75 +709,111 @@ height   = box_height / image_height</code></pre>
       <h3>9.2 Result JSON</h3>
       <p>Saved to <code>data/results/{timestamp}_{uuid}.json</code></p>
       <pre><code>{
-  "id": "1717574400_a1b2c3d4",       // Unique ID (used as filename)
-  "timestamp": 1717574400.123,        // Unix timestamp
-  "model": "gemini-2.5-flash-lite",   // Model used
-  "instruction": "pick up the...",    // User instruction
-  "methods": ["ik_reach_object_v1"],  // Methods available
-  "prompt": "You are a robotic...",   // Full prompt sent
-  "image": "1717574400_a1b2c3d4.jpg", // Image filename
-  "image_size": [640, 480],           // [width, height] in pixels
-  "raw_response": "...",              // Raw Gemini text output
-  "plan": { ... } | null,            // Parsed plan or null
-  "bbox_auto_normalized": false,      // True if pixel bboxes were auto-fixed
-  "verify": {                         // Verification result
-    "enabled": true,
-    "passed": true,
-    "attempts": 1,
-    "max_retries": 3,
-    "history": [...]                  // Per-attempt details (see section 7.4)
+  "id": "1717574400_a1b2c3d4",
+  "timestamp": 1717574400.123,
+  "model": "gemini-2.5-flash-lite",
+  "instruction": "pick up the...",
+  "methods": ["ik_reach_object_v1", ...],
+  "prompt": "...",
+  "image": "1717574400_a1b2c3d4.jpg",
+  "image_size": [640, 480],
+  "raw_response": "...",
+  "plan": { ... } | null,
+  "bbox_auto_normalized": false,
+  "verify": {
+    "enabled": true, "passed": true,
+    "attempts": 1, "max_retries": 3,
+    "history": [...]
   },
   "token_usage": {
-    "input": 1234,
-    "output": 567,
-    "total": 1801,
-    "limit": 1048576,
-    "remaining": 1047342
+    "input": 1234, "output": 567, "total": 1801,
+    "limit": 1048576, "remaining": 1047342
   },
-  "elapsed": 2.45                     // Total time in seconds (all attempts)
+  "elapsed": 2.45
 }</code></pre>
 
       <!-- 10 -->
       <h2 id="doc-frontend">10. Frontend</h2>
-      <p>Single-page app in <code>static/index.html</code> with 3 tabs:</p>
+      <p>Single-page app in <code>static/index.html</code>. The sidebar has one page: <strong>Step1-Planing(Gemini)</strong>, which contains three inner tabs:</p>
 
-      <h3>10.1 Tab 0 — Test Gemini API</h3>
+      <h3>10.1 Planing</h3>
       <ul>
-        <li><strong>Token Usage:</strong> persisted in <code>localStorage</code>, restored on page load</li>
-        <li><strong>Model selector:</strong> populated from <code>/api/config</code></li>
+        <li><strong>Token Usage:</strong> fetched from <code>/api/token-usage</code> on page load, updated after each inference</li>
+        <li><strong>Model selector:</strong> populated from <code>/api/config</code>, grouped by model family</li>
         <li><strong>Instruction:</strong> text input, auto-injected into prompt template</li>
         <li><strong>Methods:</strong> chip-based, add/remove dynamically, auto-injected into prompt</li>
-        <li><strong>Image:</strong> required, drag & drop or click to upload</li>
-        <li><strong>Prompt:</strong> collapsible, auto-generated, editable for overrides</li>
-        <li><strong>Result:</strong> canvas with bounding boxes + step cards + raw response</li>
+        <li><strong>Image:</strong> required, drag &amp; drop or click to upload</li>
+        <li><strong>Prompt:</strong> collapsible, auto-generated from template, editable for overrides</li>
+        <li><strong>Result:</strong> canvas with bounding boxes + step cards + verify status + raw response</li>
       </ul>
 
-      <h3>10.2 Tab 1 — Visualize</h3>
+      <h3>10.2 History</h3>
       <ul>
         <li>Grid of all historical results with bbox overlays on thumbnails</li>
         <li>Filter by model</li>
-        <li>Click to open detail modal (full steps, raw response, prompt)</li>
+        <li>Shows verify status badge (passed/failed) and attempt count</li>
+        <li>Click to open detail modal (full steps, verification history, raw response, prompt)</li>
         <li>Delete individual results</li>
       </ul>
 
-      <h3>10.3 Tab 2 — Documents</h3>
+      <h3>10.3 Documents</h3>
       <p>This page. Full system documentation.</p>
 
       <!-- 11 -->
       <h2 id="doc-run">11. Running the Server</h2>
       <h3>11.1 Install Dependencies</h3>
       <pre><code>pip install -r requirements.txt</code></pre>
-      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code>, <code>Pillow</code></p>
+      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code>, <code>Pillow</code>, <code>python-dotenv</code></p>
 
-      <h3>11.2 Start Server</h3>
+      <h3>11.2 Configure API Key</h3>
+      <p>Create a <code>.env</code> file in the project root:</p>
+      <pre><code>GEMINI_API_KEY=your_api_key_here</code></pre>
+
+      <h3>11.3 Start Server</h3>
       <pre><code>python main.py</code></pre>
       <p>Or with uvicorn directly:</p>
       <pre><code>uvicorn main:app --host 0.0.0.0 --port 8000 --reload</code></pre>
       <p>The server runs at <code>http://localhost:8000</code></p>
 
-      <h3>11.3 Configuration Changes</h3>
-      <p>Edit <code>config.yaml</code> and refresh the browser. The server reloads the config on every API call — no restart needed.</p>
+      <h3>11.4 Configuration Changes</h3>
+      <p>Edit <code>config.yaml</code> and refresh the browser. The server reloads the config on every API call &mdash; no restart needed.</p>
 
+    </div>
+    </div><!-- end inner-documents -->
+
+  </div>
+
+  <!-- Camera & Teleop -->
+  <div class="page" id="page-cam-calib">
+    <div class="page-title"><span>Camera</span> & Teleop</div>
+
+    <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn btn-sm" id="calStartBtn" onclick="calToggleRobot()" style="background:#34a853">Start</button>
+      <span class="cal-status off" id="calStatus">Disconnected</span>
+      <span class="status" id="calError" style="display:none"></span>
+    </div>
+    <div id="calBody" style="max-width:960px;display:none">
+      <!-- Sliders -->
+      <div class="cal-row-top">
+        <div class="cal-slider-col">
+          <div class="cal-controls">
+            <button class="btn btn-sm" style="background:#34a853" onclick="calSetTorque(true)">Torque ON</button>
+            <button class="btn btn-sm btn-danger" onclick="calSetTorque(false)">Torque OFF</button>
+          </div>
+          <div id="calJoints"></div>
+        </div>
+      </div>
+      <!-- Row 2: Cameras side by side -->
+      <div class="cal-row-cams">
+        <div class="cal-cam-box">
+          <h3>Top View</h3>
+          <div class="cal-cam-wrap"><img id="cal-cam-top" alt="top"></div>
+        </div>
+        <div class="cal-cam-box">
+          <h3>Wrist View</h3>
+          <div class="cal-cam-wrap"><img id="cal-cam-wrist" alt="wrist"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -815,14 +911,23 @@ function updateTokenUI(u) {
 
 // ---- Events ----
 function setupEvents() {
-  // Tabs
+  // Sidebar tabs
   document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
     el.addEventListener('click', () => {
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
       document.getElementById('page-'+el.dataset.tab).classList.add('active');
       el.classList.add('active');
-      if (el.dataset.tab === 'visualize') loadResults();
+    });
+  });
+  // Inner tabs (Planing / History)
+  document.querySelectorAll('.inner-tab').forEach(el => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.inner-page').forEach(p => p.classList.remove('active'));
+      el.classList.add('active');
+      document.getElementById('inner-'+el.dataset.inner).classList.add('active');
+      if (el.dataset.inner === 'history') loadResults();
     });
   });
   // Image
@@ -1108,6 +1213,117 @@ async function deleteResult(id) {
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
 init();
+
+// ---- Camera Calibrate ----
+const CAL_JOINTS = [
+  {name:"shoulder_pan",  label:"Shoulder Pan", min:-180,max:180,unit:"deg"},
+  {name:"shoulder_lift", label:"Shoulder Lift",min:-180,max:180,unit:"deg"},
+  {name:"elbow_flex",    label:"Elbow Flex",   min:-180,max:180,unit:"deg"},
+  {name:"wrist_flex",    label:"Wrist Flex",   min:-180,max:180,unit:"deg"},
+  {name:"wrist_roll",    label:"Wrist Roll",   min:-180,max:180,unit:"deg"},
+  {name:"gripper",       label:"Gripper",      min:0,   max:100,unit:"%"},
+];
+let calWs=null, calPos={}, calSendT=null, calRunning=false, calDragging=null;
+
+(function buildCalSliders(){
+  const wrap=document.getElementById("calJoints");
+  CAL_JOINTS.forEach(j=>{
+    const isGrip=j.name==="gripper";
+    const d=document.createElement("div"); d.className="cal-joint";
+    d.innerHTML=`<div class="cal-joint-hdr"><span class="cal-joint-name">${j.label}</span><span class="cal-joint-val" id="cal-v-${j.name}">--</span></div><input type="range" class="cal-slider${isGrip?' grip':''}" id="cal-s-${j.name}" min="${j.min}" max="${j.max}" step="${isGrip?1:0.5}" value="0" oninput="calOnSlider('${j.name}',this.value)" onmousedown="calDragging='${j.name}'" onmouseup="calDragging=null" ontouchstart="calDragging='${j.name}'" ontouchend="calDragging=null">`;
+    wrap.appendChild(d);
+  });
+})();
+
+function calFmt(n,v){const j=CAL_JOINTS.find(x=>x.name===n);return j.unit==="%"?v.toFixed(0)+"%":v.toFixed(1)+"°"}
+function calUpd(n,v){v=parseFloat(v);if(calDragging===n)return;document.getElementById("cal-v-"+n).textContent=calFmt(n,v);document.getElementById("cal-s-"+n).value=v;calPos[n]=v}
+
+function calOnSlider(n,v){
+  const val=parseFloat(v);calPos[n]=val;
+  document.getElementById("cal-v-"+n).textContent=calFmt(n,val);
+  if(!calSendT) calSendT=setTimeout(()=>{calSendT=null;calWsSend({type:"move",data:{...calPos}})},20);
+}
+
+function calReadPos(){calWsSend({type:"read"})}
+function calSetTorque(on){calWsSend({type:"torque",enabled:on})}
+function calWsSend(d){if(calWs&&calWs.readyState===1)calWs.send(JSON.stringify(d))}
+
+async function calToggleRobot(){
+  const btn=document.getElementById("calStartBtn");
+  const st=document.getElementById("calStatus");
+  const err=document.getElementById("calError");
+  err.style.display="none";
+  btn.disabled=true;
+
+  if(!calRunning){
+    // Start
+    btn.textContent="Starting...";
+    try{
+      const r=await fetch("/api/robot/start",{method:"POST"});
+      const d=await r.json();
+      if(!d.ok){
+        err.textContent=d.error;err.className="status error";err.style.display="inline";
+        btn.textContent="Start";btn.style.background="#34a853";btn.disabled=false;
+        return;
+      }
+      calRunning=true;
+      btn.textContent="Stop";btn.style.background="#d93025";
+      st.textContent="Connected";st.className="cal-status on";
+      document.getElementById("calBody").style.display="block";
+      calConnectWs();
+    }catch(e){
+      err.textContent=e.message;err.className="status error";err.style.display="inline";
+      btn.textContent="Start";btn.style.background="#34a853";
+    }
+  }else{
+    // Stop
+    btn.textContent="Stopping...";
+    if(calWs){calWs.onclose=null;calWs.close();calWs=null;}
+    try{await fetch("/api/robot/stop",{method:"POST"});}catch(_){}
+    calRunning=false;
+    btn.textContent="Start";btn.style.background="#34a853";
+    st.textContent="Disconnected";st.className="cal-status off";
+    document.getElementById("calBody").style.display="none";
+  }
+  btn.disabled=false;
+}
+
+function calConnectWs(){
+  const st=document.getElementById("calStatus");
+  calWs=new WebSocket(`ws://${location.host}/ws/robot`);
+  calWs.onopen=()=>{st.textContent="Connected";st.className="cal-status on"};
+  calWs.onmessage=e=>{
+    const m=JSON.parse(e.data);
+    if(m.type==="error"){
+      st.textContent=m.message;st.className="cal-status off";return;
+    }
+    if(m.type==="frames"){
+      if(m.data.top) document.getElementById("cal-cam-top").src="data:image/jpeg;base64,"+m.data.top;
+      if(m.data.wrist) document.getElementById("cal-cam-wrist").src="data:image/jpeg;base64,"+m.data.wrist;
+    } else if(m.type==="init"||m.type==="positions"){
+      const p=m.positions||m.data;
+      Object.entries(p).forEach(([n,v])=>calUpd(n,v));
+    }
+  };
+  calWs.onclose=()=>{
+    if(calRunning){st.textContent="Reconnecting...";st.className="cal-status off";setTimeout(calConnectWs,2000);}
+  };
+  calWs.onerror=()=>calWs.close();
+}
+
+// Check initial status
+fetch("/api/robot/status").then(r=>r.json()).then(d=>{
+  if(d.connected){
+    calRunning=true;
+    document.getElementById("calStartBtn").textContent="Stop";
+    document.getElementById("calStartBtn").style.background="#d93025";
+    document.getElementById("calStatus").textContent="Connected";
+    document.getElementById("calStatus").className="cal-status on";
+    document.getElementById("calBody").style.display="block";
+    calConnectWs();
+  }
+}).catch(()=>{});
 </script>
+
 </body>
 </html>

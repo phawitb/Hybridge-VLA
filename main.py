@@ -1,8 +1,11 @@
+import asyncio
 import base64
 import io
 import json
 import os
 import re
+import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -11,7 +14,7 @@ import httpx
 import yaml
 from dotenv import load_dotenv
 from PIL import Image
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -321,6 +324,261 @@ async def delete_result(result_id: str):
         result_path.unlink()
         return {"ok": True}
     return {"error": "Not found"}
+
+
+# ══════════ Robot + Camera (Camera Calibrate) ══════════
+
+ROBOT_JOINTS = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+
+robot_state = {"robot": None, "connected": False}
+cam_state = {}
+
+
+def connect_robot():
+    """Connect robot + start cameras. Raises on failure."""
+    import cv2
+    from lerobot.robots import make_robot_from_config
+    from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    port = robot_cfg.get("port", "/dev/tty.usbmodem5B141122411")
+    rcfg = SOFollowerRobotConfig(port=port, id=robot_cfg.get("id", "my_awesome_follower_arm"), cameras={})
+    rob = make_robot_from_config(rcfg)
+    rob.connect()
+    robot_state["robot"] = rob
+    robot_state["connected"] = True
+    print(f"[Camera Calibrate] Robot connected on {port}")
+
+    # Start cameras
+    cams = robot_cfg.get("cameras", {})
+    for name, cam_cfg in cams.items():
+        cap = cv2.VideoCapture(cam_cfg.get("index", 0))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("w", 640))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("h", 480))
+        state = {"cap": cap, "frame": None, "lock": threading.Lock(), "running": True, "stopped": threading.Event()}
+        cam_state[name] = state
+        ok = cap.isOpened()
+        print(f"[Camera Calibrate] Camera '{name}' (idx {cam_cfg.get('index', 0)}): {'OK' if ok else 'FAILED'}")
+
+        def loop(st=state, nm=name, cam_cfg=cam_cfg):
+            try:
+                while st["running"]:
+                    try:
+                        c = st["cap"]
+                        if c is None or not c.isOpened():
+                            c = cv2.VideoCapture(cam_cfg.get("index", 0))
+                            c.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("w", 640))
+                            c.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("h", 480))
+                            st["cap"] = c
+                            time.sleep(1)
+                            continue
+                        ret, frame = c.read()
+                        if ret:
+                            with st["lock"]:
+                                st["frame"] = frame.copy()
+                        else:
+                            c.release()
+                            st["cap"] = None
+                            time.sleep(1)
+                    except Exception as e:
+                        print(f"[Camera] '{nm}' error: {e}")
+                        time.sleep(1)
+            finally:
+                if st["cap"]:
+                    st["cap"].release()
+                    st["cap"] = None
+                st["stopped"].set()
+                print(f"[Camera] '{nm}' thread stopped")
+
+        threading.Thread(target=loop, daemon=True).start()
+
+
+def disconnect_robot():
+    """Disconnect robot + release cameras. Waits for camera threads to finish."""
+    # Signal all camera threads to stop
+    for name, st in list(cam_state.items()):
+        st["running"] = False
+    # Wait for threads to release cameras (max 3s each)
+    for name, st in list(cam_state.items()):
+        st["stopped"].wait(timeout=3)
+    cam_state.clear()
+
+    # Disconnect robot
+    rob = robot_state["robot"]
+    if rob:
+        try:
+            rob.disconnect()
+        except Exception:
+            pass
+    robot_state["robot"] = None
+    robot_state["connected"] = False
+    print("[Camera Calibrate] Robot disconnected")
+
+
+def robot_get_positions():
+    rob = robot_state["robot"]
+    obs = rob.get_observation()
+    return {j: round(float(obs[f"{j}.pos"]), 2) for j in ROBOT_JOINTS}
+
+
+def robot_send_positions(positions):
+    rob = robot_state["robot"]
+    obs = rob.get_observation()
+    action = {f"{j}.pos": float(obs[f"{j}.pos"]) for j in ROBOT_JOINTS}
+    for j, v in positions.items():
+        action[f"{j}.pos"] = float(v)
+    rob.send_action(action)
+
+
+@app.websocket("/ws/robot")
+async def ws_robot(websocket: WebSocket):
+    await websocket.accept()
+
+    if not robot_state["connected"]:
+        await websocket.send_json({"type": "error", "message": "Robot not connected"})
+        await websocket.close()
+        return
+
+    # Send initial positions
+    try:
+        await websocket.send_json({"type": "init", "positions": robot_get_positions()})
+    except Exception as e:
+        await websocket.send_json({"type": "error", "message": str(e)})
+        await websocket.close()
+        return
+
+    # Frame + position sender task
+    async def send_frames():
+        import cv2
+        tick = 0
+        while True:
+            try:
+                frames = {}
+                for name, st in cam_state.items():
+                    with st["lock"]:
+                        f = st["frame"]
+                    if f is not None:
+                        _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        frames[name] = base64.b64encode(jpg.tobytes()).decode("ascii")
+                if frames:
+                    await websocket.send_json({"type": "frames", "data": frames})
+                # Send positions every ~200ms (every 2nd tick)
+                tick += 1
+                if tick % 2 == 0:
+                    try:
+                        await websocket.send_json({"type": "positions", "data": robot_get_positions()})
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.1)
+            except Exception:
+                break
+
+    sender = asyncio.create_task(send_frames())
+    try:
+        while True:
+            data = await websocket.receive_json()
+            t = data.get("type")
+            if t == "move":
+                robot_send_positions(data["data"])
+            elif t == "read":
+                await websocket.send_json({"type": "positions", "data": robot_get_positions()})
+            elif t == "torque":
+                rob = robot_state["robot"]
+                if data["enabled"]:
+                    rob.bus.enable_torque()
+                else:
+                    rob.bus.disable_torque()
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WS Robot] error: {e}")
+    finally:
+        sender.cancel()
+
+
+# ══════════ Teleop ══════════
+
+teleop_state = {"process": None, "running": False}
+
+
+@app.get("/api/robot/status")
+async def robot_status():
+    # Check if teleop process died
+    if teleop_state["running"] and teleop_state["process"]:
+        if teleop_state["process"].poll() is not None:
+            teleop_state["running"] = False
+            teleop_state["process"] = None
+    return {"connected": robot_state["connected"], "teleop": teleop_state["running"]}
+
+
+@app.post("/api/robot/start")
+async def robot_start():
+    if robot_state["connected"]:
+        return {"ok": True, "message": "Already connected"}
+    try:
+        connect_robot()
+        return {"ok": True, "message": "Robot connected"}
+    except ImportError:
+        return {"ok": False, "error": "lerobot or cv2 not installed"}
+    except Exception as e:
+        robot_state["robot"] = None
+        robot_state["connected"] = False
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/robot/stop")
+async def robot_stop():
+    if not robot_state["connected"]:
+        return {"ok": True, "message": "Already disconnected"}
+    disconnect_robot()
+    return {"ok": True, "message": "Robot disconnected"}
+
+
+@app.post("/api/teleop/start")
+async def teleop_start():
+    if teleop_state["running"]:
+        return {"ok": True, "message": "Already running"}
+    # Stop slider-mode robot first (they share the follower port)
+    if robot_state["connected"]:
+        disconnect_robot()
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    teleop_cfg = cfg.get("teleop", {})
+    cmd = [
+        "/opt/miniconda3/envs/lerobot/bin/lerobot-teleoperate",
+        f"--robot.type=so101_follower",
+        f"--robot.port={robot_cfg.get('port', '/dev/tty.usbmodem5B141122411')}",
+        f"--robot.id={robot_cfg.get('id', 'my_awesome_follower_arm')}",
+        f"--teleop.type={teleop_cfg.get('type', 'so101_leader')}",
+        f"--teleop.port={teleop_cfg.get('port', '/dev/tty.usbmodem5B140300651')}",
+    ]
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        teleop_state["process"] = p
+        teleop_state["running"] = True
+        print(f"[Teleop] Started: {' '.join(cmd)}")
+        return {"ok": True, "message": "Teleop started"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/teleop/stop")
+async def teleop_stop():
+    if not teleop_state["running"]:
+        return {"ok": True, "message": "Already stopped"}
+    p = teleop_state["process"]
+    if p:
+        p.terminate()
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    teleop_state["process"] = None
+    teleop_state["running"] = False
+    print("[Teleop] Stopped")
+    return {"ok": True, "message": "Teleop stopped"}
 
 
 if __name__ == "__main__":
