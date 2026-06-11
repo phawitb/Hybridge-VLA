@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 .env
-data/images/
-data/results/
+.DS_Store
+data/
+camera-calibrate/
+test.py
 *.png
 *.jpg
 !test_cam0.jpg
