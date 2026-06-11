@@ -129,6 +129,8 @@ async def index():
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    cams = robot_cfg.get("cameras", {})
     return {
         "models": cfg["models"],
         "default_model": cfg["gemini"]["default_model"],
@@ -136,7 +138,125 @@ async def get_config():
         "available_methods": cfg.get("available_methods", []),
         "prompt_template": cfg.get("prompt_template", ""),
         "verify": cfg.get("verify", {"enabled": True, "max_retries": 3}),
+        "robot_port": robot_cfg.get("port", ""),
+        "robot_id": robot_cfg.get("id", ""),
+        "camera_top_index": cams.get("top", {}).get("index", 0),
+        "camera_wrist_index": cams.get("wrist", {}).get("index", 1),
+        "teleop": cfg.get("teleop", {}),
     }
+
+
+@app.post("/api/config/save")
+async def save_config(request: Request):
+    """Save configuration fields to config.yaml."""
+    data = await request.json()
+    cfg = load_config()
+
+    if "robot_port" in data:
+        cfg.setdefault("robot", {})["port"] = data["robot_port"]
+    if "robot_id" in data:
+        cfg.setdefault("robot", {})["id"] = data["robot_id"]
+    if "camera_top_index" in data:
+        cfg.setdefault("robot", {}).setdefault("cameras", {}).setdefault("top", {})["index"] = int(data["camera_top_index"])
+    if "camera_wrist_index" in data:
+        cfg.setdefault("robot", {}).setdefault("cameras", {}).setdefault("top", {})  # ensure structure
+        cfg["robot"]["cameras"].setdefault("wrist", {})["index"] = int(data["camera_wrist_index"])
+    if "default_model" in data:
+        cfg.setdefault("gemini", {})["default_model"] = data["default_model"]
+    if "available_methods" in data:
+        cfg["available_methods"] = data["available_methods"]
+    if "prompt_template" in data:
+        cfg["prompt_template"] = data["prompt_template"]
+    if "default_instruction" in data:
+        cfg["default_instruction"] = data["default_instruction"]
+
+    with open(ROOT / "config.yaml", "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    return {"ok": True}
+
+
+@app.post("/api/test/all")
+async def test_all():
+    """Run all system tests: robot, cameras, Gemini API."""
+    results = []
+
+    # 1. Test Robot connection
+    try:
+        if robot_state["connected"]:
+            pos = robot_get_positions()
+            results.append({"name": "Robot Connection", "ok": True, "detail": f"Connected. Joints: {pos}"})
+        else:
+            results.append({"name": "Robot Connection", "ok": False, "detail": "Robot not connected. Press Start in Debug tab to connect."})
+    except Exception as e:
+        results.append({"name": "Robot Connection", "ok": False, "detail": str(e)})
+
+    # 2. Test Top Camera
+    import cv2
+    try:
+        st = cam_state.get("top")
+        if st and st.get("cap") and st["cap"].isOpened():
+            with st["lock"]:
+                f = st["frame"]
+            if f is not None:
+                _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+                results.append({"name": "Top Camera", "ok": True, "detail": f"Frame: {f.shape[1]}x{f.shape[0]}", "frame": b64})
+            else:
+                results.append({"name": "Top Camera", "ok": False, "detail": "Camera opened but no frame captured yet."})
+        else:
+            results.append({"name": "Top Camera", "ok": False, "detail": "Camera not available. Connect robot first."})
+    except Exception as e:
+        results.append({"name": "Top Camera", "ok": False, "detail": str(e)})
+
+    # 3. Test Wrist Camera
+    try:
+        st = cam_state.get("wrist")
+        if st and st.get("cap") and st["cap"].isOpened():
+            with st["lock"]:
+                f = st["frame"]
+            if f is not None:
+                _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+                results.append({"name": "Wrist Camera", "ok": True, "detail": f"Frame: {f.shape[1]}x{f.shape[0]}", "frame": b64})
+            else:
+                results.append({"name": "Wrist Camera", "ok": False, "detail": "Camera opened but no frame captured yet."})
+        else:
+            results.append({"name": "Wrist Camera", "ok": False, "detail": "Camera not available. Connect robot first."})
+    except Exception as e:
+        results.append({"name": "Wrist Camera", "ok": False, "detail": str(e)})
+
+    # 4. Test Gemini API
+    try:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key:
+            results.append({"name": "Gemini API", "ok": False, "detail": "GEMINI_API_KEY not set in .env file."})
+        else:
+            cfg = load_config()
+            model = cfg["gemini"]["default_model"]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json={"contents": [{"parts": [{"text": "Say hello in one word."}]}]})
+                if resp.status_code == 200:
+                    text = extract_text(resp.json())
+                    results.append({"name": "Gemini API", "ok": True, "detail": f"Model: {model}. Response: {text[:80]}"})
+                else:
+                    err = resp.json().get("error", {}).get("message", resp.text[:200])
+                    results.append({"name": "Gemini API", "ok": False, "detail": f"HTTP {resp.status_code}: {err}"})
+    except Exception as e:
+        results.append({"name": "Gemini API", "ok": False, "detail": str(e)})
+
+    # 5. Test Calibration
+    try:
+        if calib_state.get("homography"):
+            n = len(calib_state.get("points", []))
+            results.append({"name": "Calibration", "ok": True, "detail": f"Calibrated with {n} points."})
+        else:
+            results.append({"name": "Calibration", "ok": False, "detail": "Not calibrated. Go to Calibrate tab."})
+    except Exception as e:
+        results.append({"name": "Calibration", "ok": False, "detail": str(e)})
+
+    return {"results": results}
 
 
 @app.post("/api/infer")
@@ -820,6 +940,109 @@ async def calibrate_save_all(request: Request):
     calib_state["points"] = data.get("points", [])
     save_calibration()
     return {"ok": True}
+
+
+# ══════════ Run Step ══════════
+
+@app.post("/api/run/step")
+async def run_step(request: Request):
+    """Execute a single plan step on the robot.
+
+    method_id → action:
+      ik_reach_object_v1   → move gripper to target_bbox center (via calibration)
+      act_gripper_grasp_v1 → close gripper (gripper=0)
+      act_gripper_release_v1 → open gripper (gripper=100)
+      act_drawer_open_v1   → (placeholder) move to bbox then pull back
+      act_drawer_close_v1  → (placeholder) move to bbox then push forward
+      act_door_open_v1     → (placeholder)
+      act_door_close_v1    → (placeholder)
+    """
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+
+    data = await request.json()
+    method = data.get("method_id", "")
+    bbox = data.get("target_bbox")  # [x_center, y_center, w, h] normalized 0-1
+
+    if method == "ik_reach_object_v1":
+        # Move to the bbox center using calibration
+        if not calib_state.get("homography"):
+            return {"ok": False, "error": "Not calibrated — go to Calibrate tab first"}
+        if not bbox or len(bbox) < 2:
+            return {"ok": False, "error": "No target_bbox"}
+
+        # Convert normalized bbox center → pixel coordinates
+        # Need image dimensions from the top camera
+        cfg = load_config()
+        cam_cfg = cfg.get("robot", {}).get("cameras", {}).get("top", {})
+        img_w = cam_cfg.get("w", 640)
+        img_h = cam_cfg.get("h", 480)
+        pixel = [bbox[0] * img_w, bbox[1] * img_h]
+
+        height_cm = 10.0
+        safety_cm = 15.0
+
+        target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
+        if target is None:
+            return {"ok": False, "error": "Interpolation failed"}
+
+        current = robot_get_positions()
+        safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
+        sl_safe = safe_target["shoulder_lift"] if safe_target else target["shoulder_lift"]
+        sl_start = current["shoulder_lift"]
+        sl_end = target["shoulder_lift"]
+        path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
+
+        if path_safe:
+            robot_send_positions(target)
+        else:
+            sl_max = max(sl_start, sl_end)
+            overshoot = max(0.0, sl_max - sl_safe)
+            bump_height = min(overshoot + 2.0, 10.0)
+            n_steps = 15
+            joint_names = list(current.keys())
+            for i in range(1, n_steps + 1):
+                t = i / n_steps
+                wp = {}
+                for j in joint_names:
+                    wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
+                bump = bump_height * math.sin(math.pi * t)
+                wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
+                robot_send_positions(wp)
+                await asyncio.sleep(0.04)
+            robot_send_positions(target)
+
+        return {"ok": True, "action": "reach", "pixel": pixel, "target_joints": target}
+
+    elif method == "act_gripper_grasp_v1":
+        joints = robot_get_positions()
+        joints["gripper"] = 0.0
+        robot_send_positions(joints)
+        await asyncio.sleep(0.5)
+        return {"ok": True, "action": "grasp"}
+
+    elif method == "act_gripper_release_v1":
+        joints = robot_get_positions()
+        joints["gripper"] = 100.0
+        robot_send_positions(joints)
+        await asyncio.sleep(0.5)
+        return {"ok": True, "action": "release"}
+
+    elif method in ("act_drawer_open_v1", "act_drawer_close_v1",
+                     "act_door_open_v1", "act_door_close_v1"):
+        # Placeholder — for now just reach the target
+        if bbox and len(bbox) >= 2 and calib_state.get("homography"):
+            cfg = load_config()
+            cam_cfg = cfg.get("robot", {}).get("cameras", {}).get("top", {})
+            pixel = [bbox[0] * cam_cfg.get("w", 640), bbox[1] * cam_cfg.get("h", 480)]
+            target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=10.0)
+            if target:
+                robot_send_positions(target)
+                await asyncio.sleep(0.5)
+        return {"ok": True, "action": method, "note": "placeholder — reach only"}
+
+    else:
+        return {"ok": False, "error": f"Unknown method: {method}"}
 
 
 if __name__ == "__main__":

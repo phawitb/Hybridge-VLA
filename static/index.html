@@ -23,9 +23,20 @@
   .nav-item.active { background: #e8f0fe; color: #1a73e8; border-left-color: #1a73e8; font-weight: 600; }
   .nav-section { padding: 16px 16px 6px; font-size: 0.7rem; text-transform: uppercase; color: #999; font-weight: 600; letter-spacing: 0.5px; }
 
-  .main { flex: 1; margin-left: 220px; padding: 24px 32px; overflow-y: auto; min-height: 100vh; }
+  .main { flex: 1; margin-left: 220px; display: flex; min-height: 100vh; }
+  .main-content { flex: 1; padding: 24px 32px; overflow-y: auto; min-width: 0; }
   .page { display: none; max-width: 960px; }
   .page.active { display: block; }
+
+  /* Right panel — always visible */
+  .right-panel {
+    width: 320px; flex-shrink: 0; background: #fff; border-left: 1px solid #e0e0e0;
+    padding: 16px; overflow-y: auto; position: sticky; top: 0; height: 100vh;
+  }
+  .right-panel h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 10px; }
+  .right-panel .cal-row-cams { grid-template-columns: 1fr; }
+  .right-panel .cal-slider-col { flex: none; }
+  .right-panel .cal-row-top { flex-direction: column; }
   .page-title { font-size: 1.3rem; font-weight: 700; color: #222; margin-bottom: 18px; }
   .page-title span { color: #1a73e8; }
 
@@ -43,11 +54,11 @@
   /* Form */
   .form-group { margin-bottom: 14px; }
   .form-label { display: block; font-size: 0.78rem; color: #777; margin-bottom: 5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
-  select, textarea, input[type=text] {
+  select, textarea, input[type=text], input[type=number] {
     width: 100%; padding: 9px 12px; background: #fff; border: 1px solid #d0d0d0;
     border-radius: 8px; color: #222; font-size: 0.9rem; outline: none; transition: border-color 0.2s;
   }
-  select:focus, textarea:focus, input[type=text]:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.1); }
+  select:focus, textarea:focus, input[type=text]:focus, input[type=number]:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.1); }
   textarea { resize: vertical; min-height: 80px; font-family: inherit; font-size: 0.85rem; }
 
   .image-upload {
@@ -267,6 +278,53 @@
   .cb-point-info code { background: #eef3fc; color: #1a56c4; padding: 1px 6px; border-radius: 4px; font-size: 0.78rem; }
   .cb-wizard-step { margin-bottom: 14px; padding: 14px; background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; }
   .cb-wizard-step h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 8px; }
+
+  /* Run tab — flowchart */
+  .run-flow { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .run-block {
+    width: 100%; max-width: 420px; padding: 10px 14px; background: #fff; border: 2px solid #d0d0d0;
+    border-radius: 10px; cursor: pointer; transition: all 0.15s; position: relative;
+  }
+  .run-block:hover { border-color: #1a73e8; box-shadow: 0 2px 8px rgba(26,115,232,0.12); }
+  .run-block.selected { border-color: #1a73e8; background: #f0f4ff; box-shadow: 0 2px 12px rgba(26,115,232,0.18); }
+  .run-block.done { border-color: #34a853; background: #e6f4ea; }
+  .run-block.running { border-color: #f9ab00; background: #fef7e0; }
+  .run-block-hdr { display: flex; align-items: center; gap: 10px; }
+  .run-block-idx {
+    width: 28px; height: 28px; border-radius: 50%; font-weight: 700; font-size: 0.8rem;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #fff;
+  }
+  .run-block-body { flex: 1; min-width: 0; }
+  .run-block-desc { font-size: 0.85rem; font-weight: 600; color: #222; }
+  .run-block-method { font-size: 0.75rem; color: #1a73e8; font-family: 'SF Mono','Menlo',monospace; margin-top: 2px; }
+  .run-block-bbox { font-size: 0.72rem; color: #888; font-family: 'SF Mono','Menlo',monospace; }
+  .run-block-status { font-size: 0.72rem; font-weight: 600; margin-top: 4px; }
+  .run-arrow { width: 2px; height: 20px; background: #d0d0d0; }
+  .run-arrow-head { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #d0d0d0; }
+
+  /* Test checklist */
+  .test-checklist { margin-top: 14px; }
+  .test-item {
+    display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px;
+    background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; margin-bottom: 6px;
+  }
+  .test-item.pass { border-color: #34a853; background: #e6f4ea; }
+  .test-item.fail { border-color: #d93025; background: #fef0ef; }
+  .test-icon {
+    width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 0.85rem; flex-shrink: 0; color: #fff;
+  }
+  .test-icon.pass { background: #34a853; }
+  .test-icon.fail { background: #d93025; }
+  .test-icon.wait { background: #bbb; }
+  .test-body { flex: 1; }
+  .test-name { font-size: 0.88rem; font-weight: 600; color: #222; }
+  .test-detail { font-size: 0.78rem; color: #666; margin-top: 2px; }
+  .test-frame { margin-top: 6px; max-width: 200px; border-radius: 6px; border: 1px solid #d0d0d0; }
+
+  /* Config form card */
+  .config-card { background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+  .config-card h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -275,112 +333,188 @@
   <div class="sidebar-header">Hybridge VLA</div>
   <div class="sidebar-nav">
     <div class="nav-section">Menu</div>
-    <div class="nav-item active" data-tab="test-api">Step1-Planing(Gemini)</div>
-    <div class="nav-item" data-tab="cam-calib">Camera & Teleop</div>
-    <div class="nav-item" data-tab="calibrate">Calibrate</div>
+    <div class="nav-item active" data-tab="config-test">Config & Test</div>
+    <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
+    <div class="nav-item" data-tab="run">Run</div>
   </div>
 </div>
 
 <div class="main">
+<div class="main-content">
 
-  <!-- Step1: Planing (Gemini) -->
-  <div class="page active" id="page-test-api">
-    <div class="page-title"><span>Step1</span> Planing (Gemini)</div>
+  <!-- ==================== Config & Test ==================== -->
+  <div class="page active" id="page-config-test">
+    <div class="page-title"><span>Config</span> & Test</div>
 
     <div class="inner-tabs">
-      <button class="inner-tab active" data-inner="planing">Planing</button>
-      <button class="inner-tab" data-inner="history">History</button>
-      <button class="inner-tab" data-inner="documents">Documents</button>
+      <button class="inner-tab active" data-inner="cfg-config">Config</button>
+      <button class="inner-tab" data-inner="cfg-debug">Debug</button>
+      <button class="inner-tab" data-inner="cfg-history">History</button>
+      <button class="inner-tab" data-inner="cfg-documents">Documents</button>
     </div>
 
-    <div class="inner-page active" id="inner-planing">
+    <!-- Config subtab -->
+    <div class="inner-page active" id="inner-cfg-config">
 
-    <div class="token-card" id="tokenCard">
-      <div class="card-title">Token Usage</div>
-      <div class="token-grid">
-        <div class="token-stat"><div class="value" id="tokIn">-</div><div class="lbl">Input</div></div>
-        <div class="token-stat"><div class="value" id="tokOut">-</div><div class="lbl">Output</div></div>
-        <div class="token-stat"><div class="value" id="tokTot">-</div><div class="lbl">Total</div></div>
-        <div class="token-stat"><div class="value" id="tokRem">-</div><div class="lbl">Remaining</div></div>
+      <div class="config-card">
+        <h3>Robot</h3>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Robot Port</label>
+            <input type="text" id="cfgRobotPort" placeholder="/dev/tty.usbmodem...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Robot ID</label>
+            <input type="text" id="cfgRobotId" placeholder="my_awesome_follower_arm">
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Top Camera Index</label>
+            <input type="number" id="cfgCamTop" min="0" max="10" step="1" style="width:100px">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Wrist Camera Index</label>
+            <input type="number" id="cfgCamWrist" min="0" max="10" step="1" style="width:100px">
+          </div>
+        </div>
       </div>
-      <div class="token-bar-wrap">
-        <div class="token-bar-label"><span>Usage</span><span id="tokPct">0%</span></div>
-        <div class="token-bar"><div class="token-bar-fill" id="tokBar" style="width:0%"></div></div>
+
+      <div class="config-card">
+        <h3>Gemini Model</h3>
+        <div class="form-group">
+          <label class="form-label">Default Model</label>
+          <select id="cfgModel"></select>
+        </div>
       </div>
-    </div>
 
-    <div class="two-col">
-      <div class="form-group">
-        <label class="form-label">Model</label>
-        <select id="model"></select>
+      <div class="config-card">
+        <h3>Methods</h3>
+        <div class="methods-wrap" id="cfgMethodsWrap"></div>
+        <div class="method-add">
+          <input type="text" id="cfgMethodInput" placeholder="Add method...">
+          <button class="btn btn-sm" onclick="cfgAddMethod()">Add</button>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Instruction</label>
-        <input type="text" id="instruction" placeholder="e.g. pick up the red cube to the second drawer">
+
+      <div class="config-card">
+        <h3>Prompt Template</h3>
+        <div class="form-group">
+          <textarea id="cfgPrompt" style="min-height:200px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
+        </div>
       </div>
-    </div>
 
-    <div class="form-group">
-      <label class="form-label">Methods</label>
-      <div class="methods-wrap" id="methodsWrap"></div>
-      <div class="method-add">
-        <input type="text" id="methodInput" placeholder="Add method...">
-        <button class="btn btn-sm" onclick="addMethod()">Add</button>
+      <div class="actions" style="margin-bottom:18px">
+        <button class="btn" onclick="cfgSave()">Save Config</button>
+        <span class="status" id="cfgSaveStatus"></span>
       </div>
-    </div>
 
-    <div class="form-group">
-      <label class="form-label">Image (required)</label>
-      <div class="image-upload" id="dropZone">
-        <div class="icon">+</div>
-        <p>Click or drag & drop image</p>
-        <input type="file" id="imageInput" accept="image/*">
+      <hr style="border:none;border-top:1px solid #e0e0e0;margin:20px 0">
+
+      <div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn" onclick="runTestAll()" id="testAllBtn" style="background:#34a853">Run Test All</button>
+        <span style="font-size:0.82rem;color:#888">Press <strong>Start</strong> in the right panel first to connect robot & cameras.</span>
+        <span class="status" id="testAllStatus" style="margin-left:4px"></span>
       </div>
-      <div class="preview-wrap" id="previewWrap"></div>
-    </div>
+      <div class="test-checklist" id="testChecklist"></div>
 
-    <div class="form-group">
-      <div class="collapse-header" id="promptToggle" onclick="togglePrompt()">
-        <span class="arrow">&#9654;</span>
-        <span class="form-label" style="margin:0;cursor:pointer">Prompt (auto-generated from template)</span>
+    </div><!-- /inner-cfg-config -->
+
+    <!-- Debug subtab -->
+    <div class="inner-page" id="inner-cfg-debug">
+
+      <!-- Planning section -->
+      <div class="config-card">
+        <h3>Planning (Gemini)</h3>
+
+        <div class="token-card" id="tokenCard">
+          <div class="card-title">Token Usage</div>
+          <div class="token-grid">
+            <div class="token-stat"><div class="value" id="tokIn">-</div><div class="lbl">Input</div></div>
+            <div class="token-stat"><div class="value" id="tokOut">-</div><div class="lbl">Output</div></div>
+            <div class="token-stat"><div class="value" id="tokTot">-</div><div class="lbl">Total</div></div>
+            <div class="token-stat"><div class="value" id="tokRem">-</div><div class="lbl">Remaining</div></div>
+          </div>
+          <div class="token-bar-wrap">
+            <div class="token-bar-label"><span>Usage</span><span id="tokPct">0%</span></div>
+            <div class="token-bar"><div class="token-bar-fill" id="tokBar" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Model</label>
+            <select id="model"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Instruction</label>
+            <input type="text" id="instruction" placeholder="e.g. pick up the red cube to the second drawer">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Methods</label>
+          <div class="methods-wrap" id="methodsWrap"></div>
+          <div class="method-add">
+            <input type="text" id="methodInput" placeholder="Add method...">
+            <button class="btn btn-sm" onclick="addMethod()">Add</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Image (required)</label>
+          <div class="image-upload" id="dropZone">
+            <div class="icon">+</div>
+            <p>Click or drag & drop image</p>
+            <input type="file" id="imageInput" accept="image/*">
+          </div>
+          <div class="preview-wrap" id="previewWrap"></div>
+        </div>
+
+        <div class="form-group">
+          <div class="collapse-header" id="promptToggle" onclick="togglePrompt()">
+            <span class="arrow">&#9654;</span>
+            <span class="form-label" style="margin:0;cursor:pointer">Prompt (auto-generated from template)</span>
+          </div>
+          <div class="collapse-body" id="promptBody">
+            <textarea id="prompt" style="min-height:200px;font-size:0.8rem;line-height:1.4"></textarea>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" id="submitBtn">Submit</button>
+          <span class="status" id="status"></span>
+        </div>
+
+        <div class="result-section" id="resultSection">
+          <div class="result-row">
+            <div class="result-canvas-wrap"><canvas id="bboxCanvas"></canvas></div>
+            <div class="result-details" id="resultSteps"></div>
+          </div>
+        </div>
+
+        <div class="raw-box" id="rawBox">
+          <span class="lbl">Raw Response</span>
+          <div id="rawText"></div>
+        </div>
       </div>
-      <div class="collapse-body" id="promptBody">
-        <textarea id="prompt" style="min-height:200px;font-size:0.8rem;line-height:1.4"></textarea>
+
+    </div><!-- /inner-cfg-debug -->
+
+    <!-- History subtab -->
+    <div class="inner-page" id="inner-cfg-history">
+      <div class="viz-controls">
+        <select id="vizFilter"><option value="">All Models</option></select>
+        <button class="btn btn-sm btn-outline" onclick="loadResults()">Refresh</button>
+        <span style="flex:1"></span>
+        <span class="status" id="vizCount"></span>
       </div>
-    </div>
+      <div class="viz-grid" id="vizGrid"></div>
+      <div class="empty-state" id="vizEmpty" style="display:none"><p>No results yet.</p></div>
+    </div><!-- /inner-cfg-history -->
 
-    <div class="actions">
-      <button class="btn" id="submitBtn">Submit</button>
-      <span class="status" id="status"></span>
-    </div>
-
-    <!-- Result: plan visualization -->
-    <div class="result-section" id="resultSection">
-      <div class="result-row">
-        <div class="result-canvas-wrap"><canvas id="bboxCanvas"></canvas></div>
-        <div class="result-details" id="resultSteps"></div>
-      </div>
-    </div>
-
-    <div class="raw-box" id="rawBox">
-      <span class="lbl">Raw Response</span>
-      <div id="rawText"></div>
-    </div>
-
-    </div><!-- end inner-planing -->
-
-    <div class="inner-page" id="inner-history">
-    <div class="viz-controls">
-      <select id="vizFilter"><option value="">All Models</option></select>
-      <button class="btn btn-sm btn-outline" onclick="loadResults()">Refresh</button>
-      <span style="flex:1"></span>
-      <span class="status" id="vizCount"></span>
-    </div>
-    <div class="viz-grid" id="vizGrid"></div>
-    <div class="empty-state" id="vizEmpty" style="display:none"><p>No results yet.</p></div>
-    </div><!-- end inner-history -->
-
-    <div class="inner-page" id="inner-documents">
+    <!-- Documents subtab -->
+    <div class="inner-page" id="inner-cfg-documents">
     <div class="doc">
 
       <div class="doc-toc">
@@ -398,7 +532,6 @@
         <a href="#doc-run">11. Running the Server</a>
       </div>
 
-      <!-- 1 -->
       <h2 id="doc-overview">1. System Overview</h2>
       <p>
         <strong>Hybridge VLA</strong> is a Vision-Language-Action system that converts natural language instructions
@@ -415,433 +548,139 @@
         <li>Result storage and historical review</li>
       </ul>
 
-      <!-- 2 -->
       <h2 id="doc-arch">2. Architecture</h2>
       <pre><code>User (Browser)
     |
-    |  HTTP
+    |  HTTP / WebSocket
     v
 FastAPI Server (main.py)
     |
-    |--- GET  /                → Serve frontend (static/index.html)
-    |--- GET  /api/config      → Return models, methods, prompt template, verify config
-    |--- POST /api/infer       → Infer + verify loop → parse plan → store result
-    |--- GET  /api/token-usage → Latest token usage from most recent result
-    |--- GET  /api/results     → List all stored results
-    |--- GET  /api/results/:id → Get single result
-    |--- DEL  /api/results/:id → Delete result + image
+    |--- GET  /                  -> Serve frontend
+    |--- GET  /api/config        -> Return configuration
+    |--- POST /api/config/save   -> Save configuration to config.yaml
+    |--- POST /api/test/all      -> Run all system tests
+    |--- POST /api/infer         -> Infer + verify loop
+    |--- GET  /api/token-usage   -> Latest token usage
+    |--- GET  /api/results       -> List results
+    |--- WS   /ws/robot          -> Robot control + camera streaming
     |
     |  HTTPS (Gemini API)
     v
-Google Gemini VLM
-    |
-    v
-JSON Plan Response → parsed → verified → stored → visualized</code></pre>
-      <p><strong>Inference flow:</strong></p>
-      <pre><code>Image + Prompt → Gemini → Parse JSON → Auto-normalize bbox → Verify → (retry if failed) → Save result</code></pre>
+Google Gemini VLM -> JSON Plan -> Verify -> Store</code></pre>
 
-      <!-- 3 -->
       <h2 id="doc-project">3. Project Structure</h2>
       <div class="file-tree">
 Hybridge-VLA/<br>
 ├── .env &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# GEMINI_API_KEY (not in git)<br>
-├── config.yaml &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# All configuration (models, methods, prompts, verify)<br>
+├── config.yaml &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# All configuration<br>
 ├── main.py &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# FastAPI backend<br>
-├── requirements.txt &nbsp;&nbsp;&nbsp;&nbsp;# Python dependencies<br>
 ├── static/<br>
-│ &nbsp;&nbsp;└── index.html &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Single-page frontend (HTML/CSS/JS)<br>
+│ &nbsp;&nbsp;└── index.html &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Single-page frontend<br>
 ├── data/<br>
-│ &nbsp;&nbsp;├── images/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Uploaded images (auto-saved)<br>
-│ &nbsp;&nbsp;└── results/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# JSON result files (1 per inference)<br>
+│ &nbsp;&nbsp;├── images/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Uploaded images<br>
+│ &nbsp;&nbsp;├── results/ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# JSON result files<br>
+│ &nbsp;&nbsp;└── calibration.json &nbsp;# Camera calibration data<br>
 └── test_cam0.jpg &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Sample test image
       </div>
 
-      <!-- 4 -->
       <h2 id="doc-config">4. Configuration</h2>
-      <p>Settings are split between <code>.env</code> (secrets) and <code>config.yaml</code> (everything else). The server reloads <code>config.yaml</code> on every request &mdash; no restart needed.</p>
-
-      <h3>4.1 API Key (.env)</h3>
-      <p>The Gemini API key is stored in <code>.env</code> (excluded from git via <code>.gitignore</code>):</p>
-      <pre><code>GEMINI_API_KEY=AIzaSy...</code></pre>
-
-      <h3>4.2 Gemini Settings</h3>
-      <pre><code>gemini:
-  default_model: "gemini-2.5-flash-lite"</code></pre>
-
-      <h3>4.3 Models</h3>
-      <p>Each model entry defines <code>id</code>, <code>name</code>, <code>group</code> (for dropdown grouping), and <code>input_limit</code> (max input tokens for the usage bar).</p>
-      <pre><code>models:
-  - id: "gemini-2.5-flash-lite"
-    name: "Gemini 2.5 Flash-Lite"
-    group: "Gemini 2.5"
-    input_limit: 1048576</code></pre>
-
-      <h3>4.4 Available Methods</h3>
-      <p>The list of valid <code>method_id</code> values for the robot. Displayed as editable chips in the UI and injected into the prompt via <code>{available_methods}</code>.</p>
-      <pre><code>available_methods:
-  - ik_reach_object_v1
-  - act_gripper_grasp_v1
-  - act_gripper_release_v1
-  - act_drawer_open_v1
-  - act_drawer_close_v1
-  - act_door_open_v1
-  - act_door_close_v1</code></pre>
-
-      <h3>4.5 Prompt Template</h3>
-      <p>Uses two placeholders replaced at runtime by the frontend:</p>
+      <p>The <strong>Config</strong> tab lets you edit all settings. Changes are saved to <code>config.yaml</code>.</p>
+      <h3>4.1 Robot Settings</h3>
       <ul>
-        <li><code>{instruction}</code> &mdash; the user's natural language instruction</li>
-        <li><code>{available_methods}</code> &mdash; bullet list of methods</li>
+        <li><strong>Robot Port</strong> &mdash; Serial port for the SO101 follower arm</li>
+        <li><strong>Camera Top/Wrist Index</strong> &mdash; OpenCV camera indices</li>
       </ul>
+      <h3>4.2 Gemini Model</h3>
+      <p>Select the default model for planning. All available models are listed with their token limits.</p>
+      <h3>4.3 Methods & Prompt</h3>
+      <p>Methods are the available robot actions. The prompt template uses <code>{instruction}</code> and <code>{available_methods}</code> placeholders.</p>
 
-      <h3>4.6 Verification</h3>
-      <pre><code>verify:
-  enabled: true    # Enable/disable plan verification
-  max_retries: 3   # Max infer+verify attempts</code></pre>
-      <p>The <code>verify_prompt_template</code> uses three placeholders: <code>{instruction}</code>, <code>{plan_json}</code>, <code>{available_methods}</code>.</p>
-      <p>See <a href="#doc-verify">Section 7: Verification Process</a> for full details.</p>
-
-      <h3>4.7 Storage</h3>
-      <pre><code>storage:
-  results_dir: "data/results"   # JSON result files
-  images_dir: "data/images"     # Uploaded images</code></pre>
-
-      <!-- 5 -->
       <h2 id="doc-api">5. API Reference</h2>
-
-      <h3>5.1 <span class="badge badge-get">GET</span> /api/config</h3>
-      <p>Returns application configuration. API key is NOT exposed.</p>
-      <p><strong>Response:</strong></p>
-      <pre><code>{
-  "models": [...],
-  "default_model": "gemini-2.5-flash-lite",
-  "default_instruction": "pick up the red cube to the second drawer",
-  "available_methods": ["ik_reach_object_v1", ...],
-  "prompt_template": "You are a robotic task planner...",
-  "verify": {"enabled": true, "max_retries": 3}
-}</code></pre>
-
-      <h3>5.2 <span class="badge badge-post">POST</span> /api/infer</h3>
-      <p>Run inference: sends image + prompt to Gemini, parses plan, verifies, retries if needed, saves result.</p>
-      <p><strong>Content-Type:</strong> <code>multipart/form-data</code></p>
       <table>
-        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th><th>Example</th></tr>
-        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>Gemini model ID</td><td><code>gemini-2.5-flash-lite</code></td></tr>
-        <tr><td><code>instruction</code></td><td>string</td><td>Yes</td><td>Natural language instruction</td><td><code>pick up the red cube to the second drawer</code></td></tr>
-        <tr><td><code>methods</code></td><td>string</td><td>Yes</td><td>Comma-separated method IDs</td><td><code>ik_reach_object_v1,act_gripper_grasp_v1</code></td></tr>
-        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>Full prompt text</td><td style="max-width:300px"><details><summary style="cursor:pointer;color:#1a73e8;font-size:0.78rem">View full prompt</summary><pre style="white-space:pre-wrap;font-size:0.72rem;max-height:300px;overflow:auto;margin-top:6px">You are a robotic task planner for a Vision-Language-Action (VLA) system.
-
-## Task
-Convert a natural language instruction into a step-by-step robotic execution plan.
-
-## Input
-pick up the red cube to the second drawer
-
-## Robot Constraints
-- Single arm with ONE gripper. No dual-hand manipulation.
-- Cannot hold an object AND operate a drawer/door at the same time.
-
-## MANDATORY Action Sequencing Rules
-Every physical interaction MUST be preceded by ik_reach_object_v1 targeting that object.
-
-## Execution Rules
-- CLOSED containers (drawers, doors) MUST be opened BEFORE picking up the object.
-- OPEN containers (bowls, trays, bins) do NOT need to be opened or reached first.
-- ik_reach_object_v1 MUST appear before EVERY act_* step.
-
-## Available Methods
-* ik_reach_object_v1
-* act_gripper_grasp_v1
-* act_gripper_release_v1
-* act_drawer_open_v1
-* act_drawer_close_v1
-* act_door_open_v1
-* act_door_close_v1
-
-## Output Format
-Output ONLY valid JSON.
-{"task_id": "...", "total_steps": N, "steps": [...]}</pre></details></td></tr>
-        <tr><td><code>image</code></td><td>file</td><td>Yes</td><td>Image file (JPEG/PNG)</td><td><code>scene.jpg</code></td></tr>
-      </table>
-      <p><strong>Response (success):</strong></p>
-      <pre><code>{
-  "id": "1717574400_a1b2c3d4",
-  "timestamp": 1717574400.123,
-  "model": "gemini-2.5-flash-lite",
-  "instruction": "pick up the red cube to the second drawer",
-  "methods": ["ik_reach_object_v1", ...],
-  "prompt": "...",
-  "image": "1717574400_a1b2c3d4.jpg",
-  "image_size": [640, 480],
-  "raw_response": "...",
-  "plan": {
-    "task_id": "red_cube_to_second_drawer",
-    "total_steps": 8,
-    "steps": [
-      {"step_index": 1, "description": "Reach the second drawer handle",
-       "target_bbox": [0.18, 0.62, 0.20, 0.14], "method_id": "ik_reach_object_v1"},
-      ...
-    ]
-  },
-  "bbox_auto_normalized": false,
-  "verify": {
-    "enabled": true, "passed": true, "attempts": 1, "max_retries": 3,
-    "history": [{"attempt":1, "infer_elapsed":2.31,
-      "verify_result":{"verified":true, "reason":"..."}}]
-  },
-  "token_usage": {"input": 1234, "output": 567, "total": 1801,
-    "limit": 1048576, "remaining": 1047342},
-  "elapsed": 2.45
-}</code></pre>
-      <p><strong>Response (error):</strong></p>
-      <pre><code>{"error": "API key not valid.", "elapsed": 0.12}</code></pre>
-
-      <h3>5.3 <span class="badge badge-get">GET</span> /api/token-usage</h3>
-      <p>Returns token usage from the most recent inference result. Called on page load to restore the token usage bar.</p>
-      <p><strong>Response:</strong></p>
-      <pre><code>{"input": 1234, "output": 567, "total": 1801, "limit": 1048576, "remaining": 1047342}</code></pre>
-
-      <h3>5.4 <span class="badge badge-get">GET</span> /api/results</h3>
-      <p>List stored results, newest first.</p>
-      <table>
-        <tr><th>Param</th><th>Type</th><th>Default</th><th>Description</th><th>Example</th></tr>
-        <tr><td><code>limit</code></td><td>int</td><td>50</td><td>Max items to return</td><td><code>10</code></td></tr>
-        <tr><td><code>offset</code></td><td>int</td><td>0</td><td>Skip first N items</td><td><code>20</code></td></tr>
-      </table>
-      <p><strong>Response:</strong></p>
-      <pre><code>{"total": 42, "items": [...]}</code></pre>
-
-      <h3>5.5 <span class="badge badge-get">GET</span> /api/results/{result_id}</h3>
-      <p>Get a single result by ID. Same structure as <code>/api/infer</code> response.</p>
-
-      <h3>5.6 <span class="badge badge-del">DELETE</span> /api/results/{result_id}</h3>
-      <p>Delete a result and its associated image.</p>
-      <p><strong>Response:</strong> <code>{"ok": true}</code> or <code>{"error": "Not found"}</code></p>
-
-      <h3>5.7 Static Files</h3>
-      <table>
-        <tr><th>Path</th><th>Description</th><th>Example</th></tr>
-        <tr><td><code>/static/*</code></td><td>Frontend files</td><td><code>/static/index.html</code></td></tr>
-        <tr><td><code>/data/images/*</code></td><td>Uploaded images (served directly)</td><td><code>/data/images/1717574400_a1b2c3d4.jpg</code></td></tr>
+        <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/config</code></td><td>Get all configuration</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/config/save</code></td><td>Save config to config.yaml</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/test/all</code></td><td>Run all system tests</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/infer</code></td><td>Infer + verify loop</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/token-usage</code></td><td>Latest token usage</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/results</code></td><td>List stored results</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/results/:id</code></td><td>Get single result</td></tr>
+        <tr><td><span class="badge badge-del">DELETE</span></td><td><code>/api/results/:id</code></td><td>Delete result + image</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/robot/start</code></td><td>Connect robot + cameras</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/robot/stop</code></td><td>Disconnect robot</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/*</code></td><td>Calibration endpoints</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/run/step</code></td><td>Execute a single plan step</td></tr>
       </table>
 
-      <!-- 6 -->
       <h2 id="doc-prompt">6. Prompt Engineering</h2>
-      <p>The prompt is designed around strict action sequencing rules for a single-arm robot.</p>
-
-      <h3>6.1 Core Principle</h3>
-      <p>Every <code>act_*</code> step MUST be preceded by <code>ik_reach_object_v1</code>. The robot must reach the target before interacting with it. This is enforced via:</p>
-      <ul>
-        <li>Explicit action patterns in the prompt</li>
-        <li>A worked example showing the pattern</li>
-        <li>A closing recap reinforcing the rule</li>
-      </ul>
-
-      <h3>6.2 Action Patterns</h3>
+      <p>Every <code>act_*</code> step MUST be preceded by <code>ik_reach_object_v1</code>. Action patterns:</p>
       <table>
-        <tr><th>Task</th><th>Step 1</th><th>Step 2</th><th>Example</th></tr>
-        <tr><td>Pick up object</td><td><code>ik_reach_object_v1</code> &rarr; object</td><td><code>act_gripper_grasp_v1</code> &rarr; object</td><td>Reach red cube &rarr; Grasp red cube</td></tr>
-        <tr><td>Place / release</td><td><code>ik_reach_object_v1</code> &rarr; destination</td><td><code>act_gripper_release_v1</code> &rarr; destination</td><td>Reach green bowl &rarr; Release into bowl</td></tr>
-        <tr><td>Open drawer</td><td><code>ik_reach_object_v1</code> &rarr; drawer</td><td><code>act_drawer_open_v1</code> &rarr; drawer</td><td>Reach drawer handle &rarr; Open drawer</td></tr>
-        <tr><td>Close drawer</td><td><code>ik_reach_object_v1</code> &rarr; drawer</td><td><code>act_drawer_close_v1</code> &rarr; drawer</td><td>Reach drawer handle &rarr; Close drawer</td></tr>
-        <tr><td>Open/close door</td><td><code>ik_reach_object_v1</code> &rarr; door</td><td><code>act_door_*_v1</code> &rarr; door</td><td>Reach door &rarr; Open door</td></tr>
+        <tr><th>Task</th><th>Steps</th></tr>
+        <tr><td>Pick up</td><td><code>ik_reach_object_v1</code> -> <code>act_gripper_grasp_v1</code></td></tr>
+        <tr><td>Place</td><td><code>ik_reach_object_v1</code> -> <code>act_gripper_release_v1</code></td></tr>
+        <tr><td>Open drawer</td><td><code>ik_reach_object_v1</code> -> <code>act_drawer_open_v1</code></td></tr>
+        <tr><td>Close drawer</td><td><code>ik_reach_object_v1</code> -> <code>act_drawer_close_v1</code></td></tr>
       </table>
 
-      <h3>6.3 Container Logic</h3>
-      <table>
-        <tr><th>Container Type</th><th>Behavior</th><th>Example</th></tr>
-        <tr><td>CLOSED (drawer, door)</td><td>Must open BEFORE picking up the object</td><td>Open drawer &rarr; pick cube &rarr; place in drawer &rarr; close drawer (8 steps)</td></tr>
-        <tr><td>OPEN (bowl, tray, bin)</td><td>Pick up object first, then reach container, then release</td><td>Pick cube &rarr; reach bowl &rarr; release into bowl (4 steps)</td></tr>
-      </table>
-
-      <h3>6.4 Bounding Box Format</h3>
-      <p>YOLO format: <code>[x_center, y_center, width, height]</code>, all normalized to <code>[0, 1]</code>. If the model returns pixel values (any value &gt; 1.0), the server auto-normalizes them using the image dimensions.</p>
-      <pre><code>x_center = box_center_x / image_width
-y_center = box_center_y / image_height
-width    = box_width / image_width
-height   = box_height / image_height</code></pre>
-
-      <!-- 7 -->
       <h2 id="doc-verify">7. Verification Process</h2>
-      <p>After generating a plan, the system sends the plan back to Gemini for verification. If verification fails, the entire inference is retried (up to <code>max_retries</code> times).</p>
-
-      <h3>7.1 How It Works</h3>
+      <p>After plan generation, Gemini verifies the plan. If it fails, the system retries up to <code>max_retries</code> times.</p>
       <ol>
-        <li><strong>Infer</strong> &mdash; Call Gemini with image + prompt to generate a plan.</li>
-        <li><strong>Parse</strong> &mdash; Extract JSON from the response.</li>
-        <li><strong>Normalize</strong> &mdash; Auto-fix pixel bboxes to [0,1] if needed.</li>
-        <li><strong>Verify</strong> &mdash; Send the plan + image + instruction back to Gemini with a verification prompt.</li>
-        <li><strong>Retry</strong> &mdash; If verification fails, repeat from step 1 (up to <code>max_retries</code> times).</li>
+        <li>Infer &mdash; Generate plan from image + prompt</li>
+        <li>Parse &mdash; Extract JSON from response</li>
+        <li>Normalize &mdash; Auto-fix pixel bboxes to [0,1]</li>
+        <li>Verify &mdash; Send plan back to Gemini for verification</li>
+        <li>Retry &mdash; If failed, repeat from step 1</li>
       </ol>
 
-      <h3>7.2 Configuration</h3>
-      <pre><code>verify:
-  enabled: true    # Set to false to skip verification
-  max_retries: 3   # Max number of infer+verify attempts</code></pre>
-
-      <h3>7.3 Verification Prompt</h3>
-      <p>The <code>verify_prompt_template</code> in <code>config.yaml</code> uses three placeholders:</p>
-      <ul>
-        <li><code>{instruction}</code> &mdash; the user's instruction</li>
-        <li><code>{plan_json}</code> &mdash; the generated plan as JSON</li>
-        <li><code>{available_methods}</code> &mdash; bullet list of valid methods</li>
-      </ul>
-      <p>The verifier checks: step ordering, action sequencing, bounding box accuracy, method validity, and completeness. It includes correct patterns for both OPEN and CLOSED containers to reduce false rejections.</p>
-
-      <h3>7.4 Verify Result in API Response</h3>
-      <pre><code>"verify": {
-  "enabled": true,
-  "passed": true,
-  "attempts": 1,
-  "max_retries": 3,
-  "history": [
-    {
-      "attempt": 1,
-      "infer_elapsed": 2.31,
-      "raw_response": "...",
-      "verify_result": {
-        "verified": true,
-        "reason": "Plan correctly sequences all actions..."
-      }
-    }
-  ]
-}</code></pre>
-      <p>If <code>passed</code> is <code>false</code>, the plan was not verified after all attempts. The <code>history</code> array shows each attempt's result and reason.</p>
-
-      <!-- 8 -->
       <h2 id="doc-methods">8. Robot Methods</h2>
       <table>
-        <tr><th>Method ID</th><th>Description</th><th>Precondition</th><th>Example</th></tr>
-        <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td><td>None &mdash; this IS the precondition</td><td>Reach the red cube</td></tr>
-        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper to grasp object</td><td>Must reach object first</td><td>Grasp the red cube</td></tr>
-        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper to release held object</td><td>Must reach destination first</td><td>Release into the green bowl</td></tr>
-        <tr><td><code>act_drawer_open_v1</code></td><td>Pull drawer open</td><td>Must reach drawer first</td><td>Open the second drawer</td></tr>
-        <tr><td><code>act_drawer_close_v1</code></td><td>Push drawer closed</td><td>Must reach drawer first</td><td>Close the second drawer</td></tr>
-        <tr><td><code>act_door_open_v1</code></td><td>Open a door</td><td>Must reach door first</td><td>Open the cabinet door</td></tr>
-        <tr><td><code>act_door_close_v1</code></td><td>Close a door</td><td>Must reach door first</td><td>Close the cabinet door</td></tr>
+        <tr><th>Method ID</th><th>Description</th></tr>
+        <tr><td><code>ik_reach_object_v1</code></td><td>Move arm to target position (IK navigation)</td></tr>
+        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper to grasp object</td></tr>
+        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper to release held object</td></tr>
+        <tr><td><code>act_drawer_open_v1</code></td><td>Pull drawer open</td></tr>
+        <tr><td><code>act_drawer_close_v1</code></td><td>Push drawer closed</td></tr>
+        <tr><td><code>act_door_open_v1</code></td><td>Open a door</td></tr>
+        <tr><td><code>act_door_close_v1</code></td><td>Close a door</td></tr>
       </table>
 
-      <!-- 9 -->
       <h2 id="doc-storage">9. Data Storage</h2>
-      <p>Each inference saves two files:</p>
+      <p>Each inference saves: image in <code>data/images/</code> and result JSON in <code>data/results/</code>. Calibration is stored in <code>data/calibration.json</code>.</p>
 
-      <h3>9.1 Image File</h3>
-      <p>Saved to <code>data/images/{timestamp}_{uuid}.{ext}</code></p>
-
-      <h3>9.2 Result JSON</h3>
-      <p>Saved to <code>data/results/{timestamp}_{uuid}.json</code></p>
-      <pre><code>{
-  "id": "1717574400_a1b2c3d4",
-  "timestamp": 1717574400.123,
-  "model": "gemini-2.5-flash-lite",
-  "instruction": "pick up the...",
-  "methods": ["ik_reach_object_v1", ...],
-  "prompt": "...",
-  "image": "1717574400_a1b2c3d4.jpg",
-  "image_size": [640, 480],
-  "raw_response": "...",
-  "plan": { ... } | null,
-  "bbox_auto_normalized": false,
-  "verify": {
-    "enabled": true, "passed": true,
-    "attempts": 1, "max_retries": 3,
-    "history": [...]
-  },
-  "token_usage": {
-    "input": 1234, "output": 567, "total": 1801,
-    "limit": 1048576, "remaining": 1047342
-  },
-  "elapsed": 2.45
-}</code></pre>
-
-      <!-- 10 -->
       <h2 id="doc-frontend">10. Frontend</h2>
-      <p>Single-page app in <code>static/index.html</code>. The sidebar has one page: <strong>Step1-Planing(Gemini)</strong>, which contains three inner tabs:</p>
-
-      <h3>10.1 Planing</h3>
+      <p>Single-page app with three main tabs:</p>
       <ul>
-        <li><strong>Token Usage:</strong> fetched from <code>/api/token-usage</code> on page load, updated after each inference</li>
-        <li><strong>Model selector:</strong> populated from <code>/api/config</code>, grouped by model family</li>
-        <li><strong>Instruction:</strong> text input, auto-injected into prompt template</li>
-        <li><strong>Methods:</strong> chip-based, add/remove dynamically, auto-injected into prompt</li>
-        <li><strong>Image:</strong> required, drag &amp; drop or click to upload</li>
-        <li><strong>Prompt:</strong> collapsible, auto-generated from template, editable for overrides</li>
-        <li><strong>Result:</strong> canvas with bounding boxes + step cards + verify status + raw response</li>
+        <li><strong>Config & Test</strong> &mdash; Configuration, debug tools, history, documentation</li>
+        <li><strong>Calibrate</strong> &mdash; 4-point camera-to-robot calibration</li>
+        <li><strong>Run</strong> &mdash; Execute plans step-by-step on the robot</li>
       </ul>
 
-      <h3>10.2 History</h3>
-      <ul>
-        <li>Grid of all historical results with bbox overlays on thumbnails</li>
-        <li>Filter by model</li>
-        <li>Shows verify status badge (passed/failed) and attempt count</li>
-        <li>Click to open detail modal (full steps, verification history, raw response, prompt)</li>
-        <li>Delete individual results</li>
-      </ul>
-
-      <h3>10.3 Documents</h3>
-      <p>This page. Full system documentation.</p>
-
-      <!-- 11 -->
       <h2 id="doc-run">11. Running the Server</h2>
-      <h3>11.1 Install Dependencies</h3>
-      <pre><code>pip install -r requirements.txt</code></pre>
-      <p>Dependencies: <code>fastapi</code>, <code>uvicorn[standard]</code>, <code>httpx</code>, <code>pyyaml</code>, <code>python-multipart</code>, <code>Pillow</code>, <code>python-dotenv</code></p>
+      <pre><code># Install dependencies
+pip install -r requirements.txt
 
-      <h3>11.2 Configure API Key</h3>
-      <p>Create a <code>.env</code> file in the project root:</p>
-      <pre><code>GEMINI_API_KEY=your_api_key_here</code></pre>
+# Set API key
+echo "GEMINI_API_KEY=your_key" > .env
 
-      <h3>11.3 Start Server</h3>
-      <pre><code>python main.py</code></pre>
-      <p>Or with uvicorn directly:</p>
-      <pre><code>uvicorn main:app --host 0.0.0.0 --port 8000 --reload</code></pre>
-      <p>The server runs at <code>http://localhost:8000</code></p>
-
-      <h3>11.4 Configuration Changes</h3>
-      <p>Edit <code>config.yaml</code> and refresh the browser. The server reloads the config on every API call &mdash; no restart needed.</p>
+# Start server
+python main.py
+# -> http://localhost:8000</code></pre>
 
     </div>
-    </div><!-- end inner-documents -->
+    </div><!-- /inner-cfg-documents -->
 
-  </div>
+  </div><!-- /page-config-test -->
 
-  <!-- Camera & Teleop -->
-  <div class="page" id="page-cam-calib">
-    <div class="page-title"><span>Camera</span> & Teleop</div>
-
-    <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button class="btn btn-sm" id="calStartBtn" onclick="calToggleRobot()" style="background:#34a853">Start</button>
-      <span class="cal-status off" id="calStatus">Disconnected</span>
-      <span class="status" id="calError" style="display:none"></span>
-    </div>
-    <div id="calBody" style="max-width:960px;display:none">
-      <!-- Sliders -->
-      <div class="cal-row-top">
-        <div class="cal-slider-col">
-          <div class="cal-controls">
-            <button class="btn btn-sm" style="background:#34a853" onclick="calSetTorque(true)">Torque ON</button>
-            <button class="btn btn-sm btn-danger" onclick="calSetTorque(false)">Torque OFF</button>
-          </div>
-          <div id="calJoints"></div>
-        </div>
-      </div>
-      <!-- Row 2: Cameras side by side -->
-      <div class="cal-row-cams">
-        <div class="cal-cam-box">
-          <h3>Top View</h3>
-          <div class="cal-cam-wrap"><img id="cal-cam-top" alt="top"></div>
-        </div>
-        <div class="cal-cam-box">
-          <h3>Wrist View</h3>
-          <div class="cal-cam-wrap"><img id="cal-cam-wrist" alt="wrist"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Calibrate -->
+  <!-- ==================== Calibrate ==================== -->
   <div class="page" id="page-calibrate">
     <div class="page-title"><span>Camera</span> Calibrate</div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="cb-main">Calibrate</button>
+      <button class="inner-tab" data-inner="cb-docs">Documents</button>
+    </div>
+
+    <div class="inner-page active" id="inner-cb-main">
 
     <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <button class="btn btn-sm" id="cbCaptureBtn" onclick="cbCapture()">Capture</button>
@@ -850,18 +689,16 @@ height   = box_height / image_height</code></pre>
     </div>
 
     <div style="display:flex;gap:18px;flex-wrap:wrap;max-width:960px">
-      <!-- Left: camera image with click overlay -->
       <div style="flex:1;min-width:320px">
         <div class="cb-canvas-wrap" id="cbCanvasWrap" onclick="cbClickImage(event)" style="display:none">
           <img id="cbImage" alt="top view">
           <canvas id="cbOverlay"></canvas>
         </div>
         <div id="cbPlaceholder" style="background:#f5f5f5;border:1px solid #d0d0d0;border-radius:8px;padding:40px;text-align:center;color:#999;font-size:0.88rem">
-          Start robot in <strong>Camera & Teleop</strong> tab first, then press <strong>Capture</strong> to take a snapshot.
+          Start robot in <strong>Debug</strong> tab first, then press <strong>Capture</strong> to take a snapshot.
         </div>
       </div>
 
-      <!-- Right: points list + actions -->
       <div style="flex:0 0 300px;min-width:250px">
         <div class="cb-wizard-step">
           <h3>Calibration Points</h3>
@@ -878,13 +715,11 @@ height   = box_height / image_height</code></pre>
           </div>
         </div>
 
-        <!-- Saved calibration data -->
         <div class="cb-wizard-step" id="cbDataSection" style="display:none">
           <h3>Calibration Data</h3>
           <div id="cbDataList" style="font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;max-height:200px;overflow-y:auto"></div>
         </div>
 
-        <!-- After calibration: click-to-move -->
         <div class="cb-wizard-step" id="cbMoveSection" style="display:none">
           <h3>Click to Move</h3>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -905,9 +740,206 @@ height   = box_height / image_height</code></pre>
         </div>
       </div>
     </div>
-  </div>
 
+    </div><!-- /inner-cb-main -->
+
+    <div class="inner-page" id="inner-cb-docs">
+    <div class="doc">
+
+      <h2>Overview</h2>
+      <p>Camera Calibrate maps <strong>pixel coordinates</strong> on the top-view camera to <strong>robot joint angles</strong>, so you can click on the image and the robot arm moves to that physical location.</p>
+      <p>The system uses a <strong>4-point bilinear interpolation</strong> &mdash; you teach the robot 4 reference positions, and it interpolates joint angles for any point within that area.</p>
+
+      <h2>How It Works</h2>
+
+      <h3>1. Calibration (4-point teaching)</h3>
+      <p>You manually move the robot arm (gripper closed, pointing down) to 4 physical locations and record the mapping between pixel position and joint angles.</p>
+      <p>For each calibration point, the system stores:</p>
+      <ul>
+        <li><strong>Pixel coordinate</strong> <code>(u, v)</code> &mdash; where you clicked on the camera image</li>
+        <li><strong>Joint angles</strong> &mdash; the 6 joint values when the gripper tip is at that physical location</li>
+      </ul>
+
+      <h3>2. Bilinear Interpolation</h3>
+      <pre><code>joint_value = a + b*u + c*v + d*u*v</code></pre>
+      <p>With 4 points and 4 unknowns, the system solves exactly for each joint.</p>
+
+      <h3>3. Height Control</h3>
+      <pre><code>offset = arctan(height_cm / 100 / 0.25)
+shoulder_lift -= offset</code></pre>
+
+      <h3>4. Safety Height & Smooth Arc Path</h3>
+      <p>When moving between positions, the arm follows a sine-bump arc to clear obstacles:</p>
+      <pre><code>bump(t) = bump_height * sin(pi * t)
+bump_height = min(overshoot + 2, 10) degrees
+15 waypoints x 40ms = ~0.6s total</code></pre>
+
+      <h2>Step-by-Step Guide</h2>
+      <ol>
+        <li>Go to <strong>Config & Test > Debug</strong> and press <strong>Start</strong> to connect the robot</li>
+        <li>Switch to the <strong>Calibrate</strong> tab</li>
+        <li>Press <strong>Capture</strong> to take a snapshot</li>
+        <li>Click 4 points on the image, saving robot position for each</li>
+        <li>Press <strong>Compute</strong> to finalize calibration</li>
+        <li>Click anywhere on the image to move the robot</li>
+      </ol>
+
+      <h2>API Endpoints</h2>
+      <table>
+        <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/calibrate/status</code></td><td>Get calibration status</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/capture</code></td><td>Capture from top camera</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/save-point</code></td><td>Read current joint angles</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/compute</code></td><td>Finalize calibration</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/move-to</code></td><td>Move to pixel position</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/reset</code></td><td>Clear calibration data</td></tr>
+      </table>
+
+      <h2>Tips</h2>
+      <ul>
+        <li>Spread the 4 calibration points as wide as possible for best accuracy</li>
+        <li>Accuracy is highest <strong>inside</strong> the quadrilateral formed by the 4 points</li>
+        <li>Keep the camera fixed after calibration</li>
+        <li>If the arm folds backward, reduce the Safety height value</li>
+      </ul>
+
+    </div>
+    </div><!-- /inner-cb-docs -->
+
+  </div><!-- /page-calibrate -->
+
+  <!-- ==================== Run ==================== -->
+  <div class="page" id="page-run">
+    <div class="page-title"><span>Run</span> Plan</div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="run-main">Run</button>
+      <button class="inner-tab" data-inner="run-docs">Documents</button>
+    </div>
+
+    <div class="inner-page active" id="inner-run-main">
+
+    <div class="two-col" style="margin-bottom:14px">
+      <div class="form-group">
+        <label class="form-label">Model</label>
+        <select id="runModel"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Instruction</label>
+        <input type="text" id="runInstruction" value="pick up the pink bow to the green bowl" placeholder="e.g. pick up the pink bow to the green bowl">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Image (top camera)</label>
+      <div id="runImagePreview" style="display:none">
+        <img id="runImage" style="max-width:100%;max-height:300px;border-radius:8px;border:1px solid #d0d0d0">
+      </div>
+    </div>
+
+    <div class="actions" style="margin-bottom:18px">
+      <button class="btn" id="runPlanBtn" onclick="runPlan()">Plan</button>
+      <span class="status" id="runStatus"></span>
+    </div>
+
+    <div id="runFlowSection" style="display:none">
+      <div style="display:flex;gap:20px;flex-wrap:wrap;max-width:960px">
+        <div style="flex:1;min-width:280px">
+          <canvas id="runBboxCanvas" style="width:100%;border-radius:8px;border:1px solid #d0d0d0"></canvas>
+        </div>
+        <div style="flex:0 0 440px;min-width:300px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <button class="btn btn-sm" id="runStepBtn" onclick="runStep()" disabled>Run Step</button>
+            <span class="status" id="runStepStatus"></span>
+          </div>
+          <div class="run-flow" id="runFlowChart"></div>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /inner-run-main -->
+
+    <div class="inner-page" id="inner-run-docs">
+    <div class="doc">
+
+      <h2>Overview</h2>
+      <p>The Run tab executes a VLA plan on the physical robot. It captures an image from the top camera, sends it to Gemini for planning, and then lets you execute each step individually.</p>
+
+      <h2>How to Use</h2>
+      <ol>
+        <li>Ensure robot is connected (Config & Test > Debug > Start)</li>
+        <li>Ensure camera is calibrated (Calibrate tab)</li>
+        <li>Select a Gemini model and enter an instruction</li>
+        <li>Press <strong>Plan</strong> &mdash; captures image from top camera and generates a plan</li>
+        <li>Review the flowchart and bounding box visualization</li>
+        <li>Click a step block, then press <strong>Run Step</strong> to execute it</li>
+        <li>Steps auto-advance after completion</li>
+      </ol>
+
+      <h2>Step Execution</h2>
+      <table>
+        <tr><th>Method</th><th>Action</th></tr>
+        <tr><td><code>ik_reach_object_v1</code></td><td>Move gripper to bbox center via calibration interpolation with safe arc path</td></tr>
+        <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper (gripper = 0)</td></tr>
+        <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper (gripper = 100)</td></tr>
+        <tr><td><code>act_drawer_open_v1</code></td><td>Reach bbox position (placeholder)</td></tr>
+        <tr><td><code>act_drawer_close_v1</code></td><td>Reach bbox position (placeholder)</td></tr>
+      </table>
+
+      <h2>Requirements</h2>
+      <ul>
+        <li>Robot must be connected and cameras streaming</li>
+        <li>Camera calibration must be complete (4-point calibration)</li>
+        <li>Gemini API key must be configured in <code>.env</code></li>
+      </ul>
+
+      <h2>Troubleshooting</h2>
+      <ul>
+        <li><strong>"Robot not connected"</strong> &mdash; Go to Config & Test > Debug and press Start</li>
+        <li><strong>"Not calibrated"</strong> &mdash; Complete the 4-point calibration in the Calibrate tab</li>
+        <li><strong>Inaccurate movement</strong> &mdash; Recalibrate with points spread wider across the work area</li>
+        <li><strong>Plan verification failed</strong> &mdash; The plan may still work; review the steps manually</li>
+      </ul>
+
+    </div>
+    </div><!-- /inner-run-docs -->
+
+  </div><!-- /page-run -->
+
+</div><!-- /main-content -->
+
+<!-- Right panel: Camera & Teleop (always visible) -->
+<div class="right-panel">
+  <h3>Camera & Teleop</h3>
+  <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <button class="btn btn-sm" id="calStartBtn" onclick="calToggleRobot()" style="background:#34a853">Start</button>
+    <span class="cal-status off" id="calStatus">Disconnected</span>
+    <span class="status" id="calError" style="display:none"></span>
+  </div>
+  <div id="calBody" style="display:none">
+    <div class="cal-row-top">
+      <div class="cal-slider-col">
+        <div class="cal-controls">
+          <button class="btn btn-sm" style="background:#34a853" onclick="calSetTorque(true)">Torque ON</button>
+          <button class="btn btn-sm btn-danger" onclick="calSetTorque(false)">Torque OFF</button>
+        </div>
+        <div id="calJoints"></div>
+      </div>
+    </div>
+    <div class="cal-row-cams">
+      <div class="cal-cam-box">
+        <h3>Top View</h3>
+        <div class="cal-cam-wrap"><img id="cal-cam-top" alt="top"></div>
+      </div>
+      <div class="cal-cam-box">
+        <h3>Wrist View</h3>
+        <div class="cal-cam-wrap"><img id="cal-cam-wrist" alt="wrist"></div>
+      </div>
+    </div>
+  </div>
 </div>
+
+</div><!-- /main -->
 
 <!-- Modal -->
 <div class="modal-overlay" id="modalOverlay">
@@ -917,18 +949,132 @@ height   = box_height / image_height</code></pre>
 <script>
 const COLORS = ['#e8453c','#1a73e8','#34a853','#f9ab00','#a142f4','#e8710a','#00bcd4','#e91e90','#8bc34a','#795548'];
 let cfg = null, imageFile = null, methods = [], allResults = [];
+let cfgMethods = []; // methods for config tab
 
 // ---- Init ----
 async function init() {
   const r = await fetch('/api/config');
   cfg = await r.json();
+  // Debug planning selects
   buildModelSelect();
   document.getElementById('instruction').value = cfg.default_instruction;
   methods = [...cfg.available_methods];
   renderMethods();
   rebuildPrompt();
   restoreTokens();
+  // Config tab
+  cfgPopulate();
+  // Run tab
+  buildRunModelSelect();
+  // Events
   setupEvents();
+}
+
+function cfgPopulate() {
+  document.getElementById('cfgRobotPort').value = cfg.robot_port || '';
+  document.getElementById('cfgRobotId').value = cfg.robot_id || '';
+  document.getElementById('cfgCamTop').value = cfg.camera_top_index ?? 0;
+  document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 1;
+  document.getElementById('cfgPrompt').value = cfg.prompt_template || '';
+
+  // Model select for config
+  const sel = document.getElementById('cfgModel');
+  const groups = {};
+  cfg.models.forEach(m => { (groups[m.group] ??= []).push(m); });
+  sel.innerHTML = '';
+  for (const [g, ms] of Object.entries(groups)) {
+    const og = document.createElement('optgroup'); og.label = g;
+    ms.forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; if (m.id === cfg.default_model) o.selected = true; og.appendChild(o); });
+    sel.appendChild(og);
+  }
+
+  // Methods for config
+  cfgMethods = [...cfg.available_methods];
+  cfgRenderMethods();
+}
+
+function cfgRenderMethods() {
+  const w = document.getElementById('cfgMethodsWrap');
+  w.innerHTML = cfgMethods.map((m, i) =>
+    `<span class="method-chip">${m}<button class="chip-rm" onclick="cfgRemoveMethod(${i})">&times;</button></span>`
+  ).join('');
+}
+function cfgRemoveMethod(i) { cfgMethods.splice(i, 1); cfgRenderMethods(); }
+function cfgAddMethod() {
+  const inp = document.getElementById('cfgMethodInput');
+  const v = inp.value.trim();
+  if (v && !cfgMethods.includes(v)) { cfgMethods.push(v); cfgRenderMethods(); }
+  inp.value = '';
+}
+
+async function cfgSave() {
+  const st = document.getElementById('cfgSaveStatus');
+  st.textContent = 'Saving...'; st.className = 'status';
+  try {
+    const r = await fetch('/api/config/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        robot_port: document.getElementById('cfgRobotPort').value,
+        robot_id: document.getElementById('cfgRobotId').value,
+        camera_top_index: parseInt(document.getElementById('cfgCamTop').value) || 0,
+        camera_wrist_index: parseInt(document.getElementById('cfgCamWrist').value) || 1,
+        default_model: document.getElementById('cfgModel').value,
+        available_methods: cfgMethods,
+        prompt_template: document.getElementById('cfgPrompt').value,
+      }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = 'Saved successfully.'; st.className = 'status';
+      // Reload config
+      const r2 = await fetch('/api/config');
+      cfg = await r2.json();
+      // Update debug tab
+      methods = [...cfg.available_methods];
+      renderMethods();
+      rebuildPrompt();
+      buildModelSelect();
+    } else {
+      st.textContent = d.error || 'Save failed'; st.className = 'status error';
+    }
+  } catch(e) { st.textContent = e.message; st.className = 'status error'; }
+}
+
+// ---- Test All ----
+async function runTestAll() {
+  const btn = document.getElementById('testAllBtn');
+  const st = document.getElementById('testAllStatus');
+  const list = document.getElementById('testChecklist');
+  btn.disabled = true; st.textContent = 'Running tests...'; st.className = 'status';
+  list.innerHTML = '<div class="test-item"><div class="test-icon wait">...</div><div class="test-body"><div class="test-name">Running all tests...</div></div></div>';
+
+  try {
+    const r = await fetch('/api/test/all', {method: 'POST'});
+    const d = await r.json();
+    const results = d.results || [];
+    const allPass = results.every(t => t.ok);
+    st.textContent = allPass ? 'All tests passed!' : 'Some tests failed.';
+    st.className = allPass ? 'status' : 'status error';
+
+    list.innerHTML = results.map(t => {
+      const cls = t.ok ? 'pass' : 'fail';
+      const icon = t.ok ? '&#10003;' : '&#10007;';
+      const frameHtml = t.frame ? `<img class="test-frame" src="data:image/jpeg;base64,${t.frame}">` : '';
+      return `<div class="test-item ${cls}">
+        <div class="test-icon ${cls}">${icon}</div>
+        <div class="test-body">
+          <div class="test-name">${esc(t.name)}</div>
+          <div class="test-detail">${esc(t.detail)}</div>
+          ${frameHtml}
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    st.textContent = e.message; st.className = 'status error';
+    list.innerHTML = '';
+  }
+  btn.disabled = false;
 }
 
 function buildModelSelect() {
@@ -943,7 +1089,7 @@ function buildModelSelect() {
   }
 }
 
-// ---- Methods ----
+// ---- Methods (Debug planning) ----
 function renderMethods() {
   const w = document.getElementById('methodsWrap');
   w.innerHTML = methods.map((m, i) =>
@@ -1010,14 +1156,15 @@ function setupEvents() {
       el.classList.add('active');
     });
   });
-  // Inner tabs (Planing / History)
+  // Inner tabs (scoped to parent page)
   document.querySelectorAll('.inner-tab').forEach(el => {
     el.addEventListener('click', () => {
-      document.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.inner-page').forEach(p => p.classList.remove('active'));
+      const parent = el.closest('.page');
+      parent.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
+      parent.querySelectorAll('.inner-page').forEach(p => p.classList.remove('active'));
       el.classList.add('active');
       document.getElementById('inner-'+el.dataset.inner).classList.add('active');
-      if (el.dataset.inner === 'history') loadResults();
+      if (el.dataset.inner === 'cfg-history') loadResults();
     });
   });
   // Image
@@ -1030,6 +1177,7 @@ function setupEvents() {
   document.getElementById('instruction').addEventListener('input', rebuildPrompt);
   // Method input enter
   document.getElementById('methodInput').addEventListener('keydown', e => { if(e.key==='Enter') addMethod(); });
+  document.getElementById('cfgMethodInput').addEventListener('keydown', e => { if(e.key==='Enter') cfgAddMethod(); });
   // Submit
   document.getElementById('submitBtn').addEventListener('click', submit);
   document.getElementById('instruction').addEventListener('keydown', e => { if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) submit(); });
@@ -1046,7 +1194,7 @@ function setImage(f) {
 }
 function clearImage() { imageFile = null; document.getElementById('previewWrap').innerHTML = ''; }
 
-// ---- Submit ----
+// ---- Submit (Debug planning) ----
 async function submit() {
   const st = document.getElementById('status'), btn = document.getElementById('submitBtn');
   rebuildPrompt();
@@ -1079,14 +1227,9 @@ async function submit() {
     }
     let statusMsg = `Done in ${d.elapsed}s`;
     if (d.bbox_auto_normalized) statusMsg += ' | bbox auto-normalized';
-    // Verify info
     const v = d.verify;
     if (v && v.enabled) {
-      if (v.passed) {
-        statusMsg += ` | Verified (attempt ${v.attempts}/${v.max_retries})`;
-      } else {
-        statusMsg += ` | Verification FAILED after ${v.attempts} attempt${v.attempts>1?'s':''}`;
-      }
+      statusMsg += v.passed ? ` | Verified (attempt ${v.attempts}/${v.max_retries})` : ` | Verification FAILED after ${v.attempts} attempt${v.attempts>1?'s':''}`;
     } else if (v && !v.enabled) {
       statusMsg += ' | Verify disabled';
     }
@@ -1113,19 +1256,15 @@ function drawPlan(imgUrl, steps, canvasId, maxW=540) {
       const [xc,yc,w,h] = box;
       const color = COLORS[i % COLORS.length];
       const px=(xc-w/2)*canvas.width, py=(yc-h/2)*canvas.height, pw=w*canvas.width, ph=h*canvas.height;
-      // Box
       ctx.strokeStyle=color; ctx.lineWidth=2; ctx.strokeRect(px,py,pw,ph);
-      // Label
       const label = `${step.step_index}`;
       ctx.font='bold 12px sans-serif';
       const tw=ctx.measureText(label).width+8, ly=py>18?py-18:py;
       ctx.fillStyle=color; ctx.fillRect(px,ly,tw,17);
       ctx.fillStyle='#fff'; ctx.fillText(label, px+4, ly+13);
-      // Center dot
       const cx=xc*canvas.width, cy=yc*canvas.height;
       ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
       ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
-      // Crosshair
       ctx.strokeStyle=color; ctx.lineWidth=1; ctx.setLineDash([3,2]);
       ctx.beginPath(); ctx.moveTo(cx-10,cy); ctx.lineTo(cx+10,cy); ctx.moveTo(cx,cy-10); ctx.lineTo(cx,cy+10); ctx.stroke();
       ctx.setLineDash([]);
@@ -1174,7 +1313,7 @@ function renderSteps(plan, containerId) {
   c.innerHTML = hdr + cards;
 }
 
-// ---- Visualize ----
+// ---- History ----
 async function loadResults() {
   const r = await fetch('/api/results?limit=200');
   const d = await r.json();
@@ -1213,7 +1352,6 @@ function renderGrid() {
         <div class="viz-card-time">${timeStr}</div>
         <div class="viz-card-stats">
           <span>${nSteps} steps</span><span>${r.elapsed}s</span><span>${r.token_usage?.total??'?'} tokens</span>${r.bbox_auto_normalized?'<span style="color:#d93025;font-weight:600">bbox auto-fixed</span>':''}${r.verify?.enabled?(r.verify.passed?`<span style="color:#34a853;font-weight:600">Verified (${r.verify.attempts}/${r.verify.max_retries})</span>`:`<span style="color:#d93025;font-weight:600">Verify failed</span>`):''}
-
         </div>
       </div>
       <div class="viz-card-actions">
@@ -1246,7 +1384,6 @@ function openModal(id) {
 
   const methodsHtml = (r.methods||[]).map(m=>`<span class="method-chip">${m}</span>`).join(' ');
 
-  // Verify section for modal
   let verifyHtml = '';
   const vf = r.verify;
   if (vf && vf.enabled) {
@@ -1269,7 +1406,7 @@ function openModal(id) {
 
   document.getElementById('modalBody').innerHTML = `
     <h2 style="font-size:1.1rem;margin-bottom:2px">${esc(r.instruction||'')}</h2>
-    <p style="font-size:0.78rem;color:#888;margin-bottom:14px">${r.model} &mdash; ${ts} &mdash; ${r.elapsed}s &mdash; ${r.token_usage?.total??'?'} tokens${r.bbox_auto_normalized?' &mdash; <span style="color:#d93025;font-weight:600">bbox auto-normalized (was pixels)</span>':''}</p>
+    <p style="font-size:0.78rem;color:#888;margin-bottom:14px">${r.model} &mdash; ${ts} &mdash; ${r.elapsed}s &mdash; ${r.token_usage?.total??'?'} tokens${r.bbox_auto_normalized?' &mdash; <span style="color:#d93025;font-weight:600">bbox auto-normalized</span>':''}</p>
     <div class="result-row">
       <div class="result-canvas-wrap"><canvas id="${cid}"></canvas></div>
       <div class="result-details" style="min-width:280px">
@@ -1304,7 +1441,7 @@ function esc(s) { const d=document.createElement('div'); d.textContent=s; return
 
 init();
 
-// ---- Camera Calibrate ----
+// ---- Camera & Teleop ----
 const CAL_JOINTS = [
   {name:"shoulder_pan",  label:"Shoulder Pan", min:-180,max:180,unit:"deg"},
   {name:"shoulder_lift", label:"Shoulder Lift",min:-180,max:180,unit:"deg"},
@@ -1346,7 +1483,6 @@ async function calToggleRobot(){
   btn.disabled=true;
 
   if(!calRunning){
-    // Start
     btn.textContent="Starting...";
     try{
       const r=await fetch("/api/robot/start",{method:"POST"});
@@ -1366,7 +1502,6 @@ async function calToggleRobot(){
       btn.textContent="Start";btn.style.background="#34a853";
     }
   }else{
-    // Stop
     btn.textContent="Stopping...";
     if(calWs){calWs.onclose=null;calWs.close();calWs=null;}
     try{await fetch("/api/robot/stop",{method:"POST"});}catch(_){}
@@ -1415,17 +1550,16 @@ fetch("/api/robot/status").then(r=>r.json()).then(d=>{
 }).catch(()=>{});
 
 // ---- Calibrate ----
-let cbPixels = [];      // [{u, v}] — clicked pixel coords
-let cbJoints = [];      // [null or {joints, robot_xy, robot_z}] — saved robot data per point
+let cbPixels = [];
+let cbJoints = [];
 let cbCalibrated = false;
 let cbImageNatW = 0, cbImageNatH = 0;
 
 const CB_COLORS = ['#e8453c', '#1a73e8', '#34a853', '#f9ab00'];
 
 async function cbCapture() {
-  // Check robot connected first
   const st = await fetch("/api/robot/status").then(r=>r.json());
-  if (!st.connected) { alert("Robot not connected. Go to Camera & Teleop tab and press Start first."); return; }
+  if (!st.connected) { alert("Robot not connected. Go to Config & Test > Debug tab and press Start first."); return; }
   const r = await fetch("/api/calibrate/capture", {method:"POST"});
   const d = await r.json();
   if (!d.ok) { alert(d.error); return; }
@@ -1445,7 +1579,6 @@ async function cbCapture() {
 
 function cbClickImage(e) {
   if (cbPixels.length >= 4 && !cbCalibrated) return;
-  const wrap = document.getElementById("cbCanvasWrap");
   const img = document.getElementById("cbImage");
   const rect = img.getBoundingClientRect();
   const scaleX = cbImageNatW / rect.width;
@@ -1453,12 +1586,7 @@ function cbClickImage(e) {
   const u = Math.round((e.clientX - rect.left) * scaleX);
   const v = Math.round((e.clientY - rect.top) * scaleY);
 
-  if (cbCalibrated) {
-    cbMoveTo(u, v);
-    return;
-  }
-
-  // Must save current point before clicking next
+  if (cbCalibrated) { cbMoveTo(u, v); return; }
   if (cbPixels.length > 0 && cbJoints[cbPixels.length - 1] === null) return;
   if (cbPixels.length >= 4) return;
   cbPixels.push({u, v});
@@ -1472,19 +1600,13 @@ function cbDrawOverlay() {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   cbPixels.forEach((p, i) => {
     const color = CB_COLORS[i % CB_COLORS.length];
-    // Crosshair
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(p.u - 15, p.v); ctx.lineTo(p.u + 15, p.v); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(p.u, p.v - 15); ctx.lineTo(p.u, p.v + 15); ctx.stroke();
-    // Circle
     ctx.beginPath(); ctx.arc(p.u, p.v, 10, 0, 2 * Math.PI); ctx.stroke();
-    // Label
-    ctx.fillStyle = color;
-    ctx.font = "bold 16px sans-serif";
+    ctx.fillStyle = color; ctx.font = "bold 16px sans-serif";
     ctx.fillText((i + 1).toString(), p.u + 14, p.v - 10);
   });
 }
@@ -1493,8 +1615,7 @@ function cbUpdateUI() {
   const list = document.getElementById("cbPointsList");
   list.innerHTML = "";
   for (let i = 0; i < 4; i++) {
-    const px = cbPixels[i];
-    const jt = cbJoints[i];
+    const px = cbPixels[i]; const jt = cbJoints[i];
     const done = jt !== null;
     const active = px && !done && cbPixels.length === i + 1;
     const row = document.createElement("div");
@@ -1505,14 +1626,11 @@ function cbUpdateUI() {
       <div class="cb-point-info"><code>${pxText}</code><br><span style="font-size:0.75rem;color:${done ? '#1e8e3e' : '#999'}">${jtText}</span></div>`;
     list.appendChild(row);
   }
-  // Enable/disable buttons
   const currentIdx = cbPixels.length - 1;
   const canSave = currentIdx >= 0 && cbJoints[currentIdx] === null;
   document.getElementById("cbSaveBtn").disabled = !canSave;
   const allDone = cbJoints.length === 4 && cbJoints.every(j => j !== null);
   document.getElementById("cbComputeBtn").disabled = !allDone;
-
-  // Show saved calibration data
   cbShowData();
 }
 
@@ -1525,8 +1643,7 @@ function cbShowData() {
   let html = "";
   for (let i = 0; i < cbPixels.length; i++) {
     if (!cbJoints[i]) continue;
-    const px = cbPixels[i];
-    const jt = cbJoints[i].joints;
+    const px = cbPixels[i]; const jt = cbJoints[i].joints;
     html += `<div style="margin-bottom:8px;padding:6px 8px;background:#f8f8f8;border-radius:6px">`;
     html += `<strong style="color:${CB_COLORS[i]}">Point ${i+1}</strong> — pixel (${px.u}, ${px.v})<br>`;
     for (const [k, v] of Object.entries(jt)) {
@@ -1541,41 +1658,30 @@ function cbShowData() {
 async function cbSavePoint() {
   const idx = cbPixels.length - 1;
   if (idx < 0 || cbJoints[idx] !== null) return;
-
   const btn = document.getElementById("cbSaveBtn");
-  btn.disabled = true;
-  btn.textContent = "Reading...";
-
+  btn.disabled = true; btn.textContent = "Reading...";
   const r = await fetch("/api/calibrate/save-point", {method: "POST"});
   const d = await r.json();
   btn.textContent = "Save Position";
-
   if (!d.ok) { alert(d.error); btn.disabled = false; return; }
-
-  cbJoints[idx] = {
-    joints: d.joints,
-  };
+  cbJoints[idx] = { joints: d.joints };
   cbDrawOverlay();
   cbUpdateUI();
 }
 
 async function cbCompute() {
-  // First save all points to backend
   const points = cbPixels.map((px, i) => ({
     pixel: [px.u, px.v],
     joints: cbJoints[i].joints,
   }));
-
   await fetch("/api/calibrate/save-all", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({points}),
   });
-
   const r = await fetch("/api/calibrate/compute", {method: "POST"});
   const d = await r.json();
   if (!d.ok) { alert(d.error); return; }
-
   cbCalibrated = true;
   document.getElementById("cbStatus").textContent = "Calibrated";
   document.getElementById("cbStatus").className = "cal-status on";
@@ -1592,7 +1698,6 @@ async function cbMoveTo(u, v) {
   const lp = document.getElementById("cbLivePos");
   st.textContent = `Moving to pixel (${u}, ${v})...`;
   lp.innerHTML = "";
-
   const heightCm = parseFloat(document.getElementById("cbHeight").value) || 0;
   const safetyCm = parseFloat(document.getElementById("cbSafetyHeight").value) || 15;
   const r = await fetch("/api/calibrate/move-to", {
@@ -1601,32 +1706,21 @@ async function cbMoveTo(u, v) {
     body: JSON.stringify({pixel: [u, v], height_cm: heightCm, safety_height_cm: safetyCm}),
   });
   const d = await r.json();
-  if (!d.ok) {
-    st.innerHTML = `<span style="color:#d93025">${d.error}</span>`;
-    return;
-  }
-
-  // Show path + target joints
+  if (!d.ok) { st.innerHTML = `<span style="color:#d93025">${d.error}</span>`; return; }
   const pathLabel = d.path === "direct" ? "direct" : `arc (safety ${d.safety_height_cm}cm)`;
-  let targetHtml = `<strong>Path:</strong> ${pathLabel}<br>`;
-  targetHtml += `<strong>Target:</strong> pixel (${u}, ${v})<br>`;
+  let targetHtml = `<strong>Path:</strong> ${pathLabel}<br><strong>Target:</strong> pixel (${u}, ${v})<br>`;
   for (const [k, val] of Object.entries(d.target_joints)) {
     const unit = k === "gripper" ? "%" : "°";
     targetHtml += `  ${k}: <strong>${val}${unit}</strong><br>`;
   }
   st.innerHTML = targetHtml;
-
-  // Draw target on overlay
   cbDrawOverlay();
   const canvas = document.getElementById("cbOverlay");
   const ctx = canvas.getContext("2d");
-  ctx.strokeStyle = "#e91e90";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#e91e90"; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(u, v, 12, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(u - 18, v); ctx.lineTo(u + 18, v); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(u, v - 18); ctx.lineTo(u, v + 18); ctx.stroke();
-
-  // Start real-time position polling
   cbStartLivePos(d.target_joints);
 }
 
@@ -1634,18 +1728,14 @@ function cbStartLivePos(targetJoints) {
   if (cbLiveTimer) clearInterval(cbLiveTimer);
   const lp = document.getElementById("cbLivePos");
   let settled = 0;
-
   cbLiveTimer = setInterval(async () => {
     try {
       const r = await fetch("/api/robot/status");
       const s = await r.json();
       if (!s.connected) { cbStopLivePos(); return; }
-
-      // Use the WebSocket data if available, otherwise read via save-point
       const pr = await fetch("/api/calibrate/save-point", {method: "POST"});
       const pd = await pr.json();
       if (!pd.ok) return;
-
       const cur = pd.joints;
       let html = `<strong>Current:</strong><br>`;
       let allClose = true;
@@ -1658,17 +1748,9 @@ function cbStartLivePos(targetJoints) {
         if (diff > 3) allClose = false;
       }
       lp.innerHTML = html;
-
-      if (allClose) {
-        settled++;
-        if (settled >= 3) cbStopLivePos();
-      } else {
-        settled = 0;
-      }
+      if (allClose) { settled++; if (settled >= 3) cbStopLivePos(); } else { settled = 0; }
     } catch (_) {}
   }, 300);
-
-  // Auto-stop after 10 seconds
   setTimeout(() => cbStopLivePos(), 10000);
 }
 
@@ -1676,19 +1758,15 @@ function cbStopLivePos() {
   if (cbLiveTimer) { clearInterval(cbLiveTimer); cbLiveTimer = null; }
 }
 
-
 function cbReset() {
   if (!confirm("Reset all calibration data?")) return;
-  cbPixels = [];
-  cbJoints = [];
-  cbCalibrated = false;
+  cbPixels = []; cbJoints = []; cbCalibrated = false;
   cbStopLivePos();
   document.getElementById("cbStatus").textContent = "Not calibrated";
   document.getElementById("cbStatus").className = "cal-status off";
   document.getElementById("cbMoveSection").style.display = "none";
   document.getElementById("cbDataSection").style.display = "none";
-  cbDrawOverlay();
-  cbUpdateUI();
+  cbDrawOverlay(); cbUpdateUI();
   fetch("/api/calibrate/reset", {method: "POST"});
 }
 
@@ -1706,6 +1784,155 @@ fetch("/api/calibrate/status").then(r=>r.json()).then(d=>{
     cbUpdateUI();
   }
 }).catch(()=>{});
+
+// ---- Run Tab ----
+let runPlanData = null;
+let runImageFile = null;
+let runImageUrl = null;
+let runSelectedStep = -1;
+let runStepsDone = new Set();
+
+function buildRunModelSelect() {
+  if (!cfg) return;
+  const sel = document.getElementById('runModel');
+  const groups = {};
+  cfg.models.forEach(m => { (groups[m.group] ??= []).push(m); });
+  sel.innerHTML = '';
+  for (const [g, ms] of Object.entries(groups)) {
+    const og = document.createElement('optgroup'); og.label = g;
+    ms.forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; if (m.id === cfg.default_model) o.selected = true; og.appendChild(o); });
+    sel.appendChild(og);
+  }
+  document.getElementById('runInstruction').value = cfg.default_instruction || '';
+}
+
+async function runPlan() {
+  const st = document.getElementById('runStatus');
+  const btn = document.getElementById('runPlanBtn');
+  const instruction = document.getElementById('runInstruction').value.trim();
+  if (!instruction) { st.textContent='Enter an instruction.'; st.className='status error'; return; }
+
+  btn.disabled = true; st.textContent='Capturing image...'; st.className='status';
+
+  try {
+    const cs = await fetch("/api/robot/status").then(r=>r.json());
+    if (!cs.connected) { st.textContent='Robot not connected. Start in Config & Test > Debug first.'; st.className='status error'; btn.disabled=false; return; }
+    const cr = await fetch("/api/calibrate/capture", {method:"POST"});
+    const cd = await cr.json();
+    if (!cd.ok) { st.textContent=cd.error; st.className='status error'; btn.disabled=false; return; }
+    const dataUrl = "data:image/jpeg;base64," + cd.image;
+    const blob = await fetch(dataUrl).then(r=>r.blob());
+    runImageFile = new File([blob], "capture.jpg", {type:"image/jpeg"});
+    runImageUrl = dataUrl;
+    document.getElementById("runImage").src = dataUrl;
+    document.getElementById("runImagePreview").style.display = "block";
+  } catch(e) { st.textContent='Failed to capture: '+e.message; st.className='status error'; btn.disabled=false; return; }
+
+  st.textContent='Planning...'; st.className='status';
+
+  const methodStr = (cfg.available_methods||[]).map(m => `* ${m}`).join('\n');
+  const prompt = cfg.prompt_template
+    .replace('{instruction}', instruction)
+    .replace('{available_methods}', methodStr);
+
+  const fd = new FormData();
+  fd.append('model', document.getElementById('runModel').value);
+  fd.append('instruction', instruction);
+  fd.append('methods', (cfg.available_methods||[]).join(','));
+  fd.append('prompt', prompt);
+  fd.append('image', runImageFile);
+
+  try {
+    const r = await fetch('/api/infer', { method:'POST', body: fd });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (!d.plan || !d.plan.steps) throw new Error("No plan returned");
+    runPlanData = d.plan;
+    runSelectedStep = -1;
+    runStepsDone = new Set();
+    drawPlan(runImageUrl, d.plan.steps, 'runBboxCanvas', 480);
+    runBuildFlow();
+    document.getElementById('runFlowSection').style.display = 'block';
+    let msg = `Planned ${d.plan.total_steps} steps in ${d.elapsed}s`;
+    if (d.verify?.enabled) msg += d.verify.passed ? ' (verified)' : ' (verify FAILED)';
+    st.textContent = msg; st.className='status';
+  } catch(e) { st.textContent = e.message; st.className='status error'; }
+  finally { btn.disabled = false; }
+}
+
+function runBuildFlow() {
+  const container = document.getElementById('runFlowChart');
+  const steps = runPlanData.steps || [];
+  let html = '';
+  steps.forEach((s, i) => {
+    if (i > 0) html += `<div class="run-arrow"></div><div class="run-arrow-head"></div>`;
+    const color = COLORS[i % COLORS.length];
+    const selected = i === runSelectedStep;
+    const done = runStepsDone.has(i);
+    const cls = done ? 'done' : selected ? 'selected' : '';
+    const bboxStr = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
+    const statusStr = done ? '<div class="run-block-status" style="color:#1e8e3e">Done</div>' : '';
+    html += `<div class="run-block ${cls}" onclick="runSelectStep(${i})">
+      <div class="run-block-hdr">
+        <div class="run-block-idx" style="background:${color}">${s.step_index}</div>
+        <div class="run-block-body">
+          <div class="run-block-desc">${esc(s.description)}</div>
+          <div class="run-block-method">${esc(s.method_id)}</div>
+          <div class="run-block-bbox">bbox: ${bboxStr}</div>
+          ${statusStr}
+        </div>
+      </div>
+    </div>`;
+  });
+  container.innerHTML = html;
+  document.getElementById('runStepBtn').disabled = runSelectedStep < 0;
+}
+
+function runSelectStep(i) {
+  runSelectedStep = i;
+  runBuildFlow();
+  const step = runPlanData.steps[i];
+  document.getElementById('runStepBtn').disabled = false;
+  document.getElementById('runStepStatus').textContent = `Step ${step.step_index}: ${step.method_id}`;
+}
+
+async function runStep() {
+  if (runSelectedStep < 0 || !runPlanData) return;
+  const step = runPlanData.steps[runSelectedStep];
+  const btn = document.getElementById('runStepBtn');
+  const st = document.getElementById('runStepStatus');
+  btn.disabled = true;
+  const block = document.querySelectorAll('#runFlowChart .run-block')[runSelectedStep];
+  if (block) block.className = 'run-block running';
+  st.textContent = `Running step ${step.step_index}: ${step.method_id}...`;
+
+  try {
+    const r = await fetch('/api/run/step', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        method_id: step.method_id,
+        target_bbox: step.target_bbox,
+        description: step.description,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.innerHTML = `<span style="color:#d93025">Step ${step.step_index} failed: ${d.error}</span>`;
+      if (block) block.className = 'run-block selected';
+      btn.disabled = false;
+      return;
+    }
+    runStepsDone.add(runSelectedStep);
+    st.textContent = `Step ${step.step_index} done`;
+    if (runSelectedStep < runPlanData.steps.length - 1) runSelectedStep++;
+    runBuildFlow();
+  } catch(e) {
+    st.innerHTML = `<span style="color:#d93025">${e.message}</span>`;
+    if (block) block.className = 'run-block selected';
+  }
+  btn.disabled = false;
+}
 </script>
 
 </body>

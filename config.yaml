@@ -1,242 +1,148 @@
-# Gemini API Configuration
 gemini:
-  default_model: "gemini-2.5-flash-lite"
-
-# Available models and their token limits
+  default_model: gemini-2.5-flash-lite
 models:
-  - id: "gemini-3.5-flash"
-    name: "Gemini 3.5 Flash"
-    group: "Latest"
-    input_limit: 1048576
-  - id: "gemini-3.1-pro-preview"
-    name: "Gemini 3.1 Pro Preview"
-    group: "Latest"
-    input_limit: 1048576
-  - id: "gemini-3.1-flash-lite"
-    name: "Gemini 3.1 Flash Lite"
-    group: "Latest"
-    input_limit: 1048576
-  - id: "gemini-3-pro-preview"
-    name: "Gemini 3 Pro Preview"
-    group: "Latest"
-    input_limit: 1048576
-  - id: "gemini-3-flash-preview"
-    name: "Gemini 3 Flash Preview"
-    group: "Latest"
-    input_limit: 1048576
-  - id: "gemini-2.5-pro"
-    name: "Gemini 2.5 Pro"
-    group: "Gemini 2.5"
-    input_limit: 1048576
-  - id: "gemini-2.5-flash"
-    name: "Gemini 2.5 Flash"
-    group: "Gemini 2.5"
-    input_limit: 1048576
-  - id: "gemini-2.5-flash-lite"
-    name: "Gemini 2.5 Flash-Lite"
-    group: "Gemini 2.5"
-    input_limit: 1048576
-  - id: "gemini-2.0-flash"
-    name: "Gemini 2.0 Flash"
-    group: "Gemini 2.0"
-    input_limit: 1048576
-  - id: "gemini-2.0-flash-lite"
-    name: "Gemini 2.0 Flash-Lite"
-    group: "Gemini 2.0"
-    input_limit: 1048576
-
-# Default instruction example
-default_instruction: "pick up the red cube to the second drawer"
-
-# Available robot methods
+- id: gemini-3.5-flash
+  name: Gemini 3.5 Flash
+  group: Latest
+  input_limit: 1048576
+- id: gemini-3.1-pro-preview
+  name: Gemini 3.1 Pro Preview
+  group: Latest
+  input_limit: 1048576
+- id: gemini-3.1-flash-lite
+  name: Gemini 3.1 Flash Lite
+  group: Latest
+  input_limit: 1048576
+- id: gemini-3-pro-preview
+  name: Gemini 3 Pro Preview
+  group: Latest
+  input_limit: 1048576
+- id: gemini-3-flash-preview
+  name: Gemini 3 Flash Preview
+  group: Latest
+  input_limit: 1048576
+- id: gemini-2.5-pro
+  name: Gemini 2.5 Pro
+  group: Gemini 2.5
+  input_limit: 1048576
+- id: gemini-2.5-flash
+  name: Gemini 2.5 Flash
+  group: Gemini 2.5
+  input_limit: 1048576
+- id: gemini-2.5-flash-lite
+  name: Gemini 2.5 Flash-Lite
+  group: Gemini 2.5
+  input_limit: 1048576
+- id: gemini-2.0-flash
+  name: Gemini 2.0 Flash
+  group: Gemini 2.0
+  input_limit: 1048576
+- id: gemini-2.0-flash-lite
+  name: Gemini 2.0 Flash-Lite
+  group: Gemini 2.0
+  input_limit: 1048576
+default_instruction: pick up the pink bow to the green bowl
 available_methods:
-  - ik_reach_object_v1
-  - act_gripper_grasp_v1
-  - act_gripper_release_v1
-  - act_drawer_open_v1
-  - act_drawer_close_v1
-  - act_door_open_v1
-  - act_door_close_v1
-
-# Prompt template — {instruction} and {available_methods} are replaced at runtime
-prompt_template: |
-  You are a robotic task planner for a Vision-Language-Action (VLA) system.
-
-  ## Task
-  Convert a natural language instruction into a step-by-step robotic execution plan.
-
-  ## Input
-  {instruction}
-
-  ## Robot Constraints
-  - Single arm with ONE gripper. No dual-hand manipulation.
-  - Cannot hold an object AND operate a drawer/door at the same time.
-
-  ## MANDATORY Action Sequencing Rules
-
-  Every physical interaction MUST be preceded by `ik_reach_object_v1` targeting that object.
-  This is NON-NEGOTIABLE. No exceptions.
-
-  The valid action patterns are:
-
-  **Pick up an object:**
-  1. ik_reach_object_v1   → target object
-  2. act_gripper_grasp_v1 → target object
-
-  **Place / release an object at destination:**
-  1. ik_reach_object_v1     → destination
-  2. act_gripper_release_v1 → destination
-
-  **Open a drawer (must reach first):**
-  1. ik_reach_object_v1 → drawer
-  2. act_drawer_open_v1 → drawer
-
-  **Close a drawer (must reach first):**
-  1. ik_reach_object_v1  → drawer
-  2. act_drawer_close_v1 → drawer
-
-  **Open/close a door (must reach first):**
-  1. ik_reach_object_v1 → door
-  2. act_door_open_v1 or act_door_close_v1 → door
-
-  ## Execution Rules
-  - CLOSED containers (drawers, doors) MUST be opened BEFORE picking up the object.
-  - OPEN containers (bowls, trays, bins) do NOT need to be opened or reached first. Just pick up the object, then reach the container, then release.
-  - Only ONE action per step. No combined actions.
-  - `ik_reach_object_v1` MUST appear before EVERY `act_*` step. Never skip it.
-  - Do NOT add unnecessary steps. Only reach an object when the next step interacts with it.
-  - Do NOT reach a destination before picking up the object. Pick up first, then reach destination.
-
-  ## Bounding Box Format
-  - YOLO format: [x_center, y_center, width, height], all normalized to [0, 1].
-  - If an object is not visible, set target_bbox to null.
-
-  ## Available Methods
-  {available_methods}
-
-  ## Output Format
-  Output ONLY valid JSON. No explanations, no markdown fences, no comments.
-
-  {
-  "task_id": "descriptive_task_id",
-  "total_steps": <integer>,
-  "steps": [
-    {
-      "step_index": <integer>,
-      "description": "<concise action description>",
-      "target_bbox": [x_center, y_center, width, height] or null,
-      "method_id": "<method_id>"
-    }
-  ]
-  }
-
-  ## Example
-
-  Instruction: "pick up the red cube to the second drawer"
-
-  {
-  "task_id": "red_cube_to_second_drawer",
-  "total_steps": 8,
-  "steps": [
-    {"step_index":1, "description":"Reach the second drawer handle", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"ik_reach_object_v1"},
-    {"step_index":2, "description":"Open the second drawer", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"act_drawer_open_v1"},
-    {"step_index":3, "description":"Reach the red cube", "target_bbox":[0.42,0.55,0.06,0.06], "method_id":"ik_reach_object_v1"},
-    {"step_index":4, "description":"Grasp the red cube", "target_bbox":[0.42,0.55,0.06,0.06], "method_id":"act_gripper_grasp_v1"},
-    {"step_index":5, "description":"Reach the open second drawer", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"ik_reach_object_v1"},
-    {"step_index":6, "description":"Release the red cube into the second drawer", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"act_gripper_release_v1"},
-    {"step_index":7, "description":"Reach the second drawer handle", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"ik_reach_object_v1"},
-    {"step_index":8, "description":"Close the second drawer", "target_bbox":[0.18,0.62,0.20,0.14], "method_id":"act_drawer_close_v1"}
-  ]
-  }
-
-  Why this ordering:
-  - Drawer is CLOSED → must open before picking up the object.
-  - If the destination were an OPEN container (bowl, tray, bin) → skip opening, just pick up the object first, then reach destination, then place.
-
-  CRITICAL RULES RECAP:
-  - Every `act_*` step MUST be preceded by `ik_reach_object_v1`.
-  - Only reach an object when the NEXT step interacts with it.
-  - Do NOT reach a destination before picking up the object (unless you need to open it first).
-  - ALL target_bbox values MUST be normalized to [0, 1]. This means every number must be between 0.0 and 1.0.
-    WRONG: [185, 605, 155, 171] ← these are pixel values, NOT normalized.
-    CORRECT: [0.29, 0.79, 0.24, 0.22] ← these are normalized (value / image_dimension).
-    If you output pixel values instead of normalized values, the plan is INVALID.
-
-# Verification settings
+- ik_reach_object_v1
+- act_gripper_grasp_v1
+- act_gripper_release_v1
+- act_drawer_open_v1
+- act_drawer_close_v1
+- act_door_open_v1
+- act_door_close_v1
+prompt_template: "You are a robotic task planner for a Vision-Language-Action (VLA)\
+  \ system.\n\n## Task\nConvert a natural language instruction into a step-by-step\
+  \ robotic execution plan.\n\n## Input\n{instruction}\n\n## Robot Constraints\n-\
+  \ Single arm with ONE gripper. No dual-hand manipulation.\n- Cannot hold an object\
+  \ AND operate a drawer/door at the same time.\n\n## MANDATORY Action Sequencing\
+  \ Rules\n\nEvery physical interaction MUST be preceded by `ik_reach_object_v1` targeting\
+  \ that object.\nThis is NON-NEGOTIABLE. No exceptions.\n\nThe valid action patterns\
+  \ are:\n\n**Pick up an object:**\n1. ik_reach_object_v1   → target object\n2. act_gripper_grasp_v1\
+  \ → target object\n\n**Place / release an object at destination:**\n1. ik_reach_object_v1\
+  \     → destination\n2. act_gripper_release_v1 → destination\n\n**Open a drawer\
+  \ (must reach first):**\n1. ik_reach_object_v1 → drawer\n2. act_drawer_open_v1 →\
+  \ drawer\n\n**Close a drawer (must reach first):**\n1. ik_reach_object_v1  → drawer\n\
+  2. act_drawer_close_v1 → drawer\n\n**Open/close a door (must reach first):**\n1.\
+  \ ik_reach_object_v1 → door\n2. act_door_open_v1 or act_door_close_v1 → door\n\n\
+  ## Execution Rules\n- CLOSED containers (drawers, doors) MUST be opened BEFORE picking\
+  \ up the object.\n- OPEN containers (bowls, trays, bins) do NOT need to be opened\
+  \ or reached first. Just pick up the object, then reach the container, then release.\n\
+  - Only ONE action per step. No combined actions.\n- `ik_reach_object_v1` MUST appear\
+  \ before EVERY `act_*` step. Never skip it.\n- Do NOT add unnecessary steps. Only\
+  \ reach an object when the next step interacts with it.\n- Do NOT reach a destination\
+  \ before picking up the object. Pick up first, then reach destination.\n\n## Bounding\
+  \ Box Format\n- YOLO format: [x_center, y_center, width, height], all normalized\
+  \ to [0, 1].\n- If an object is not visible, set target_bbox to null.\n\n## Available\
+  \ Methods\n{available_methods}\n\n## Output Format\nOutput ONLY valid JSON. No explanations,\
+  \ no markdown fences, no comments.\n\n{\n\"task_id\": \"descriptive_task_id\",\n\
+  \"total_steps\": <integer>,\n\"steps\": [\n  {\n    \"step_index\": <integer>,\n\
+  \    \"description\": \"<concise action description>\",\n    \"target_bbox\": [x_center,\
+  \ y_center, width, height] or null,\n    \"method_id\": \"<method_id>\"\n  }\n]\n\
+  }\n\n## Example\n\nInstruction: \"pick up the red cube to the second drawer\"\n\n\
+  {\n\"task_id\": \"red_cube_to_second_drawer\",\n\"total_steps\": 8,\n\"steps\":\
+  \ [\n  {\"step_index\":1, \"description\":\"Reach the second drawer handle\", \"\
+  target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"ik_reach_object_v1\"},\n  {\"\
+  step_index\":2, \"description\":\"Open the second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
+  \ \"method_id\":\"act_drawer_open_v1\"},\n  {\"step_index\":3, \"description\":\"\
+  Reach the red cube\", \"target_bbox\":[0.42,0.55,0.06,0.06], \"method_id\":\"ik_reach_object_v1\"\
+  },\n  {\"step_index\":4, \"description\":\"Grasp the red cube\", \"target_bbox\"\
+  :[0.42,0.55,0.06,0.06], \"method_id\":\"act_gripper_grasp_v1\"},\n  {\"step_index\"\
+  :5, \"description\":\"Reach the open second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
+  \ \"method_id\":\"ik_reach_object_v1\"},\n  {\"step_index\":6, \"description\":\"\
+  Release the red cube into the second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
+  \ \"method_id\":\"act_gripper_release_v1\"},\n  {\"step_index\":7, \"description\"\
+  :\"Reach the second drawer handle\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\"\
+  :\"ik_reach_object_v1\"},\n  {\"step_index\":8, \"description\":\"Close the second\
+  \ drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"act_drawer_close_v1\"\
+  }\n]\n}\n\nWhy this ordering:\n- Drawer is CLOSED → must open before picking up\
+  \ the object.\n- If the destination were an OPEN container (bowl, tray, bin) → skip\
+  \ opening, just pick up the object first, then reach destination, then place.\n\n\
+  CRITICAL RULES RECAP:\n- Every `act_*` step MUST be preceded by `ik_reach_object_v1`.\n\
+  - Only reach an object when the NEXT step interacts with it.\n- Do NOT reach a destination\
+  \ before picking up the object (unless you need to open it first).\n- ALL target_bbox\
+  \ values MUST be normalized to [0, 1]. This means every number must be between 0.0\
+  \ and 1.0.\n  WRONG: [185, 605, 155, 171] ← these are pixel values, NOT normalized.\n\
+  \  CORRECT: [0.29, 0.79, 0.24, 0.22] ← these are normalized (value / image_dimension).\n\
+  \  If you output pixel values instead of normalized values, the plan is INVALID.\n"
 verify:
   enabled: true
   max_retries: 3
-
-# Verification prompt template — {instruction}, {plan_json}, {available_methods} are replaced at runtime
-verify_prompt_template: |
-  You are a robotic plan verifier. Your job is to verify whether a plan is correct.
-
-  ## Instruction
-  {instruction}
-
-  ## Plan to Verify
-  Steps are executed in order from step_index 1, 2, 3, ... Read them sequentially.
-  {plan_json}
-
-  ## Available Methods
-  {available_methods}
-
-  ## CORRECT Patterns — Do NOT reject these
-
-  **Pick up object → place in OPEN container (bowl, tray, bin):**
-  This 4-step pattern is CORRECT:
-  1. ik_reach_object_v1 → target object
-  2. act_gripper_grasp_v1 → target object
-  3. ik_reach_object_v1 → open container (e.g. bowl)
-  4. act_gripper_release_v1 → open container
-  Note: reaching the container AFTER grasping the object is correct. The robot needs to move to the container to place the object.
-
-  **Pick up object → place in CLOSED container (drawer, door):**
-  This 8-step pattern is CORRECT:
-  1. ik_reach_object_v1 → drawer/door
-  2. act_drawer_open_v1 / act_door_open_v1 → drawer/door
-  3. ik_reach_object_v1 → target object
-  4. act_gripper_grasp_v1 → target object
-  5. ik_reach_object_v1 → opened drawer/door
-  6. act_gripper_release_v1 → opened drawer/door
-  7. ik_reach_object_v1 → drawer/door
-  8. act_drawer_close_v1 / act_door_close_v1 → drawer/door
-
-  ## Verification Checklist
-
-  1. **Step ordering**: Steps are executed sequentially by step_index. Verify the ORDER is logical.
-     - For OPEN containers: reach object → grasp → reach container → release. (4 steps)
-     - For CLOSED containers: open container → reach object → grasp → reach container → release → close. (8 steps)
-
-  2. **Action sequencing**: Every `act_*` step MUST be immediately preceded by `ik_reach_object_v1` targeting the SAME object/location.
-
-  3. **Bounding boxes**: Do the target_bbox values approximately match the objects visible in the image?
-     - Values must be normalized [0, 1].
-     - Small variations in bbox coordinates are acceptable.
-
-  4. **Method validity**: All method_id values must be from the available methods list.
-
-  5. **Completeness**: Does the plan accomplish the instruction?
-
-  ## IMPORTANT
-  - Read the steps IN ORDER (step_index 1, 2, 3...). Do not confuse the order.
-  - A plan that picks up FIRST then reaches the destination is CORRECT for open containers.
-  - Only reject a plan if there is a clear, specific error.
-
-  ## Output
-  Output ONLY valid JSON. No explanations, no markdown fences.
-
-  {"verified": true, "reason": "brief reason"} or {"verified": false, "reason": "specific error"}
-
-# Data storage
+verify_prompt_template: "You are a robotic plan verifier. Your job is to verify whether\
+  \ a plan is correct.\n\n## Instruction\n{instruction}\n\n## Plan to Verify\nSteps\
+  \ are executed in order from step_index 1, 2, 3, ... Read them sequentially.\n{plan_json}\n\
+  \n## Available Methods\n{available_methods}\n\n## CORRECT Patterns — Do NOT reject\
+  \ these\n\n**Pick up object → place in OPEN container (bowl, tray, bin):**\nThis\
+  \ 4-step pattern is CORRECT:\n1. ik_reach_object_v1 → target object\n2. act_gripper_grasp_v1\
+  \ → target object\n3. ik_reach_object_v1 → open container (e.g. bowl)\n4. act_gripper_release_v1\
+  \ → open container\nNote: reaching the container AFTER grasping the object is correct.\
+  \ The robot needs to move to the container to place the object.\n\n**Pick up object\
+  \ → place in CLOSED container (drawer, door):**\nThis 8-step pattern is CORRECT:\n\
+  1. ik_reach_object_v1 → drawer/door\n2. act_drawer_open_v1 / act_door_open_v1 →\
+  \ drawer/door\n3. ik_reach_object_v1 → target object\n4. act_gripper_grasp_v1 →\
+  \ target object\n5. ik_reach_object_v1 → opened drawer/door\n6. act_gripper_release_v1\
+  \ → opened drawer/door\n7. ik_reach_object_v1 → drawer/door\n8. act_drawer_close_v1\
+  \ / act_door_close_v1 → drawer/door\n\n## Verification Checklist\n\n1. **Step ordering**:\
+  \ Steps are executed sequentially by step_index. Verify the ORDER is logical.\n\
+  \   - For OPEN containers: reach object → grasp → reach container → release. (4\
+  \ steps)\n   - For CLOSED containers: open container → reach object → grasp → reach\
+  \ container → release → close. (8 steps)\n\n2. **Action sequencing**: Every `act_*`\
+  \ step MUST be immediately preceded by `ik_reach_object_v1` targeting the SAME object/location.\n\
+  \n3. **Bounding boxes**: Do the target_bbox values approximately match the objects\
+  \ visible in the image?\n   - Values must be normalized [0, 1].\n   - Small variations\
+  \ in bbox coordinates are acceptable.\n\n4. **Method validity**: All method_id values\
+  \ must be from the available methods list.\n\n5. **Completeness**: Does the plan\
+  \ accomplish the instruction?\n\n## IMPORTANT\n- Read the steps IN ORDER (step_index\
+  \ 1, 2, 3...). Do not confuse the order.\n- A plan that picks up FIRST then reaches\
+  \ the destination is CORRECT for open containers.\n- Only reject a plan if there\
+  \ is a clear, specific error.\n\n## Output\nOutput ONLY valid JSON. No explanations,\
+  \ no markdown fences.\n\n{\"verified\": true, \"reason\": \"brief reason\"} or {\"\
+  verified\": false, \"reason\": \"specific error\"}\n"
 storage:
-  results_dir: "data/results"
-  images_dir: "data/images"
-
-# Robot / Camera Calibrate (press Start in UI to connect)
+  results_dir: data/results
+  images_dir: data/images
 robot:
-  port: "/dev/tty.usbmodem5B141122411"
-  id: "my_awesome_follower_arm"
+  port: /dev/tty.usbmodem5B141122411
+  id: my_awesome_follower_arm
   cameras:
     top:
       index: 0
@@ -246,8 +152,6 @@ robot:
       index: 1
       w: 640
       h: 480
-
-# Teleop (leader arm controls follower)
 teleop:
-  type: "so101_leader"
-  port: "/dev/tty.usbmodem5B140300651"
+  type: so101_leader
+  port: /dev/tty.usbmodem5B140300651
