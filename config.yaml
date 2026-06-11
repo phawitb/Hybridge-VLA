@@ -155,3 +155,6 @@ robot:
 teleop:
   type: so101_leader
   port: /dev/tty.usbmodem5B140300651
+click_to_move:
+  target_height: 0.0
+  safety_height: 10.0

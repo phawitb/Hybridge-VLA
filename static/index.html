@@ -724,13 +724,17 @@ python main.py
           <h3>Click to Move</h3>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Target height</label>
-            <input type="number" id="cbHeight" value="10" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <input type="number" id="cbHeight" value="0" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
             <span style="font-size:0.82rem;color:#888">cm</span>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Safety height</label>
-            <input type="number" id="cbSafetyHeight" value="15" min="0" max="40" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <input type="number" id="cbSafetyHeight" value="10" min="0" max="40" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
             <span style="font-size:0.82rem;color:#888">cm (min clearance during travel)</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <button class="btn btn-sm" onclick="saveClickToMove()" style="font-size:0.8rem">Save</button>
+            <span id="cbHeightSaveStatus" style="font-size:0.8rem;color:#888"></span>
           </div>
           <p style="font-size:0.8rem;color:#777;margin-bottom:8px">
             Click on the image to move the robot arm to that position.
@@ -964,6 +968,10 @@ async function init() {
   restoreTokens();
   // Config tab
   cfgPopulate();
+  // Click to Move defaults from config
+  const ctm = cfg.click_to_move || {};
+  document.getElementById('cbHeight').value = ctm.target_height ?? 0;
+  document.getElementById('cbSafetyHeight').value = ctm.safety_height ?? 0;
   // Run tab
   buildRunModelSelect();
   // Events
@@ -1693,13 +1701,30 @@ async function cbCompute() {
 
 let cbLiveTimer = null;
 
+async function saveClickToMove() {
+  const st = document.getElementById("cbHeightSaveStatus");
+  const targetH = parseFloat(document.getElementById("cbHeight").value) || 0;
+  const safetyH = parseFloat(document.getElementById("cbSafetyHeight").value) || 0;
+  st.textContent = "Saving...";
+  try {
+    const r = await fetch("/api/config/save", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({click_to_move: {target_height: targetH, safety_height: safetyH}}),
+    });
+    const d = await r.json();
+    st.textContent = d.ok ? "Saved" : "Error";
+    setTimeout(() => st.textContent = "", 2000);
+  } catch(e) { st.textContent = "Error"; }
+}
+
 async function cbMoveTo(u, v) {
   const st = document.getElementById("cbMoveStatus");
   const lp = document.getElementById("cbLivePos");
   st.textContent = `Moving to pixel (${u}, ${v})...`;
   lp.innerHTML = "";
   const heightCm = parseFloat(document.getElementById("cbHeight").value) || 0;
-  const safetyCm = parseFloat(document.getElementById("cbSafetyHeight").value) || 15;
+  const safetyCm = parseFloat(document.getElementById("cbSafetyHeight").value) || 0;
   const r = await fetch("/api/calibrate/move-to", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -1914,6 +1939,8 @@ async function runStep() {
         method_id: step.method_id,
         target_bbox: step.target_bbox,
         description: step.description,
+        height_cm: parseFloat(document.getElementById("cbHeight")?.value) || 0,
+        safety_height_cm: parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0,
       }),
     });
     const d = await r.json();

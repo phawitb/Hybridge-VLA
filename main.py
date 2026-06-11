@@ -143,6 +143,7 @@ async def get_config():
         "camera_top_index": cams.get("top", {}).get("index", 0),
         "camera_wrist_index": cams.get("wrist", {}).get("index", 1),
         "teleop": cfg.get("teleop", {}),
+        "click_to_move": cfg.get("click_to_move", {"target_height": 0, "safety_height": 10}),
     }
 
 
@@ -169,6 +170,11 @@ async def save_config(request: Request):
         cfg["prompt_template"] = data["prompt_template"]
     if "default_instruction" in data:
         cfg["default_instruction"] = data["default_instruction"]
+    if "click_to_move" in data:
+        cfg["click_to_move"] = {
+            "target_height": float(data["click_to_move"].get("target_height", 0)),
+            "safety_height": float(data["click_to_move"].get("safety_height", 0)),
+        }
 
     with open(ROOT / "config.yaml", "w") as f:
         yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -866,7 +872,7 @@ async def calibrate_move_to(request: Request):
         return {"ok": False, "error": "No pixel coordinate"}
 
     height_cm = data.get("height_cm", 0.0)
-    safety_cm = data.get("safety_height_cm", 15.0)
+    safety_cm = data.get("safety_height_cm", 0.0)
     n_steps = int(data.get("n_steps", 15))
 
     target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
@@ -979,8 +985,8 @@ async def run_step(request: Request):
         img_h = cam_cfg.get("h", 480)
         pixel = [bbox[0] * img_w, bbox[1] * img_h]
 
-        height_cm = 10.0
-        safety_cm = 15.0
+        height_cm = float(data.get("height_cm", 0.0))
+        safety_cm = float(data.get("safety_height_cm", 0.0))
 
         target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
         if target is None:
@@ -1035,7 +1041,7 @@ async def run_step(request: Request):
             cfg = load_config()
             cam_cfg = cfg.get("robot", {}).get("cameras", {}).get("top", {})
             pixel = [bbox[0] * cam_cfg.get("w", 640), bbox[1] * cam_cfg.get("h", 480)]
-            target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=10.0)
+            target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=float(data.get("height_cm", 0.0)))
             if target:
                 robot_send_positions(target)
                 await asyncio.sleep(0.5)
