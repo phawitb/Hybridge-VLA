@@ -368,6 +368,10 @@
             <input type="text" id="cfgRobotId" placeholder="my_awesome_follower_arm">
           </div>
         </div>
+      </div>
+
+      <div class="config-card">
+        <h3>Camera</h3>
         <div class="two-col">
           <div class="form-group">
             <label class="form-label">Top Camera Index</label>
@@ -378,6 +382,11 @@
             <input type="number" id="cfgCamWrist" min="0" max="10" step="1" style="width:100px">
           </div>
         </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+          <button class="btn btn-sm" onclick="cfgScanCameras()">Get All Cameras</button>
+          <span id="cfgCamScanStatus" style="font-size:0.82rem;color:#888"></span>
+        </div>
+        <div id="cfgCamScanResult" style="margin-top:10px"></div>
       </div>
 
       <div class="config-card">
@@ -697,6 +706,27 @@ python main.py
         <div id="cbPlaceholder" style="background:#f5f5f5;border:1px solid #d0d0d0;border-radius:8px;padding:40px;text-align:center;color:#999;font-size:0.88rem">
           Start robot in <strong>Debug</strong> tab first, then press <strong>Capture</strong> to take a snapshot.
         </div>
+
+        <div class="cb-wizard-step" id="cbMoveSection" style="display:none;margin-top:14px">
+          <h3>Click to Move</h3>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Target height</label>
+            <input type="number" id="cbHeight" value="0" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <span style="font-size:0.82rem;color:#888">cm</span>
+            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap;margin-left:12px">Safety height</label>
+            <input type="number" id="cbSafetyHeight" value="10" min="0" max="40" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <span style="font-size:0.82rem;color:#888">cm</span>
+            <button class="btn btn-sm" onclick="saveClickToMove()" style="font-size:0.8rem;margin-left:12px">Save</button>
+            <span id="cbHeightSaveStatus" style="font-size:0.8rem;color:#888"></span>
+          </div>
+          <p style="font-size:0.8rem;color:#777;margin-bottom:8px">
+            Click on the image to move the robot arm to that position.
+          </p>
+          <div style="display:flex;gap:18px;flex-wrap:wrap">
+            <div id="cbLivePos" style="flex:1;min-width:200px;font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;color:#555"></div>
+            <div id="cbMoveStatus" style="flex:1;min-width:200px;font-size:0.82rem;color:#555"></div>
+          </div>
+        </div>
       </div>
 
       <div style="flex:0 0 300px;min-width:250px">
@@ -720,28 +750,6 @@ python main.py
           <div id="cbDataList" style="font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;max-height:200px;overflow-y:auto"></div>
         </div>
 
-        <div class="cb-wizard-step" id="cbMoveSection" style="display:none">
-          <h3>Click to Move</h3>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Target height</label>
-            <input type="number" id="cbHeight" value="0" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
-            <span style="font-size:0.82rem;color:#888">cm</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Safety height</label>
-            <input type="number" id="cbSafetyHeight" value="10" min="0" max="40" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
-            <span style="font-size:0.82rem;color:#888">cm (min clearance during travel)</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <button class="btn btn-sm" onclick="saveClickToMove()" style="font-size:0.8rem">Save</button>
-            <span id="cbHeightSaveStatus" style="font-size:0.8rem;color:#888"></span>
-          </div>
-          <p style="font-size:0.8rem;color:#777;margin-bottom:8px">
-            Click on the image to move the robot arm to that position.
-          </p>
-          <div id="cbMoveStatus" style="font-size:0.82rem;color:#555"></div>
-          <div id="cbLivePos" style="margin-top:8px;font-size:0.78rem;font-family:'SF Mono','Menlo',monospace;color:#555"></div>
-        </div>
       </div>
     </div>
 
@@ -921,15 +929,6 @@ bump_height = min(overshoot + 2, 10) degrees
     <span class="status" id="calError" style="display:none"></span>
   </div>
   <div id="calBody" style="display:none">
-    <div class="cal-row-top">
-      <div class="cal-slider-col">
-        <div class="cal-controls">
-          <button class="btn btn-sm" style="background:#34a853" onclick="calSetTorque(true)">Torque ON</button>
-          <button class="btn btn-sm btn-danger" onclick="calSetTorque(false)">Torque OFF</button>
-        </div>
-        <div id="calJoints"></div>
-      </div>
-    </div>
     <div class="cal-row-cams">
       <div class="cal-cam-box">
         <h3>Top View</h3>
@@ -939,6 +938,14 @@ bump_height = min(overshoot + 2, 10) degrees
         <h3>Wrist View</h3>
         <div class="cal-cam-wrap"><img id="cal-cam-wrist" alt="wrist"></div>
       </div>
+    </div>
+    <div class="config-card" style="margin-top:10px">
+      <h3>Robot</h3>
+      <div class="cal-controls" style="margin-bottom:8px">
+        <button class="btn btn-sm" style="background:#34a853" onclick="calSetTorque(true)">Torque ON</button>
+        <button class="btn btn-sm btn-danger" onclick="calSetTorque(false)">Torque OFF</button>
+      </div>
+      <div id="calJoints"></div>
     </div>
   </div>
 </div>
@@ -976,6 +983,20 @@ async function init() {
   buildRunModelSelect();
   // Events
   setupEvents();
+}
+
+async function cfgScanCameras() {
+  const st = document.getElementById('cfgCamScanStatus');
+  const result = document.getElementById('cfgCamScanResult');
+  st.textContent = 'Scanning...';
+  result.innerHTML = '';
+  try {
+    const r = await fetch('/api/cameras/scan');
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error; return; }
+    st.textContent = `Found ${d.count} camera(s)`;
+    result.innerHTML = `<img src="data:image/jpeg;base64,${d.image}" style="max-width:100%;border-radius:8px;border:1px solid #e0e0e0">`;
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
 }
 
 function cfgPopulate() {
@@ -1237,7 +1258,13 @@ async function submit() {
     if (d.bbox_auto_normalized) statusMsg += ' | bbox auto-normalized';
     const v = d.verify;
     if (v && v.enabled) {
-      statusMsg += v.passed ? ` | Verified (attempt ${v.attempts}/${v.max_retries})` : ` | Verification FAILED after ${v.attempts} attempt${v.attempts>1?'s':''}`;
+      if (v.passed) {
+        statusMsg += ` | Verified (attempt ${v.attempts}/${v.max_retries})`;
+      } else {
+        const lastAttempt = v.history?.[v.history.length - 1];
+        const reason = lastAttempt?.verify_result?.reason || 'Unknown reason';
+        statusMsg += ` | Verification FAILED: ${reason}`;
+      }
     } else if (v && !v.enabled) {
       statusMsg += ' | Verify disabled';
     }
@@ -1879,7 +1906,10 @@ async function runPlan() {
     runBuildFlow();
     document.getElementById('runFlowSection').style.display = 'block';
     let msg = `Planned ${d.plan.total_steps} steps in ${d.elapsed}s`;
-    if (d.verify?.enabled) msg += d.verify.passed ? ' (verified)' : ' (verify FAILED)';
+    if (d.verify?.enabled) {
+      if (d.verify.passed) { msg += ' (verified)'; }
+      else { const la = d.verify.history?.[d.verify.history.length-1]; msg += ` (verify FAILED: ${la?.verify_result?.reason || 'Unknown'})`; }
+    }
     st.textContent = msg; st.className='status';
   } catch(e) { st.textContent = e.message; st.className='status error'; }
   finally { btn.disabled = false; }

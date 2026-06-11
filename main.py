@@ -182,6 +182,54 @@ async def save_config(request: Request):
     return {"ok": True}
 
 
+@app.get("/api/cameras/scan")
+async def scan_cameras():
+    """Try to capture a frame from each camera index, vstack them with index label."""
+    import cv2
+    frames = []
+    idx = 0
+    max_idx = 10  # reasonable upper bound
+    while idx < max_idx:
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            cap.release()
+            idx += 1
+            continue
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            idx += 1
+            continue
+        # Draw index label at top-right
+        label = f"idx: {idx}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thickness = 1.2, 3
+        (tw, th), _ = cv2.getTextSize(label, font, scale, thickness)
+        x = frame.shape[1] - tw - 15
+        y = th + 15
+        cv2.rectangle(frame, (x - 8, y - th - 8), (x + tw + 8, y + 8), (0, 0, 0), -1)
+        cv2.putText(frame, label, (x, y), font, scale, (255, 255, 255), thickness)
+        frames.append(frame)
+        idx += 1
+
+    if not frames:
+        return {"ok": False, "error": "No cameras found"}
+
+    # Resize all frames to same height before hstack
+    target_h = max(f.shape[0] for f in frames)
+    resized = []
+    for f in frames:
+        if f.shape[0] != target_h:
+            ratio = target_h / f.shape[0]
+            f = cv2.resize(f, (int(f.shape[1] * ratio), target_h))
+        resized.append(f)
+
+    stacked = np.hstack(resized)
+    _, jpg = cv2.imencode(".jpg", stacked, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+    return {"ok": True, "count": len(frames), "image": b64}
+
+
 @app.post("/api/test/all")
 async def test_all():
     """Run all system tests: robot, cameras, Gemini API."""
@@ -313,12 +361,17 @@ async def infer(
 
     token_usage_total = {"input": 0, "output": 0, "total": 0}
 
+    retry_feedback = ""  # accumulated feedback from failed verifications
+
     async with httpx.AsyncClient(timeout=60) as client:
         for attempt in range(1, max_retries + 1):
             attempt_record = {"attempt": attempt}
 
-            # Step 1: Call Gemini for plan
-            data, elapsed, status_code = await call_gemini(client, url, b64, mime, prompt)
+            # Step 1: Call Gemini for plan (include feedback from previous failed attempt)
+            current_prompt = prompt
+            if retry_feedback:
+                current_prompt = prompt + retry_feedback
+            data, elapsed, status_code = await call_gemini(client, url, b64, mime, current_prompt)
             total_elapsed += elapsed
             attempt_record["infer_elapsed"] = elapsed
 
@@ -350,6 +403,12 @@ async def infer(
                 attempt_record["verify_result"] = {"verified": False, "reason": "Failed to parse valid plan JSON"}
                 verify_info["history"].append(attempt_record)
                 verify_info["attempts"] = attempt
+                retry_feedback = (
+                    f"\n\n## Previous Attempt Failed\n"
+                    f"Your previous response could not be parsed as valid JSON.\n\n"
+                    f"### Your previous response:\n{raw_text[:500]}\n\n"
+                    f"Please output ONLY valid JSON. No explanations, no markdown fences."
+                )
                 continue
 
             # Step 3: Auto-normalize bbox
@@ -382,7 +441,14 @@ async def infer(
                 attempt_record["verify_result"] = {"verified": False, "reason": reason}
                 verify_info["history"].append(attempt_record)
                 verify_info["attempts"] = attempt
-                # Will retry on next iteration
+                # Build feedback for next attempt
+                retry_feedback = (
+                    f"\n\n## Previous Attempt Failed\n"
+                    f"Your previous plan was rejected by the verifier.\n\n"
+                    f"### Your previous plan:\n{plan_json_str}\n\n"
+                    f"### Verifier feedback:\n{reason}\n\n"
+                    f"Please fix the issues and generate a corrected plan."
+                )
 
     # Token limit info
     model_limit = 1048576
@@ -881,6 +947,9 @@ async def calibrate_move_to(request: Request):
 
     current = robot_get_positions()
 
+    # Preserve current gripper position — reach does not touch gripper
+    target["gripper"] = current["gripper"]
+
     # Compute the safety threshold for shoulder_lift
     # Lower shoulder_lift = arm higher.  sl_safe is the max allowed value.
     safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
@@ -993,6 +1062,10 @@ async def run_step(request: Request):
             return {"ok": False, "error": "Interpolation failed"}
 
         current = robot_get_positions()
+
+        # Preserve current gripper position — IK reach does not touch gripper
+        target["gripper"] = current["gripper"]
+
         safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
         sl_safe = safe_target["shoulder_lift"] if safe_target else target["shoulder_lift"]
         sl_start = current["shoulder_lift"]

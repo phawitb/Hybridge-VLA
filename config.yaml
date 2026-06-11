@@ -44,99 +44,114 @@ models:
 default_instruction: pick up the pink bow to the green bowl
 available_methods:
 - ik_reach_object_v1
-- act_gripper_grasp_v1
-- act_gripper_release_v1
-- act_drawer_open_v1
-- act_drawer_close_v1
-- act_door_open_v1
-- act_door_close_v1
+- smolVLA_v1
 prompt_template: "You are a robotic task planner for a Vision-Language-Action (VLA)\
   \ system.\n\n## Task\nConvert a natural language instruction into a step-by-step\
-  \ robotic execution plan.\n\n## Input\n{instruction}\n\n## Robot Constraints\n-\
-  \ Single arm with ONE gripper. No dual-hand manipulation.\n- Cannot hold an object\
-  \ AND operate a drawer/door at the same time.\n\n## MANDATORY Action Sequencing\
-  \ Rules\n\nEvery physical interaction MUST be preceded by `ik_reach_object_v1` targeting\
-  \ that object.\nThis is NON-NEGOTIABLE. No exceptions.\n\nThe valid action patterns\
-  \ are:\n\n**Pick up an object:**\n1. ik_reach_object_v1   → target object\n2. act_gripper_grasp_v1\
-  \ → target object\n\n**Place / release an object at destination:**\n1. ik_reach_object_v1\
-  \     → destination\n2. act_gripper_release_v1 → destination\n\n**Open a drawer\
-  \ (must reach first):**\n1. ik_reach_object_v1 → drawer\n2. act_drawer_open_v1 →\
-  \ drawer\n\n**Close a drawer (must reach first):**\n1. ik_reach_object_v1  → drawer\n\
-  2. act_drawer_close_v1 → drawer\n\n**Open/close a door (must reach first):**\n1.\
-  \ ik_reach_object_v1 → door\n2. act_door_open_v1 or act_door_close_v1 → door\n\n\
-  ## Execution Rules\n- CLOSED containers (drawers, doors) MUST be opened BEFORE picking\
-  \ up the object.\n- OPEN containers (bowls, trays, bins) do NOT need to be opened\
-  \ or reached first. Just pick up the object, then reach the container, then release.\n\
-  - Only ONE action per step. No combined actions.\n- `ik_reach_object_v1` MUST appear\
-  \ before EVERY `act_*` step. Never skip it.\n- Do NOT add unnecessary steps. Only\
-  \ reach an object when the next step interacts with it.\n- Do NOT reach a destination\
-  \ before picking up the object. Pick up first, then reach destination.\n\n## Bounding\
-  \ Box Format\n- YOLO format: [x_center, y_center, width, height], all normalized\
-  \ to [0, 1].\n- If an object is not visible, set target_bbox to null.\n\n## Available\
-  \ Methods\n{available_methods}\n\n## Output Format\nOutput ONLY valid JSON. No explanations,\
-  \ no markdown fences, no comments.\n\n{\n\"task_id\": \"descriptive_task_id\",\n\
-  \"total_steps\": <integer>,\n\"steps\": [\n  {\n    \"step_index\": <integer>,\n\
-  \    \"description\": \"<concise action description>\",\n    \"target_bbox\": [x_center,\
-  \ y_center, width, height] or null,\n    \"method_id\": \"<method_id>\"\n  }\n]\n\
-  }\n\n## Example\n\nInstruction: \"pick up the red cube to the second drawer\"\n\n\
-  {\n\"task_id\": \"red_cube_to_second_drawer\",\n\"total_steps\": 8,\n\"steps\":\
-  \ [\n  {\"step_index\":1, \"description\":\"Reach the second drawer handle\", \"\
-  target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"ik_reach_object_v1\"},\n  {\"\
-  step_index\":2, \"description\":\"Open the second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
-  \ \"method_id\":\"act_drawer_open_v1\"},\n  {\"step_index\":3, \"description\":\"\
-  Reach the red cube\", \"target_bbox\":[0.42,0.55,0.06,0.06], \"method_id\":\"ik_reach_object_v1\"\
-  },\n  {\"step_index\":4, \"description\":\"Grasp the red cube\", \"target_bbox\"\
-  :[0.42,0.55,0.06,0.06], \"method_id\":\"act_gripper_grasp_v1\"},\n  {\"step_index\"\
-  :5, \"description\":\"Reach the open second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
-  \ \"method_id\":\"ik_reach_object_v1\"},\n  {\"step_index\":6, \"description\":\"\
-  Release the red cube into the second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14],\
-  \ \"method_id\":\"act_gripper_release_v1\"},\n  {\"step_index\":7, \"description\"\
-  :\"Reach the second drawer handle\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\"\
-  :\"ik_reach_object_v1\"},\n  {\"step_index\":8, \"description\":\"Close the second\
-  \ drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"act_drawer_close_v1\"\
-  }\n]\n}\n\nWhy this ordering:\n- Drawer is CLOSED → must open before picking up\
-  \ the object.\n- If the destination were an OPEN container (bowl, tray, bin) → skip\
-  \ opening, just pick up the object first, then reach destination, then place.\n\n\
-  CRITICAL RULES RECAP:\n- Every `act_*` step MUST be preceded by `ik_reach_object_v1`.\n\
-  - Only reach an object when the NEXT step interacts with it.\n- Do NOT reach a destination\
-  \ before picking up the object (unless you need to open it first).\n- ALL target_bbox\
-  \ values MUST be normalized to [0, 1]. This means every number must be between 0.0\
-  \ and 1.0.\n  WRONG: [185, 605, 155, 171] ← these are pixel values, NOT normalized.\n\
-  \  CORRECT: [0.29, 0.79, 0.24, 0.22] ← these are normalized (value / image_dimension).\n\
-  \  If you output pixel values instead of normalized values, the plan is INVALID.\n"
+  \ robotic execution plan.\n\n## Input\n{instruction}\n\n## Available Methods\n\n\
+  **ik_reach_object_v1** — Move the gripper to a target position using inverse kinematics\
+  \ (IK). This only moves the arm; it does NOT interact with objects.\n\n**smolVLA_v1**\
+  \ — Execute a manipulation action using the VLA model. The VLA receives the description\
+  \ and autonomously performs the physical interaction (grasp, release, open, close,\
+  \ push, pull, etc.).\n\n## Robot Constraints\n- Single arm with ONE gripper. No\
+  \ dual-hand manipulation.\n- Cannot hold an object AND operate a drawer/door at\
+  \ the same time.\n- The robot arm itself is NOT an object. NEVER include the robot\
+  \ arm, gripper, or any part of the robot as a target object in the plan.\n\n## Action\
+  \ Patterns\n\n**Pick up an object:**\n1. ik_reach_object_v1 → move to the object\n\
+  2. smolVLA_v1 → \"pick up the [object]\"\n\n**Place / release an object at destination:**\n\
+  1. ik_reach_object_v1 → move to the destination\n2. smolVLA_v1 → \"place the [object]\
+  \ on/in the [destination]\"\n\n**Open a drawer (must reach first):**\n1. ik_reach_object_v1\
+  \ → move to the drawer handle\n2. smolVLA_v1 → \"open the drawer\"\n\n**Close a\
+  \ drawer (must reach first):**\n1. ik_reach_object_v1 → move to the drawer handle\n\
+  2. smolVLA_v1 → \"close the drawer\"\n\n**Open/close a door (must reach first):**\n\
+  1. ik_reach_object_v1 → move to the door handle\n2. smolVLA_v1 → \"open/close the\
+  \ door\"\n\n## Execution Rules\n- Every `smolVLA_v1` step MUST be preceded by `ik_reach_object_v1`\
+  \ targeting the same object/location. No exceptions.\n- CLOSED containers (drawers,\
+  \ doors) MUST be opened BEFORE picking up the object.\n- OPEN containers (bowls,\
+  \ trays, bins) do NOT need to be opened. Just pick up the object, then reach the\
+  \ container, then place.\n- Only ONE action per step. No combined actions.\n- Do\
+  \ NOT add unnecessary steps. Only reach an object when the next step interacts with\
+  \ it.\n- Do NOT reach a destination before picking up the object. Pick up first,\
+  \ then reach destination.\n- When the instruction says \"all objects\" or \"every\
+  \ object\", you MUST look at the image carefully and identify ALL distinct objects\
+  \ in the specified area. Create a complete pick-place sequence for EACH object.\
+  \ Missing even one object makes the plan INVALID.\n- The `description` field for\
+  \ `smolVLA_v1` steps is sent directly to the VLA model — write it as a clear, short\
+  \ natural language command.\n\n## Bounding Box Format\n- YOLO format: [x_center,\
+  \ y_center, width, height], all normalized to [0, 1].\n- If an object is not visible,\
+  \ set target_bbox to null.\n\n## Available Methods\n{available_methods}\n\n## Output\
+  \ Format\nOutput ONLY valid JSON. No explanations, no markdown fences, no comments.\n\
+  \n{\n\"task_id\": \"descriptive_task_id\",\n\"total_steps\": <integer>,\n\"steps\"\
+  : [\n  {\n    \"step_index\": <integer>,\n    \"description\": \"<concise action\
+  \ description>\",\n    \"target_bbox\": [x_center, y_center, width, height] or null,\n\
+  \    \"method_id\": \"<method_id>\"\n  }\n]\n}\n\n## Example\n\nInstruction: \"\
+  pick up the red cube to the second drawer\"\n\n{\n\"task_id\": \"red_cube_to_second_drawer\"\
+  ,\n\"total_steps\": 8,\n\"steps\": [\n  {\"step_index\":1, \"description\":\"Reach\
+  \ the second drawer handle\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\"\
+  :\"ik_reach_object_v1\"},\n  {\"step_index\":2, \"description\":\"open the second\
+  \ drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"smolVLA_v1\"\
+  },\n  {\"step_index\":3, \"description\":\"Reach the red cube\", \"target_bbox\"\
+  :[0.42,0.55,0.06,0.06], \"method_id\":\"ik_reach_object_v1\"},\n  {\"step_index\"\
+  :4, \"description\":\"pick up the red cube\", \"target_bbox\":[0.42,0.55,0.06,0.06],\
+  \ \"method_id\":\"smolVLA_v1\"},\n  {\"step_index\":5, \"description\":\"Reach the\
+  \ open second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"\
+  ik_reach_object_v1\"},\n  {\"step_index\":6, \"description\":\"place the red cube\
+  \ into the second drawer\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\"\
+  :\"smolVLA_v1\"},\n  {\"step_index\":7, \"description\":\"Reach the second drawer\
+  \ handle\", \"target_bbox\":[0.18,0.62,0.20,0.14], \"method_id\":\"ik_reach_object_v1\"\
+  },\n  {\"step_index\":8, \"description\":\"close the second drawer\", \"target_bbox\"\
+  :[0.18,0.62,0.20,0.14], \"method_id\":\"smolVLA_v1\"}\n]\n}\n\nWhy this ordering:\n\
+  - Drawer is CLOSED → must open before picking up the object.\n- If the destination\
+  \ were an OPEN container (bowl, tray, bin) → skip opening, just pick up the object\
+  \ first, then reach destination, then place.\n\nCRITICAL RULES RECAP:\n- Every `smolVLA_v1`\
+  \ step MUST be preceded by `ik_reach_object_v1`.\n- Only reach an object when the\
+  \ NEXT step interacts with it.\n- Do NOT reach a destination before picking up the\
+  \ object (unless you need to open it first).\n- \"all objects\" / \"every object\"\
+  \ = count ALL visible objects in the area and plan for EACH one. Do not skip any.\n\
+  - ALL target_bbox values MUST be normalized to [0, 1].\n  WRONG: [185, 605, 155,\
+  \ 171] ← pixel values, NOT normalized.\n  CORRECT: [0.29, 0.79, 0.24, 0.22] ← normalized\
+  \ (value / image_dimension).\n  If you output pixel values instead of normalized\
+  \ values, the plan is INVALID.\n"
 verify:
   enabled: true
   max_retries: 3
 verify_prompt_template: "You are a robotic plan verifier. Your job is to verify whether\
   \ a plan is correct.\n\n## Instruction\n{instruction}\n\n## Plan to Verify\nSteps\
   \ are executed in order from step_index 1, 2, 3, ... Read them sequentially.\n{plan_json}\n\
-  \n## Available Methods\n{available_methods}\n\n## CORRECT Patterns — Do NOT reject\
-  \ these\n\n**Pick up object → place in OPEN container (bowl, tray, bin):**\nThis\
-  \ 4-step pattern is CORRECT:\n1. ik_reach_object_v1 → target object\n2. act_gripper_grasp_v1\
-  \ → target object\n3. ik_reach_object_v1 → open container (e.g. bowl)\n4. act_gripper_release_v1\
-  \ → open container\nNote: reaching the container AFTER grasping the object is correct.\
-  \ The robot needs to move to the container to place the object.\n\n**Pick up object\
-  \ → place in CLOSED container (drawer, door):**\nThis 8-step pattern is CORRECT:\n\
-  1. ik_reach_object_v1 → drawer/door\n2. act_drawer_open_v1 / act_door_open_v1 →\
-  \ drawer/door\n3. ik_reach_object_v1 → target object\n4. act_gripper_grasp_v1 →\
-  \ target object\n5. ik_reach_object_v1 → opened drawer/door\n6. act_gripper_release_v1\
-  \ → opened drawer/door\n7. ik_reach_object_v1 → drawer/door\n8. act_drawer_close_v1\
-  \ / act_door_close_v1 → drawer/door\n\n## Verification Checklist\n\n1. **Step ordering**:\
-  \ Steps are executed sequentially by step_index. Verify the ORDER is logical.\n\
-  \   - For OPEN containers: reach object → grasp → reach container → release. (4\
-  \ steps)\n   - For CLOSED containers: open container → reach object → grasp → reach\
-  \ container → release → close. (8 steps)\n\n2. **Action sequencing**: Every `act_*`\
-  \ step MUST be immediately preceded by `ik_reach_object_v1` targeting the SAME object/location.\n\
-  \n3. **Bounding boxes**: Do the target_bbox values approximately match the objects\
-  \ visible in the image?\n   - Values must be normalized [0, 1].\n   - Small variations\
-  \ in bbox coordinates are acceptable.\n\n4. **Method validity**: All method_id values\
-  \ must be from the available methods list.\n\n5. **Completeness**: Does the plan\
-  \ accomplish the instruction?\n\n## IMPORTANT\n- Read the steps IN ORDER (step_index\
-  \ 1, 2, 3...). Do not confuse the order.\n- A plan that picks up FIRST then reaches\
-  \ the destination is CORRECT for open containers.\n- Only reject a plan if there\
-  \ is a clear, specific error.\n\n## Output\nOutput ONLY valid JSON. No explanations,\
-  \ no markdown fences.\n\n{\"verified\": true, \"reason\": \"brief reason\"} or {\"\
-  verified\": false, \"reason\": \"specific error\"}\n"
+  \n## Available Methods\n{available_methods}\n\n## Important\n- The robot arm itself\
+  \ is NOT an object. Any step that targets the robot arm, gripper, or any part of\
+  \ the robot is INVALID. Reject the plan if found.\n\n## Method Roles\n- **ik_reach_object_v1**\
+  \ — moves the arm to a position using IK. Does NOT interact with objects.\n- **smolVLA_v1**\
+  \ — executes a manipulation action via the VLA model (pick up, place, open, close,\
+  \ etc.). The `description` is sent to the VLA as the command.\n\n## CORRECT Patterns\
+  \ — Do NOT reject these\n\n**Pick up object → place in OPEN container (bowl, tray,\
+  \ bin):**\n4 steps:\n1. ik_reach_object_v1 → target object\n2. smolVLA_v1 → \"pick\
+  \ up the [object]\"\n3. ik_reach_object_v1 → open container\n4. smolVLA_v1 → \"\
+  place the [object] in the [container]\"\n\n**Pick up object → place in CLOSED container\
+  \ (drawer, door):**\n8 steps:\n1. ik_reach_object_v1 → drawer/door\n2. smolVLA_v1\
+  \ → \"open the drawer/door\"\n3. ik_reach_object_v1 → target object\n4. smolVLA_v1\
+  \ → \"pick up the [object]\"\n5. ik_reach_object_v1 → opened drawer/door\n6. smolVLA_v1\
+  \ → \"place the [object] into the drawer/door\"\n7. ik_reach_object_v1 → drawer/door\n\
+  8. smolVLA_v1 → \"close the drawer/door\"\n\n## Verification Checklist\n\n1. **Step\
+  \ ordering**: Steps are executed sequentially by step_index. Verify the ORDER is\
+  \ logical.\n   - For OPEN containers: reach → pick up → reach destination → place.\
+  \ (4 steps)\n   - For CLOSED containers: reach → open → reach object → pick up →\
+  \ reach container → place → reach → close. (8 steps)\n\n2. **Action sequencing**:\
+  \ Every `smolVLA_v1` step MUST be immediately preceded by `ik_reach_object_v1` targeting\
+  \ the SAME object/location.\n\n3. **Bounding boxes**: Do the target_bbox values\
+  \ approximately match the objects visible in the image?\n   - Values must be normalized\
+  \ [0, 1].\n   - Small variations in bbox coordinates are acceptable.\n\n4. **Method\
+  \ validity**: All method_id values must be from the available methods list.\n\n\
+  5. **Completeness**: Does the plan accomplish the instruction?\n   - CRITICAL: If\
+  \ the instruction says \"all objects\" or \"every object\", count ALL distinct objects\
+  \ visible in the specified area of the image. The plan MUST include a pick-place\
+  \ sequence for EACH one. If any object is missing, REJECT the plan.\n\n6. **VLA\
+  \ descriptions**: Are the `description` fields for `smolVLA_v1` steps clear, short,\
+  \ and actionable?\n\n## IMPORTANT\n- Read the steps IN ORDER (step_index 1, 2, 3...).\
+  \ Do not confuse the order.\n- A plan that picks up FIRST then reaches the destination\
+  \ is CORRECT for open containers.\n- Only reject a plan if there is a clear, specific\
+  \ error.\n\n## Output\nOutput ONLY valid JSON. No explanations, no markdown fences.\n\
+  \n{\"verified\": true, \"reason\": \"brief reason\"} or {\"verified\": false, \"\
+  reason\": \"specific error\"}\n"
 storage:
   results_dir: data/results
   images_dir: data/images
