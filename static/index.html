@@ -887,10 +887,15 @@ height   = box_height / image_height</code></pre>
         <!-- After calibration: click-to-move -->
         <div class="cb-wizard-step" id="cbMoveSection" style="display:none">
           <h3>Click to Move</h3>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Height above surface</label>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Target height</label>
             <input type="number" id="cbHeight" value="10" min="0" max="30" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
             <span style="font-size:0.82rem;color:#888">cm</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <label style="font-size:0.82rem;font-weight:600;color:#555;white-space:nowrap">Safety height</label>
+            <input type="number" id="cbSafetyHeight" value="15" min="0" max="40" step="1" style="width:60px;padding:4px 8px;font-size:0.85rem;border-radius:6px;border:1px solid #d0d0d0;text-align:center">
+            <span style="font-size:0.82rem;color:#888">cm (min clearance during travel)</span>
           </div>
           <p style="font-size:0.8rem;color:#777;margin-bottom:8px">
             Click on the image to move the robot arm to that position.
@@ -1589,10 +1594,11 @@ async function cbMoveTo(u, v) {
   lp.innerHTML = "";
 
   const heightCm = parseFloat(document.getElementById("cbHeight").value) || 0;
+  const safetyCm = parseFloat(document.getElementById("cbSafetyHeight").value) || 15;
   const r = await fetch("/api/calibrate/move-to", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({pixel: [u, v], height_cm: heightCm}),
+    body: JSON.stringify({pixel: [u, v], height_cm: heightCm, safety_height_cm: safetyCm}),
   });
   const d = await r.json();
   if (!d.ok) {
@@ -1600,8 +1606,10 @@ async function cbMoveTo(u, v) {
     return;
   }
 
-  // Show target joints
-  let targetHtml = `<strong>Target:</strong> pixel (${u}, ${v})<br>`;
+  // Show path + target joints
+  const pathLabel = d.path === "direct" ? "direct" : `arc (safety ${d.safety_height_cm}cm)`;
+  let targetHtml = `<strong>Path:</strong> ${pathLabel}<br>`;
+  targetHtml += `<strong>Target:</strong> pixel (${u}, ${v})<br>`;
   for (const [k, val] of Object.entries(d.target_joints)) {
     const unit = k === "gripper" ? "%" : "°";
     targetHtml += `  ${k}: <strong>${val}${unit}</strong><br>`;

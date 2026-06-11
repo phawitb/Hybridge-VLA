@@ -729,27 +729,85 @@ async def calibrate_reset():
 
 @app.post("/api/calibrate/move-to")
 async def calibrate_move_to(request: Request):
-    """Click on top view → move robot to that position using interpolation from calibration points."""
+    """Click on top view → move robot with smooth safe path.
+
+    If the direct path stays above safety_height → move directly.
+    Otherwise → smooth arc that lifts shoulder_lift with a sine curve,
+    keeping the arm above safety_height during transit.
+    """
     if not robot_state["connected"]:
         return {"ok": False, "error": "Robot not connected"}
     if not calib_state["homography"]:
         return {"ok": False, "error": "Not calibrated"}
 
     data = await request.json()
-    pixel = data.get("pixel")  # [u, v]
+    pixel = data.get("pixel")
     if not pixel:
         return {"ok": False, "error": "No pixel coordinate"}
 
     height_cm = data.get("height_cm", 0.0)
-    joints = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
-    if joints is None:
+    safety_cm = data.get("safety_height_cm", 15.0)
+    n_steps = int(data.get("n_steps", 15))
+
+    target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
+    if target is None:
         return {"ok": False, "error": "Interpolation failed — need 4 valid calibration points"}
 
-    robot_send_positions(joints)
+    current = robot_get_positions()
+
+    # Compute the safety threshold for shoulder_lift
+    # Lower shoulder_lift = arm higher.  sl_safe is the max allowed value.
+    safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
+    sl_safe = safe_target["shoulder_lift"] if safe_target else target["shoulder_lift"]
+
+    sl_start = current["shoulder_lift"]
+    sl_end = target["shoulder_lift"]
+
+    # Check if the direct linear path is already safe
+    # (both endpoints and everything in between stay ≤ sl_safe)
+    path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
+
+    if path_safe:
+        # Direct move — no safety concern
+        robot_send_positions(target)
+        return {
+            "ok": True, "pixel": pixel, "target_joints": target,
+            "path": "direct", "safety_height_cm": safety_cm,
+        }
+
+    # ── Smooth arc path ──
+    # All joints: linear interpolation current → target
+    # shoulder_lift: linear - bump(t)
+    #   bump(t) = bump_height × sin(πt)   → 0 at endpoints, max at midpoint
+    # bump_height = just enough to clear safety + small margin
+
+    sl_max = max(sl_start, sl_end)
+    overshoot = max(0.0, sl_max - sl_safe)
+    bump_height = min(overshoot + 2.0, 10.0)  # cap at 10° to prevent folding backward
+
+    joint_names = list(current.keys())
+    step_ms = 40
+
+    for i in range(1, n_steps + 1):
+        t = i / n_steps
+        wp = {}
+        for j in joint_names:
+            wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
+
+        bump = bump_height * math.sin(math.pi * t)
+        wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
+
+        robot_send_positions(wp)
+        await asyncio.sleep(step_ms / 1000.0)
+
+    # Final — ensure exact target
+    robot_send_positions(target)
+
     return {
-        "ok": True,
-        "pixel": pixel,
-        "target_joints": joints,
+        "ok": True, "pixel": pixel, "target_joints": target,
+        "path": "arc", "n_steps": n_steps,
+        "bump_height": round(bump_height, 2),
+        "safety_height_cm": safety_cm,
     }
 
 
