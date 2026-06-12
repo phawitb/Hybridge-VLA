@@ -325,7 +325,15 @@
   /* Config form card */
   .config-card { background: #fff; border: 1px solid #d0d0d0; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
   .config-card h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 12px; }
+  .viz-stat { background:#f8f9fa;border-radius:8px;padding:10px 14px;min-width:100px }
+  .viz-stat-label { font-size:0.7rem;color:#888;text-transform:uppercase;letter-spacing:0.5px }
+  .viz-stat-value { font-size:1.1rem;font-weight:700;color:#333;margin-top:2px }
+  .viz-ep-item { padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;transition:background 0.15s }
+  .viz-ep-item:hover { background:#f0f4ff }
+  .viz-ep-item.active { background:#e8f0fe;color:#1a73e8;font-weight:600;border-left:3px solid #1a73e8 }
+  .viz-ep-item .ep-meta { font-size:0.75rem;color:#999;margin-top:2px }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -336,6 +344,8 @@
     <div class="nav-item active" data-tab="config-test">Config & Test</div>
     <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
     <div class="nav-item" data-tab="run">Run</div>
+    <div class="nav-item" data-tab="data-collect">Data Collection</div>
+    <div class="nav-item" data-tab="visualize">Visualize Data</div>
   </div>
 </div>
 
@@ -918,6 +928,268 @@ bump_height = min(overshoot + 2, 10) degrees
 
   </div><!-- /page-run -->
 
+  <!-- ==================== Data Collection ==================== -->
+  <div class="page" id="page-data-collect">
+    <div class="page-title"><span>Data</span> Collection</div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="dc-config">1. Config</button>
+      <button class="inner-tab" data-inner="dc-verify">2. Verify</button>
+      <button class="inner-tab" data-inner="dc-mimic">3. Test Mimic</button>
+      <button class="inner-tab" data-inner="dc-collect">4. Collect</button>
+    </div>
+
+    <!-- ── DC Config ── -->
+    <div class="inner-page active" id="inner-dc-config">
+      <div class="config-card">
+        <h3>Hardware Settings</h3>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Robot Port</label>
+            <input type="text" id="dcRobotPort" placeholder="/dev/tty.usbmodem...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Robot ID</label>
+            <input type="text" id="dcRobotId" placeholder="my_awesome_follower_arm">
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Teleop Port</label>
+            <input type="text" id="dcTeleopPort" placeholder="/dev/tty.usbmodem...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Teleop ID</label>
+            <input type="text" id="dcTeleopId" placeholder="my_awesome_leader_arm">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Teleop Type</label>
+            <input type="text" id="dcTeleopType" placeholder="so101_leader">
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Top Camera Index</label>
+            <input type="number" id="dcCamTop" min="0" max="10" step="1" style="width:100px">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Wrist Camera Index</label>
+            <input type="number" id="dcCamWrist" min="0" max="10" step="1" style="width:100px">
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn" onclick="dcSaveConfig()">Save Config</button>
+        <span id="dcSaveStatus" style="font-size:0.82rem;color:#888"></span>
+      </div>
+    </div>
+
+    <!-- ── DC Verify ── -->
+    <div class="inner-page" id="inner-dc-verify">
+      <div class="config-card">
+        <h3>Pre-flight Checklist</h3>
+        <p style="font-size:0.85rem;color:#666;margin-bottom:14px">
+          Verify all hardware is connected and ready before recording.
+        </p>
+        <div id="dcChecklist" style="font-size:0.9rem;line-height:2.2">
+          <div style="color:#999">Click "Run All Checks" to start verification.</div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+          <button class="btn" onclick="dcRunVerify()" id="dcVerifyBtn">Run All Checks</button>
+          <span id="dcVerifyStatus" style="font-size:0.82rem;color:#888"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DC Test Mimic ── -->
+    <div class="inner-page" id="inner-dc-mimic">
+      <div class="config-card">
+        <h3>Test Teleoperation</h3>
+        <p style="font-size:0.85rem;color:#666;margin-bottom:14px">
+          Test that the leader arm correctly controls the follower before recording data.
+          Move the leader arm and verify the follower mirrors the movements.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px">
+          <button class="btn" id="dcTeleopBtn" onclick="dcToggleTeleop()" style="background:#34a853">Start Teleop</button>
+          <span id="dcTeleopStatus" style="font-size:0.85rem;color:#888">Stopped</span>
+        </div>
+        <p style="font-size:0.82rem;color:#999">
+          Use the right panel cameras to observe the robot movements.
+          When satisfied, stop teleop and proceed to the Collect tab.
+        </p>
+      </div>
+
+      <div class="config-card">
+        <h3>Log</h3>
+        <div id="dcTeleopLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start teleop...</div>
+      </div>
+    </div>
+
+    <!-- ── DC Collect ── -->
+    <div class="inner-page" id="inner-dc-collect">
+      <div class="config-card">
+        <h3>Dataset Settings</h3>
+        <div class="form-group">
+          <label class="form-label">Dataset Name</label>
+          <input type="text" id="dcDatasetName" placeholder="so101-pick-place" oninput="dcAutoFillDataset()">
+        </div>
+        <div id="dcAutoFields" style="margin-top:8px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:0.82rem;color:#888">repo_id: <span id="dcRepoIdPreview" style="color:#555"></span></span>
+            <span style="font-size:0.82rem;color:#888;margin-left:16px">root: <span id="dcDatasetRootPreview" style="color:#555"></span></span>
+            <button class="btn btn-sm" onclick="dcToggleEditPaths()" id="dcEditPathsBtn" style="font-size:0.72rem;padding:2px 8px;margin-left:8px">Edit</button>
+          </div>
+          <div id="dcEditPathsFields" style="display:none">
+            <div class="two-col">
+              <div class="form-group">
+                <label class="form-label">Dataset Name (repo_id)</label>
+                <input type="text" id="dcRepoId" placeholder="phawitbinabik/so101-pick-place">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Dataset Root</label>
+                <input type="text" id="dcDatasetRoot" placeholder="./data/so101-pick-place">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-card">
+        <h3>Recording Settings</h3>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Task Description</label>
+            <input type="text" id="dcTask" placeholder="pick up the pink bow to the green bowl">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Number of Episodes</label>
+            <input type="number" id="dcNumEpisodes" value="50" min="1" max="9999" style="width:100px">
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Encoder Threads</label>
+            <input type="number" id="dcEncoderThreads" value="4" min="1" max="16" style="width:80px">
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <h4 style="font-size:0.9rem;margin:0 0 8px 0;color:#555">Top Camera</h4>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <div class="form-group"><label class="form-label">FPS</label><input type="number" id="dcTopFps" value="30" min="1" max="60" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">Width</label><input type="number" id="dcTopWidth" value="320" min="160" max="1920" step="16" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">Height</label><input type="number" id="dcTopHeight" value="240" min="120" max="1080" step="16" style="width:70px"></div>
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <h4 style="font-size:0.9rem;margin:0 0 8px 0;color:#555">Wrist Camera</h4>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <div class="form-group"><label class="form-label">FPS</label><input type="number" id="dcWristFps" value="30" min="1" max="60" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">Width</label><input type="number" id="dcWristWidth" value="320" min="160" max="1920" step="16" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">Height</label><input type="number" id="dcWristHeight" value="240" min="120" max="1080" step="16" style="width:70px"></div>
+          </div>
+        </div>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="dcPushHub"> Push to Hugging Face Hub after recording
+          </label>
+          <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="dcResume"> Resume previous recording session
+          </label>
+        </div>
+      </div>
+
+      <div class="config-card">
+        <h3>Recording</h3>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+          <button class="btn" id="dcRecordBtn" onclick="dcToggleRecord()" style="background:#34a853">Start Recording</button>
+          <button class="btn btn-sm btn-danger" onclick="dcStopRecord()" id="dcStopBtn" style="display:none">Stop & Finish</button>
+          <span id="dcRecordStatus" style="font-size:0.85rem;color:#888">Not recording</span>
+        </div>
+
+        <div id="dcRecordingInfo" style="display:none">
+          <div style="display:flex;gap:24px;margin-bottom:14px;flex-wrap:wrap">
+            <div>
+              <span style="font-size:0.8rem;color:#888;display:block">Elapsed</span>
+              <span id="dcElapsed" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace">00:00</span>
+            </div>
+            <div>
+              <span style="font-size:0.8rem;color:#888;display:block">Dataset</span>
+              <span id="dcCurrentDataset" style="font-size:0.95rem;font-weight:600"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-card">
+        <h3>Log</h3>
+        <div id="dcLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:350px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">
+          Waiting to start recording...
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /page-data-collect -->
+
+  <!-- ==================== Visualize Data ==================== -->
+  <div class="page" id="page-visualize">
+    <div class="page-title"><span>Visualize</span> Data</div>
+
+    <!-- Dataset selector row -->
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <select id="vizDatasetSelect" style="min-width:250px;padding:6px 10px;border-radius:6px;border:1px solid #d0d0d0;font-size:0.9rem">
+        <option value="">-- Select dataset --</option>
+      </select>
+      <button class="btn btn-sm" onclick="vizRefreshDatasets()">Refresh</button>
+      <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
+    </div>
+
+    <div id="vizInfoSection" style="display:none">
+      <!-- Info bar -->
+      <div id="vizInfoGrid" style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88rem;margin-bottom:16px"></div>
+
+      <!-- Main 2-column layout -->
+      <div style="display:flex;gap:16px;align-items:flex-start">
+
+        <!-- Left: player area -->
+        <div style="flex:1;min-width:0">
+          <!-- Playback controls -->
+          <div class="config-card" style="margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+              <button class="btn btn-sm" id="vizPlayBtn" onclick="vizTogglePlay()" style="background:#34a853;min-width:70px">Play</button>
+              <span id="vizTimeDisplay" style="font-size:0.95rem;font-weight:600;font-family:'SF Mono','Menlo',monospace;color:#333;min-width:50px">0.0s</span>
+              <span id="vizEpisodeInfo" style="font-size:0.82rem;color:#888"></span>
+            </div>
+            <input type="range" id="vizScrubber" min="0" max="100" value="0" step="0.1" style="width:100%" oninput="vizScrub(this.value)">
+          </div>
+
+          <!-- Videos side by side -->
+          <div id="vizVideos" style="display:flex;gap:12px;margin-bottom:12px"></div>
+
+          <!-- Joint chart -->
+          <div class="config-card">
+            <h3>Joint Trajectories</h3>
+            <div style="position:relative">
+              <canvas id="vizChart" style="width:100%;max-height:300px"></canvas>
+              <div id="vizChartCursor" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(234,67,53,0.7);pointer-events:none;display:none"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: episode list -->
+        <div style="width:220px;flex-shrink:0">
+          <div style="background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden">
+            <div style="padding:10px 14px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;font-size:0.82rem;font-weight:700;color:#1a73e8">Episodes</div>
+            <div id="vizEpisodeList" style="max-height:calc(100vh - 260px);overflow-y:auto"></div>
+          </div>
+          <!-- hidden select for compatibility -->
+          <select id="vizEpisodeSelect" style="display:none"></select>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- /page-visualize -->
+
 </div><!-- /main-content -->
 
 <!-- Right panel: Camera & Teleop (always visible) -->
@@ -979,6 +1251,10 @@ async function init() {
   const ctm = cfg.click_to_move || {};
   document.getElementById('cbHeight').value = ctm.target_height ?? 0;
   document.getElementById('cbSafetyHeight').value = ctm.safety_height ?? 0;
+  // Data Collection tab
+  dcPopulate();
+  // Visualize tab
+  vizRefreshDatasets();
   // Run tab
   buildRunModelSelect();
   // Events
@@ -1183,6 +1459,12 @@ function setupEvents() {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
       document.getElementById('page-'+el.dataset.tab).classList.add('active');
       el.classList.add('active');
+      // Hide right panel for Data Collection and Visualize tabs
+      const rp = document.querySelector('.right-panel');
+      if (rp) {
+        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize';
+        rp.style.display = hidePanel ? 'none' : '';
+      }
     });
   });
   // Inner tabs (scoped to parent page)
@@ -1990,6 +2272,537 @@ async function runStep() {
   }
   btn.disabled = false;
 }
+
+// ══════════ Data Collection ══════════
+
+let dcPollTimer = null;
+
+function dcPopulate() {
+  const dc = cfg.data_collection || {};
+  // Dataset name: extract from repo_id (last part after /)
+  const repoId = dc.repo_id || '';
+  const datasetName = repoId.includes('/') ? repoId.split('/').pop() : repoId;
+  document.getElementById('dcDatasetName').value = datasetName;
+  document.getElementById('dcRepoId').value = repoId;
+  document.getElementById('dcDatasetRoot').value = dc.dataset_root || '';
+  dcAutoFillDataset();
+  // Recording settings
+  document.getElementById('dcTask').value = dc.task || '';
+  document.getElementById('dcNumEpisodes').value = dc.num_episodes ?? 50;
+  document.getElementById('dcEncoderThreads').value = dc.encoder_threads ?? 4;
+  // Per-camera settings
+  const topCam = dc.cameras?.top || {};
+  const wristCam = dc.cameras?.wrist || {};
+  document.getElementById('dcTopFps').value = topCam.fps ?? dc.fps ?? 30;
+  document.getElementById('dcTopWidth').value = topCam.width ?? dc.cam_width ?? 320;
+  document.getElementById('dcTopHeight').value = topCam.height ?? dc.cam_height ?? 240;
+  document.getElementById('dcWristFps').value = wristCam.fps ?? dc.fps ?? 30;
+  document.getElementById('dcWristWidth').value = wristCam.width ?? dc.cam_width ?? 320;
+  document.getElementById('dcWristHeight').value = wristCam.height ?? dc.cam_height ?? 240;
+  document.getElementById('dcPushHub').checked = dc.push_to_hub || false;
+  document.getElementById('dcResume').checked = dc.resume || false;
+  // Hardware fields
+  const tel = cfg.teleop || {};
+  document.getElementById('dcRobotPort').value = cfg.robot_port || '';
+  document.getElementById('dcRobotId').value = cfg.robot_id || '';
+  document.getElementById('dcTeleopType').value = tel.type || 'so101_leader';
+  document.getElementById('dcTeleopPort').value = tel.port || '';
+  document.getElementById('dcTeleopId').value = tel.id || 'my_awesome_leader_arm';
+  document.getElementById('dcCamTop').value = cfg.camera_top_index ?? 0;
+  document.getElementById('dcCamWrist').value = cfg.camera_wrist_index ?? 1;
+}
+
+function dcAutoFillDataset() {
+  const name = document.getElementById('dcDatasetName').value.trim();
+  const repoId = name ? `phawitbinabik/${name}` : '';
+  const root = name ? `./data/${name}` : '';
+  document.getElementById('dcRepoIdPreview').textContent = repoId || '—';
+  document.getElementById('dcDatasetRootPreview').textContent = root || '—';
+  // Only auto-fill if not in edit mode
+  if (document.getElementById('dcEditPathsFields').style.display === 'none') {
+    document.getElementById('dcRepoId').value = repoId;
+    document.getElementById('dcDatasetRoot').value = root;
+  }
+}
+
+function dcToggleEditPaths() {
+  const fields = document.getElementById('dcEditPathsFields');
+  const btn = document.getElementById('dcEditPathsBtn');
+  if (fields.style.display === 'none') {
+    fields.style.display = 'block';
+    btn.textContent = 'Auto';
+  } else {
+    fields.style.display = 'none';
+    btn.textContent = 'Edit';
+    dcAutoFillDataset(); // re-apply auto values
+  }
+}
+
+async function dcSaveConfig() {
+  const st = document.getElementById('dcSaveStatus');
+  st.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/config/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        robot_port: document.getElementById('dcRobotPort').value,
+        robot_id: document.getElementById('dcRobotId').value,
+        camera_top_index: parseInt(document.getElementById('dcCamTop').value) || 0,
+        camera_wrist_index: parseInt(document.getElementById('dcCamWrist').value) || 1,
+        teleop: {
+          type: document.getElementById('dcTeleopType').value,
+          port: document.getElementById('dcTeleopPort').value,
+          id: document.getElementById('dcTeleopId').value,
+        },
+        data_collection: {
+          repo_id: document.getElementById('dcRepoId').value,
+          dataset_root: document.getElementById('dcDatasetRoot').value,
+          task: document.getElementById('dcTask').value,
+          num_episodes: parseInt(document.getElementById('dcNumEpisodes').value) || 50,
+          encoder_threads: parseInt(document.getElementById('dcEncoderThreads').value) || 4,
+          push_to_hub: document.getElementById('dcPushHub').checked,
+          resume: document.getElementById('dcResume').checked,
+          cameras: {
+            top: {
+              fps: parseInt(document.getElementById('dcTopFps').value) || 30,
+              width: parseInt(document.getElementById('dcTopWidth').value) || 320,
+              height: parseInt(document.getElementById('dcTopHeight').value) || 240,
+            },
+            wrist: {
+              fps: parseInt(document.getElementById('dcWristFps').value) || 30,
+              width: parseInt(document.getElementById('dcWristWidth').value) || 320,
+              height: parseInt(document.getElementById('dcWristHeight').value) || 240,
+            },
+          },
+        }
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = 'Saved!';
+      // Refresh cfg
+      const r2 = await fetch('/api/config');
+      cfg = await r2.json();
+    } else {
+      st.textContent = 'Error saving';
+    }
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+  setTimeout(() => st.textContent = '', 3000);
+}
+
+async function dcRunVerify() {
+  const btn = document.getElementById('dcVerifyBtn');
+  const st = document.getElementById('dcVerifyStatus');
+  const list = document.getElementById('dcChecklist');
+  btn.disabled = true;
+  st.textContent = 'Checking...';
+  list.innerHTML = '<div style="color:#888">Running checks...</div>';
+  try {
+    const r = await fetch('/api/datacollect/verify', {method: 'POST'});
+    const d = await r.json();
+    let html = '';
+    d.checks.forEach(c => {
+      const icon = c.ok ? '<span style="color:#34a853;font-weight:700">&#10003;</span>' : '<span style="color:#d93025;font-weight:700">&#10007;</span>';
+      const detail = c.ok ? `<span style="color:#888">${c.detail}</span>` : `<span style="color:#d93025">${c.error}</span>`;
+      html += `<div>${icon} &nbsp;<b>${c.name}</b> &mdash; ${detail}</div>`;
+    });
+    list.innerHTML = html;
+    st.textContent = d.ok ? 'All checks passed!' : 'Some checks failed';
+    st.style.color = d.ok ? '#34a853' : '#d93025';
+  } catch(e) {
+    list.innerHTML = `<div style="color:#d93025">Error: ${e.message}</div>`;
+    st.textContent = '';
+  }
+  btn.disabled = false;
+}
+
+let dcTeleopRunning = false;
+let dcTeleopPollTimer = null;
+
+async function dcToggleTeleop() {
+  const btn = document.getElementById('dcTeleopBtn');
+  const st = document.getElementById('dcTeleopStatus');
+  btn.disabled = true;
+  if (!dcTeleopRunning) {
+    try {
+      const r = await fetch('/api/teleop/start', {method:'POST'});
+      const d = await r.json();
+      if (d.ok) {
+        dcTeleopRunning = true;
+        btn.textContent = 'Stop Teleop';
+        btn.style.background = '#d93025';
+        st.textContent = 'Teleop running';
+        st.style.color = '#34a853';
+        document.getElementById('dcTeleopLog').textContent = 'Starting teleop...';
+        dcTeleopPollTimer = setInterval(dcPollTeleop, 1000);
+      } else {
+        dcTeleopRunning = false;
+        btn.textContent = 'Start Teleop';
+        btn.style.background = '#34a853';
+        st.textContent = d.error || 'Failed to start';
+        st.style.color = '#d93025';
+      }
+    } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+  } else {
+    try {
+      const r = await fetch('/api/teleop/stop', {method:'POST'});
+      const d = await r.json();
+      if (d.ok) {
+        dcTeleopRunning = false;
+        if (dcTeleopPollTimer) { clearInterval(dcTeleopPollTimer); dcTeleopPollTimer = null; }
+        btn.textContent = 'Start Teleop';
+        btn.style.background = '#34a853';
+        st.textContent = 'Stopped';
+        st.style.color = '#888';
+      } else {
+        st.textContent = d.error || 'Failed to stop';
+        st.style.color = '#d93025';
+      }
+    } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+  }
+  btn.disabled = false;
+}
+
+async function dcPollTeleop() {
+  try {
+    const r = await fetch('/api/teleop/status');
+    const d = await r.json();
+    if (d.logs && d.logs.length) {
+      const logDiv = document.getElementById('dcTeleopLog');
+      logDiv.textContent = d.logs.join('\n');
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    if (!d.running && dcTeleopRunning) {
+      dcTeleopRunning = false;
+      if (dcTeleopPollTimer) { clearInterval(dcTeleopPollTimer); dcTeleopPollTimer = null; }
+      document.getElementById('dcTeleopBtn').textContent = 'Start Teleop';
+      document.getElementById('dcTeleopBtn').style.background = '#34a853';
+      document.getElementById('dcTeleopStatus').textContent = 'Process ended';
+      document.getElementById('dcTeleopStatus').style.color = '#888';
+    }
+  } catch(e) { /* ignore poll errors */ }
+}
+
+async function dcToggleRecord() {
+  const btn = document.getElementById('dcRecordBtn');
+  const stopBtn = document.getElementById('dcStopBtn');
+  const st = document.getElementById('dcRecordStatus');
+  const info = document.getElementById('dcRecordingInfo');
+  btn.disabled = true;
+  try {
+    // Save all settings before starting
+    await dcSaveConfig();
+    const r = await fetch('/api/datacollect/start', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      btn.style.display = 'none';
+      stopBtn.style.display = '';
+      st.textContent = 'Recording...';
+      st.style.color = '#34a853';
+      info.style.display = '';
+      document.getElementById('dcCurrentDataset').textContent = document.getElementById('dcRepoId').value;
+      dcStartPoll();
+    } else {
+      st.textContent = d.error || 'Failed to start';
+      st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+  btn.disabled = false;
+}
+
+async function dcStopRecord() {
+  const btn = document.getElementById('dcStopBtn');
+  const recordBtn = document.getElementById('dcRecordBtn');
+  const st = document.getElementById('dcRecordStatus');
+  btn.disabled = true;
+  try {
+    await fetch('/api/datacollect/stop', {method:'POST'});
+    dcStopPoll();
+    btn.style.display = 'none';
+    recordBtn.style.display = '';
+    st.textContent = 'Recording finished';
+    st.style.color = '#888';
+  } catch(e) { st.textContent = e.message; }
+  btn.disabled = false;
+}
+
+function dcStartPoll() {
+  dcStopPoll();
+  dcPollTimer = setInterval(dcPollStatus, 1000);
+}
+
+function dcStopPoll() {
+  if (dcPollTimer) { clearInterval(dcPollTimer); dcPollTimer = null; }
+}
+
+async function dcPollStatus() {
+  try {
+    const r = await fetch('/api/datacollect/status');
+    const d = await r.json();
+    // Update elapsed
+    const mins = Math.floor(d.elapsed / 60);
+    const secs = Math.floor(d.elapsed % 60);
+    document.getElementById('dcElapsed').textContent =
+      String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    // Update log
+    if (d.logs && d.logs.length) {
+      const logDiv = document.getElementById('dcLog');
+      logDiv.textContent = d.logs.join('\n');
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    // Auto-stop if process ended
+    if (!d.running) {
+      dcStopPoll();
+      document.getElementById('dcStopBtn').style.display = 'none';
+      document.getElementById('dcRecordBtn').style.display = '';
+      document.getElementById('dcRecordStatus').textContent = 'Recording finished';
+      document.getElementById('dcRecordStatus').style.color = '#888';
+    }
+  } catch(e) { /* ignore poll errors */ }
+}
+
+// ══════════ Visualize Data ══════════
+
+let vizCurrentDataset = null;
+let vizChart = null;
+let vizEpisodesData = [];
+let vizPlaying = false;
+let vizAnimFrame = null;
+let vizEpStart = 0;  // video start timestamp for current episode
+let vizEpEnd = 0;    // video end timestamp
+let vizFrameCount = 0;
+
+async function vizRefreshDatasets() {
+  const sel = document.getElementById('vizDatasetSelect');
+  const st = document.getElementById('vizDatasetStatus');
+  st.textContent = 'Loading...';
+  try {
+    const r = await fetch('/api/datasets');
+    const d = await r.json();
+    sel.innerHTML = '<option value="">-- Select dataset --</option>';
+    d.datasets.forEach(ds => {
+      const o = document.createElement('option');
+      o.value = ds.name;
+      o.textContent = `${ds.name} (${ds.total_episodes} eps, ${ds.total_frames} frames)`;
+      sel.appendChild(o);
+    });
+    st.textContent = `${d.datasets.length} dataset(s) found`;
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+}
+
+document.getElementById('vizDatasetSelect').addEventListener('change', async function() {
+  const name = this.value;
+  const infoSection = document.getElementById('vizInfoSection');
+  if (!name) { infoSection.style.display = 'none'; return; }
+  vizCurrentDataset = name;
+  try {
+    const r = await fetch(`/api/datasets/${name}/info`);
+    const d = await r.json();
+    if (!d.ok) return;
+    const info = d.info;
+    // Info grid
+    const grid = document.getElementById('vizInfoGrid');
+    const task = d.tasks && d.tasks.length ? d.tasks[0] : '-';
+    grid.innerHTML = [
+      ['Episodes', info.total_episodes],
+      ['Frames', info.total_frames],
+      ['FPS', info.fps],
+      ['Robot', info.robot_type],
+      ['Task', task],
+    ].map(([l,v]) => `<div class="viz-stat"><div class="viz-stat-label">${l}</div><div class="viz-stat-value">${v}</div></div>`).join('');
+
+    // Fetch episodes metadata (timestamps for video seeking)
+    const epR = await fetch(`/api/datasets/${name}/episodes`);
+    const epD = await epR.json();
+    vizEpisodesData = epD.ok ? epD.episodes : [];
+
+    // Build episode list + hidden select
+    const epSel = document.getElementById('vizEpisodeSelect');
+    const epList = document.getElementById('vizEpisodeList');
+    epSel.innerHTML = '';
+    epList.innerHTML = '';
+    for (let i = 0; i < info.total_episodes; i++) {
+      const ep = vizEpisodesData[i];
+      const len = ep ? ep.length : '?';
+      const dur = ep ? ((ep['videos/observation.images.top/to_timestamp'] || 0) - (ep['videos/observation.images.top/from_timestamp'] || 0)).toFixed(1) : '?';
+      // Hidden select option
+      const o = document.createElement('option');
+      o.value = i;
+      epSel.appendChild(o);
+      // List item
+      const div = document.createElement('div');
+      div.className = 'viz-ep-item' + (i === 0 ? ' active' : '');
+      div.dataset.ep = i;
+      div.innerHTML = `Episode ${i}<div class="ep-meta">${len} frames &middot; ${dur}s</div>`;
+      div.addEventListener('click', () => vizSelectEpisode(i));
+      epList.appendChild(div);
+    }
+    infoSection.style.display = '';
+    vizLoadEpisode();
+  } catch(e) { console.error(e); }
+});
+
+function vizSelectEpisode(idx) {
+  document.getElementById('vizEpisodeSelect').value = idx;
+  document.querySelectorAll('.viz-ep-item').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.ep) === idx);
+  });
+  vizLoadEpisode();
+}
+
+async function vizLoadEpisode() {
+  const ep = parseInt(document.getElementById('vizEpisodeSelect').value);
+  const name = vizCurrentDataset;
+  if (!name && ep < 0) return;
+  const epMeta = vizEpisodesData[ep] || {};
+
+  // Stop any current playback
+  vizStopPlay();
+
+  // Get timing from first camera key
+  const topKey = 'videos/observation.images.top';
+  vizEpStart = epMeta[`${topKey}/from_timestamp`] ?? 0;
+  vizEpEnd = epMeta[`${topKey}/to_timestamp`] ?? 0;
+
+  // Videos without individual controls — synced via unified Play/Pause
+  const vids = document.getElementById('vizVideos');
+  vids.innerHTML = '';
+  ['observation.images.top', 'observation.images.wrist'].forEach(cam => {
+    const label = cam.split('.').pop();
+    const camKey = `videos/${cam}`;
+    const chunkIdx = epMeta[`${camKey}/chunk_index`] ?? 0;
+    const fileIdx = epMeta[`${camKey}/file_index`] ?? 0;
+    const chunk = String(chunkIdx).padStart(3, '0');
+    const file = String(fileIdx).padStart(3, '0');
+    const path = `/data/${name}/videos/${cam}/chunk-${chunk}/file-${file}.mp4`;
+    vids.innerHTML += `
+      <div style="flex:1;min-width:200px">
+        <div style="font-size:0.82rem;font-weight:600;color:#555;margin-bottom:4px">${label}</div>
+        <video muted preload="auto" class="viz-video" style="width:100%;border-radius:8px;border:1px solid #e0e0e0;background:#000" src="${path}"></video>
+      </div>`;
+  });
+  // Seek all videos to episode start
+  document.querySelectorAll('.viz-video').forEach(v => {
+    v.addEventListener('loadedmetadata', () => { v.currentTime = vizEpStart; });
+  });
+  // Reset scrubber and time
+  document.getElementById('vizScrubber').value = 0;
+  document.getElementById('vizTimeDisplay').textContent = '0.0s';
+
+  // Load frame data for chart
+  const epInfo = document.getElementById('vizEpisodeInfo');
+  epInfo.textContent = 'Loading frames...';
+  try {
+    const r = await fetch(`/api/datasets/${name}/frames/${ep}`);
+    const d = await r.json();
+    if (!d.ok || !d.frames.length) { epInfo.textContent = 'No frame data'; return; }
+    vizFrameCount = d.frames.length;
+    epInfo.textContent = `${vizFrameCount} frames, ${(vizEpEnd - vizEpStart).toFixed(1)}s`;
+    vizDrawChart(d.frames);
+  } catch(e) { epInfo.textContent = 'Error: ' + e.message; }
+}
+
+function vizTogglePlay() {
+  if (vizPlaying) {
+    vizStopPlay();
+  } else {
+    vizPlaying = true;
+    const btn = document.getElementById('vizPlayBtn');
+    btn.textContent = 'Pause';
+    btn.style.background = '#d93025';
+    document.querySelectorAll('.viz-video').forEach(v => v.play());
+    vizAnimFrame = requestAnimationFrame(vizUpdateLoop);
+  }
+}
+
+function vizStopPlay() {
+  vizPlaying = false;
+  const btn = document.getElementById('vizPlayBtn');
+  btn.textContent = 'Play';
+  btn.style.background = '#34a853';
+  document.querySelectorAll('.viz-video').forEach(v => v.pause());
+  if (vizAnimFrame) { cancelAnimationFrame(vizAnimFrame); vizAnimFrame = null; }
+}
+
+function vizUpdateLoop() {
+  if (!vizPlaying) return;
+  const videos = document.querySelectorAll('.viz-video');
+  if (!videos.length) return;
+  const v = videos[0];
+  const duration = vizEpEnd - vizEpStart;
+  const elapsed = v.currentTime - vizEpStart;
+  const pct = duration > 0 ? Math.min(100, Math.max(0, (elapsed / duration) * 100)) : 0;
+
+  document.getElementById('vizScrubber').value = pct;
+  document.getElementById('vizTimeDisplay').textContent = elapsed.toFixed(1) + 's';
+  vizUpdateChartCursor(pct);
+
+  // Stop at episode end
+  if (v.currentTime >= vizEpEnd - 0.05) {
+    vizStopPlay();
+    return;
+  }
+  vizAnimFrame = requestAnimationFrame(vizUpdateLoop);
+}
+
+function vizScrub(pct) {
+  const duration = vizEpEnd - vizEpStart;
+  const t = vizEpStart + (pct / 100) * duration;
+  document.querySelectorAll('.viz-video').forEach(v => { v.currentTime = t; });
+  document.getElementById('vizTimeDisplay').textContent = ((pct / 100) * duration).toFixed(1) + 's';
+  vizUpdateChartCursor(pct);
+}
+
+function vizUpdateChartCursor(pct) {
+  const cursor = document.getElementById('vizChartCursor');
+  if (!vizChart || !cursor) return;
+  const area = vizChart.chartArea;
+  if (!area) { cursor.style.display = 'none'; return; }
+  const x = area.left + (pct / 100) * (area.right - area.left);
+  cursor.style.display = '';
+  cursor.style.left = x + 'px';
+  cursor.style.top = area.top + 'px';
+  cursor.style.height = (area.bottom - area.top) + 'px';
+}
+
+const VIZ_COLORS = ['#1a73e8','#ea4335','#34a853','#fbbc04','#9c27b0','#ff6d00'];
+const VIZ_JOINTS = ['shoulder_pan','shoulder_lift','elbow_flex','wrist_flex','wrist_roll','gripper'];
+
+function vizDrawChart(frames) {
+  const ctx = document.getElementById('vizChart');
+  if (vizChart) vizChart.destroy();
+
+  const labels = frames.map((f,i) => i);
+  const datasets = VIZ_JOINTS.map((j, ji) => ({
+    label: j,
+    data: frames.map(f => {
+      const a = f.action;
+      return Array.isArray(a) ? a[ji] : null;
+    }),
+    borderColor: VIZ_COLORS[ji],
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: 0.3,
+  }));
+
+  vizChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Frame' }, ticks: { maxTicksLimit: 20 } },
+        y: { title: { display: true, text: 'Degrees' } },
+      },
+    },
+  });
+}
+
 </script>
 
 </body>

@@ -38,6 +38,7 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Hybridge VLA")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
+app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
 
 
 # --- Helpers ---
@@ -144,6 +145,15 @@ async def get_config():
         "camera_wrist_index": cams.get("wrist", {}).get("index", 1),
         "teleop": cfg.get("teleop", {}),
         "click_to_move": cfg.get("click_to_move", {"target_height": 0, "safety_height": 10}),
+        "data_collection": cfg.get("data_collection", {
+            "repo_id": "phawitbinabik/so101-pick-place", "dataset_root": "./data/so101-pick-place",
+            "task": "pick up the pink bow to the green bowl", "num_episodes": 50,
+            "encoder_threads": 4, "push_to_hub": False, "resume": False,
+            "cameras": {
+                "top": {"fps": 30, "width": 320, "height": 240},
+                "wrist": {"fps": 30, "width": 320, "height": 240},
+            },
+        }),
     }
 
 
@@ -170,10 +180,43 @@ async def save_config(request: Request):
         cfg["prompt_template"] = data["prompt_template"]
     if "default_instruction" in data:
         cfg["default_instruction"] = data["default_instruction"]
+    if "teleop" in data:
+        tel = data["teleop"]
+        cfg.setdefault("teleop", {})
+        if "type" in tel:
+            cfg["teleop"]["type"] = tel["type"]
+        if "port" in tel:
+            cfg["teleop"]["port"] = tel["port"]
+        if "id" in tel:
+            cfg["teleop"]["id"] = tel["id"]
     if "click_to_move" in data:
         cfg["click_to_move"] = {
             "target_height": float(data["click_to_move"].get("target_height", 0)),
             "safety_height": float(data["click_to_move"].get("safety_height", 0)),
+        }
+    if "data_collection" in data:
+        dc = data["data_collection"]
+        cams_dc = dc.get("cameras", {})
+        cfg["data_collection"] = {
+            "repo_id": dc.get("repo_id", "phawitbinabik/so101-pick-place"),
+            "dataset_root": dc.get("dataset_root", "./data/so101-pick-place"),
+            "task": dc.get("task", ""),
+            "num_episodes": int(dc.get("num_episodes", 50)),
+            "encoder_threads": int(dc.get("encoder_threads", 4)),
+            "push_to_hub": bool(dc.get("push_to_hub", False)),
+            "resume": bool(dc.get("resume", False)),
+            "cameras": {
+                "top": {
+                    "fps": int(cams_dc.get("top", {}).get("fps", 30)),
+                    "width": int(cams_dc.get("top", {}).get("width", 320)),
+                    "height": int(cams_dc.get("top", {}).get("height", 240)),
+                },
+                "wrist": {
+                    "fps": int(cams_dc.get("wrist", {}).get("fps", 30)),
+                    "width": int(cams_dc.get("wrist", {}).get("width", 320)),
+                    "height": int(cams_dc.get("wrist", {}).get("height", 240)),
+                },
+            },
         }
 
     with open(ROOT / "config.yaml", "w") as f:
@@ -699,7 +742,7 @@ async def ws_robot(websocket: WebSocket):
 
 # ══════════ Teleop ══════════
 
-teleop_state = {"process": None, "running": False}
+teleop_state = {"process": None, "running": False, "log_lines": [], "log_lock": threading.Lock()}
 
 
 @app.get("/api/robot/status")
@@ -735,29 +778,89 @@ async def robot_stop():
     return {"ok": True, "message": "Robot disconnected"}
 
 
+def _teleop_log(text):
+    """Append a line to teleop log buffer."""
+    with teleop_state["log_lock"]:
+        teleop_state["log_lines"].append(text)
+        if len(teleop_state["log_lines"]) > 500:
+            teleop_state["log_lines"] = teleop_state["log_lines"][-500:]
+    print(f"[Teleop] {text}")
+
+
+def _drain_teleop_output(proc):
+    """Drain subprocess output and auto-answer calibration prompts.
+
+    Uses character-by-character reading because calibration prompts
+    (Python input()) don't end with newline, so readline() would block.
+    """
+    buf = ""
+    try:
+        while True:
+            ch = proc.stdout.read(1)
+            if not ch:
+                break
+            c = ch.decode("utf-8", errors="replace")
+            if c == "\n":
+                if buf.strip():
+                    _teleop_log(buf)
+                buf = ""
+            else:
+                buf += c
+                # Check for calibration prompt (ends with ": " not newline)
+                if "press enter" in buf.lower() and buf.rstrip().endswith(":"):
+                    _teleop_log(buf)
+                    try:
+                        proc.stdin.write(b"\n")
+                        proc.stdin.flush()
+                        _teleop_log("Auto-answered calibration prompt")
+                    except Exception:
+                        pass
+                    buf = ""
+    except Exception:
+        pass
+    if buf.strip():
+        _teleop_log(buf)
+
+
 @app.post("/api/teleop/start")
 async def teleop_start():
     if teleop_state["running"]:
         return {"ok": True, "message": "Already running"}
     # Stop slider-mode robot first (they share the follower port)
     if robot_state["connected"]:
-        disconnect_robot()
+        try:
+            disconnect_robot()
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to disconnect robot: {e}"}
 
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
     teleop_cfg = cfg.get("teleop", {})
+
+    # Validate ports exist
+    robot_port = robot_cfg.get("port", "")
+    leader_port = teleop_cfg.get("port", "")
+    if not os.path.exists(robot_port):
+        return {"ok": False, "error": f"Follower port not found: {robot_port}"}
+    if not os.path.exists(leader_port):
+        return {"ok": False, "error": f"Leader port not found: {leader_port}"}
+
     cmd = [
         "/opt/miniconda3/envs/lerobot/bin/lerobot-teleoperate",
         f"--robot.type=so101_follower",
-        f"--robot.port={robot_cfg.get('port', '/dev/tty.usbmodem5B141122411')}",
+        f"--robot.port={robot_port}",
         f"--robot.id={robot_cfg.get('id', 'my_awesome_follower_arm')}",
         f"--teleop.type={teleop_cfg.get('type', 'so101_leader')}",
-        f"--teleop.port={teleop_cfg.get('port', '/dev/tty.usbmodem5B140300651')}",
+        f"--teleop.port={leader_port}",
+        f"--teleop.id={teleop_cfg.get('id', 'my_awesome_leader_arm')}",
     ]
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         teleop_state["process"] = p
         teleop_state["running"] = True
+        teleop_state["log_lines"] = []
+        # Drain pipe in background to prevent buffer deadlock
+        threading.Thread(target=_drain_teleop_output, args=(p,), daemon=True).start()
         print(f"[Teleop] Started: {' '.join(cmd)}")
         return {"ok": True, "message": "Teleop started"}
     except Exception as e:
@@ -775,10 +878,341 @@ async def teleop_stop():
             p.wait(timeout=5)
         except subprocess.TimeoutExpired:
             p.kill()
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                print("[Teleop] Process still alive after SIGKILL")
     teleop_state["process"] = None
     teleop_state["running"] = False
     print("[Teleop] Stopped")
     return {"ok": True, "message": "Teleop stopped"}
+
+
+@app.get("/api/teleop/status")
+async def teleop_status():
+    """Get teleop running state and recent logs."""
+    p = teleop_state["process"]
+    if p and p.poll() is not None:
+        teleop_state["running"] = False
+        teleop_state["process"] = None
+    with teleop_state["log_lock"]:
+        recent_logs = list(teleop_state["log_lines"][-50:])
+    return {"running": teleop_state["running"], "logs": recent_logs}
+
+
+# ══════════ Visualize Data ══════════
+
+
+@app.get("/api/datasets")
+async def list_datasets():
+    """List available LeRobot datasets in data/ directory."""
+    data_dir = ROOT / "data"
+    datasets = []
+    if data_dir.exists():
+        for d in sorted(data_dir.iterdir()):
+            info_path = d / "meta" / "info.json"
+            if info_path.exists():
+                try:
+                    info = json.loads(info_path.read_text())
+                    datasets.append({
+                        "name": d.name,
+                        "total_episodes": info.get("total_episodes", 0),
+                        "total_frames": info.get("total_frames", 0),
+                        "fps": info.get("fps", 0),
+                        "robot_type": info.get("robot_type", ""),
+                    })
+                except Exception:
+                    pass
+    return {"ok": True, "datasets": datasets}
+
+
+@app.get("/api/datasets/{name}/info")
+async def dataset_info(name: str):
+    """Get full info.json + tasks for a dataset."""
+    info_path = ROOT / "data" / name / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    info = json.loads(info_path.read_text())
+    # Read tasks
+    tasks_path = ROOT / "data" / name / "meta" / "tasks.parquet"
+    task_list = []
+    if tasks_path.exists():
+        try:
+            import pyarrow.parquet as pq
+            tbl = pq.read_table(str(tasks_path))
+            task_list = tbl.to_pydict().get("task", [])
+        except Exception:
+            pass
+    return {"ok": True, "info": info, "tasks": task_list}
+
+
+@app.get("/api/datasets/{name}/episodes")
+async def dataset_episodes(name: str):
+    """Get per-episode metadata from episodes parquet."""
+    ep_dir = ROOT / "data" / name / "meta" / "episodes"
+    episodes = []
+    if ep_dir.exists():
+        try:
+            import pyarrow.parquet as pq
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                tbl = pq.read_table(str(pf))
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    episodes.append({k: v[i] for k, v in d.items()})
+        except Exception:
+            pass
+    return {"ok": True, "episodes": episodes}
+
+
+@app.get("/api/datasets/{name}/frames/{episode_index}")
+async def dataset_frames(name: str, episode_index: int):
+    """Get frame data (action, state) for a specific episode."""
+    data_dir = ROOT / "data" / name / "data"
+    if not data_dir.exists():
+        return {"ok": False, "error": "Data not found"}
+    try:
+        import pyarrow.parquet as pq
+        rows = []
+        for pf in sorted(data_dir.rglob("*.parquet")):
+            tbl = pq.read_table(str(pf))
+            d = tbl.to_pydict()
+            for i in range(len(d.get("episode_index", []))):
+                if d["episode_index"][i] == episode_index:
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        # Convert numpy/list to plain python
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    rows.append(row)
+        return {"ok": True, "frames": rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ══════════ Data Collection ══════════
+
+datacollect_state = {
+    "process": None,
+    "running": False,
+    "started_at": None,
+    "log_lines": [],
+    "log_lock": threading.Lock(),
+}
+
+
+def _datacollect_reader(proc, state):
+    """Background thread to read subprocess stdout, store log lines, and auto-answer prompts."""
+    buf = ""
+    try:
+        while True:
+            ch = proc.stdout.read(1)
+            if not ch:
+                break
+            c = ch.decode("utf-8", errors="replace")
+            if c == "\n":
+                if buf.strip():
+                    with state["log_lock"]:
+                        state["log_lines"].append(buf)
+                        if len(state["log_lines"]) > 500:
+                            state["log_lines"] = state["log_lines"][-500:]
+                    print(f"[DataCollect] {buf}")
+                buf = ""
+            else:
+                buf += c
+                # Auto-answer calibration prompts
+                if "press enter" in buf.lower() and buf.rstrip().endswith(":"):
+                    with state["log_lock"]:
+                        state["log_lines"].append(buf)
+                    print(f"[DataCollect] {buf}")
+                    try:
+                        proc.stdin.write(b"\n")
+                        proc.stdin.flush()
+                        print("[DataCollect] Auto-answered calibration prompt")
+                    except Exception:
+                        pass
+                    buf = ""
+    except Exception:
+        pass
+    if buf.strip():
+        with state["log_lock"]:
+            state["log_lines"].append(buf)
+        print(f"[DataCollect] {buf}")
+
+
+@app.post("/api/datacollect/verify")
+async def datacollect_verify():
+    """Run pre-flight hardware checks."""
+    import shutil
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    teleop_cfg = cfg.get("teleop", {})
+    checks = []
+
+    # 1. Robot port
+    robot_port = robot_cfg.get("port", "")
+    robot_ok = os.path.exists(robot_port)
+    checks.append({"name": "Robot port", "detail": robot_port, "ok": robot_ok,
+                    "error": "" if robot_ok else f"Port not found: {robot_port}"})
+
+    # 2. Teleop port
+    teleop_port = teleop_cfg.get("port", "")
+    teleop_ok = os.path.exists(teleop_port)
+    checks.append({"name": "Teleop port", "detail": teleop_port, "ok": teleop_ok,
+                    "error": "" if teleop_ok else f"Port not found: {teleop_port}"})
+
+    # 3. Cameras
+    import cv2
+    cams = robot_cfg.get("cameras", {})
+    for cam_name, cam_cfg in cams.items():
+        idx = cam_cfg.get("index", 0)
+        cap = cv2.VideoCapture(idx)
+        cam_ok = False
+        if cap.isOpened():
+            ret, _ = cap.read()
+            cam_ok = ret
+        cap.release()
+        checks.append({"name": f"Camera: {cam_name}", "detail": f"index {idx}", "ok": cam_ok,
+                        "error": "" if cam_ok else f"Cannot read from camera index {idx}"})
+
+    # 4. Disk space
+    stat = shutil.disk_usage(str(ROOT))
+    free_gb = stat.free / (1024 ** 3)
+    disk_ok = free_gb > 1.0
+    checks.append({"name": "Disk space", "detail": f"{free_gb:.1f} GB free", "ok": disk_ok,
+                    "error": "" if disk_ok else "Less than 1 GB free"})
+
+    # 5. lerobot-record binary
+    lerobot_bin = "/opt/miniconda3/envs/lerobot/bin/lerobot-record"
+    bin_ok = os.path.exists(lerobot_bin)
+    checks.append({"name": "lerobot-record", "detail": lerobot_bin, "ok": bin_ok,
+                    "error": "" if bin_ok else f"Binary not found: {lerobot_bin}"})
+
+    all_ok = all(c["ok"] for c in checks)
+    return {"ok": all_ok, "checks": checks}
+
+
+@app.post("/api/datacollect/start")
+async def datacollect_start():
+    """Start lerobot-record subprocess."""
+    if datacollect_state["running"]:
+        return {"ok": False, "error": "Already recording"}
+    # Stop teleop and slider-mode robot if running (they share ports & cameras)
+    if teleop_state["running"]:
+        await teleop_stop()
+    if robot_state["connected"]:
+        disconnect_robot()
+    # Wait for cameras to fully release
+    time.sleep(1)
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    teleop_cfg = cfg.get("teleop", {})
+    dc_cfg = cfg.get("data_collection", {})
+    cams = robot_cfg.get("cameras", {})
+
+    dc_cams = dc_cfg.get("cameras", {})
+
+    # Build cameras config string for lerobot (use per-camera resolution)
+    cam_parts = []
+    for cam_name, cam_c in cams.items():
+        dc_cam = dc_cams.get(cam_name, {})
+        cam_fps = dc_cam.get("fps", 30)
+        cam_w = dc_cam.get("width", 320)
+        cam_h = dc_cam.get("height", 240)
+        cam_parts.append(
+            f"{cam_name}: {{type: opencv, index_or_path: {cam_c.get('index', 0)}, "
+            f"width: {cam_w}, height: {cam_h}, fps: {cam_fps}}}"
+        )
+    cameras_str = "{" + ", ".join(cam_parts) + "}"
+    # Use top camera fps for dataset fps (primary)
+    fps = dc_cams.get("top", {}).get("fps", 30)
+
+    cmd = [
+        "/opt/miniconda3/envs/lerobot/bin/lerobot-record",
+        f"--robot.type=so101_follower",
+        f"--robot.port={robot_cfg.get('port', '')}",
+        f"--robot.id={robot_cfg.get('id', 'my_awesome_follower_arm')}",
+        f"--robot.cameras={cameras_str}",
+        f"--teleop.type={teleop_cfg.get('type', 'so101_leader')}",
+        f"--teleop.port={teleop_cfg.get('port', '')}",
+        f"--teleop.id={teleop_cfg.get('id', 'my_awesome_leader_arm')}",
+        f"--display_data=false",
+        f"--dataset.repo_id={dc_cfg.get('repo_id', 'user/my-dataset')}",
+        f"--dataset.root={dc_cfg.get('dataset_root', './data/dataset')}",
+        f"--dataset.push_to_hub={'true' if dc_cfg.get('push_to_hub', False) else 'false'}",
+        f"--dataset.num_episodes={dc_cfg.get('num_episodes', 50)}",
+        f"--dataset.single_task={dc_cfg.get('task', 'default task')}",
+        f"--dataset.streaming_encoding=true",
+        f"--dataset.fps={fps}",
+        f"--dataset.encoder_threads={dc_cfg.get('encoder_threads', 4)}",
+    ]
+    if dc_cfg.get("resume", False):
+        cmd.append("--resume=true")
+    else:
+        # Remove existing dataset directory to avoid FileExistsError
+        import shutil
+        dataset_root = Path(dc_cfg.get("dataset_root", "./data/dataset"))
+        if not dataset_root.is_absolute():
+            dataset_root = ROOT / dataset_root
+        if dataset_root.exists():
+            shutil.rmtree(dataset_root)
+            print(f"[DataCollect] Removed existing dataset dir: {dataset_root}")
+
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        datacollect_state["process"] = p
+        datacollect_state["running"] = True
+        datacollect_state["started_at"] = time.time()
+        datacollect_state["log_lines"] = []
+        # Start log reader thread
+        threading.Thread(target=_datacollect_reader, args=(p, datacollect_state), daemon=True).start()
+        print(f"[DataCollect] Started: {' '.join(cmd)}")
+        return {"ok": True, "message": "Recording started"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/datacollect/stop")
+async def datacollect_stop():
+    """Stop lerobot-record subprocess."""
+    if not datacollect_state["running"]:
+        return {"ok": True, "message": "Not recording"}
+    p = datacollect_state["process"]
+    if p:
+        p.terminate()
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    datacollect_state["process"] = None
+    datacollect_state["running"] = False
+    datacollect_state["started_at"] = None
+    print("[DataCollect] Stopped")
+    return {"ok": True, "message": "Recording stopped"}
+
+
+@app.get("/api/datacollect/status")
+async def datacollect_status():
+    """Get current recording status."""
+    elapsed = 0
+    if datacollect_state["started_at"] and datacollect_state["running"]:
+        elapsed = time.time() - datacollect_state["started_at"]
+    # Check if process exited
+    p = datacollect_state["process"]
+    if p and p.poll() is not None:
+        datacollect_state["running"] = False
+        datacollect_state["process"] = None
+        datacollect_state["started_at"] = None
+    with datacollect_state["log_lock"]:
+        recent_logs = list(datacollect_state["log_lines"][-50:])
+    return {
+        "running": datacollect_state["running"],
+        "elapsed": round(elapsed, 1),
+        "logs": recent_logs,
+    }
 
 
 # ══════════ Interpolation IK from calibration points ══════════

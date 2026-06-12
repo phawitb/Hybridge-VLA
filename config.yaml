@@ -170,6 +170,24 @@ robot:
 teleop:
   type: so101_leader
   port: /dev/tty.usbmodem5B140300651
+  id: my_awesome_leader_arm
 click_to_move:
   target_height: 0.0
   safety_height: 10.0
+data_collection:
+  repo_id: phawitbinabik/so101-pick-place
+  dataset_root: ./data/so101-pick-place
+  task: pick up the pink bow to the green bowl
+  num_episodes: 50
+  encoder_threads: 4
+  push_to_hub: false
+  resume: false
+  cameras:
+    top:
+      fps: 30
+      width: 320
+      height: 240
+    wrist:
+      fps: 30
+      width: 320
+      height: 240
