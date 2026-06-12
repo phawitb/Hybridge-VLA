@@ -1158,9 +1158,11 @@ bump_height = min(overshoot + 2, 10) degrees
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
               <button class="btn btn-sm" id="vizPlayBtn" onclick="vizTogglePlay()" style="background:#34a853;min-width:70px">Play</button>
               <span id="vizTimeDisplay" style="font-size:0.95rem;font-weight:600;font-family:'SF Mono','Menlo',monospace;color:#333;min-width:50px">0.0s</span>
+              <span id="vizPhaseLabel" style="font-size:0.82rem;font-weight:600;padding:2px 10px;border-radius:10px;background:#e8eaed;color:#555;display:none"></span>
               <span id="vizEpisodeInfo" style="font-size:0.82rem;color:#888"></span>
             </div>
             <input type="range" id="vizScrubber" min="0" max="100" value="0" step="0.1" style="width:100%" oninput="vizScrub(this.value)">
+            <div id="vizSegmentBar" style="height:22px;display:flex;border-radius:4px;overflow:hidden;margin-top:4px;cursor:pointer" onclick="vizSegmentBarClick(event)"></div>
           </div>
 
           <!-- Videos side by side -->
@@ -2565,6 +2567,7 @@ async function dcPollStatus() {
 // ══════════ Visualize Data ══════════
 
 let vizCurrentDataset = null;
+let vizCurrentTask = '';
 let vizChart = null;
 let vizEpisodesData = [];
 let vizPlaying = false;
@@ -2604,6 +2607,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     // Info grid
     const grid = document.getElementById('vizInfoGrid');
     const task = d.tasks && d.tasks.length ? d.tasks[0] : '-';
+    vizCurrentTask = task;
     grid.innerHTML = [
       ['Episodes', info.total_episodes],
       ['Frames', info.total_frames],
@@ -2686,9 +2690,12 @@ async function vizLoadEpisode() {
   document.querySelectorAll('.viz-video').forEach(v => {
     v.addEventListener('loadedmetadata', () => { v.currentTime = vizEpStart; });
   });
-  // Reset scrubber and time
+  // Reset scrubber, time, segments
   document.getElementById('vizScrubber').value = 0;
   document.getElementById('vizTimeDisplay').textContent = '0.0s';
+  document.getElementById('vizSegmentBar').innerHTML = '';
+  document.getElementById('vizPhaseLabel').style.display = 'none';
+  vizSegments = null;
 
   // Load frame data for chart
   const epInfo = document.getElementById('vizEpisodeInfo');
@@ -2737,6 +2744,7 @@ function vizUpdateLoop() {
   document.getElementById('vizScrubber').value = pct;
   document.getElementById('vizTimeDisplay').textContent = elapsed.toFixed(1) + 's';
   vizUpdateChartCursor(pct);
+  vizUpdatePhaseLabel(pct);
 
   // Stop at episode end
   if (v.currentTime >= vizEpEnd - 0.05) {
@@ -2752,6 +2760,7 @@ function vizScrub(pct) {
   document.querySelectorAll('.viz-video').forEach(v => { v.currentTime = t; });
   document.getElementById('vizTimeDisplay').textContent = ((pct / 100) * duration).toFixed(1) + 's';
   vizUpdateChartCursor(pct);
+  vizUpdatePhaseLabel(pct);
 }
 
 function vizUpdateChartCursor(pct) {
@@ -2769,9 +2778,153 @@ function vizUpdateChartCursor(pct) {
 const VIZ_COLORS = ['#1a73e8','#ea4335','#34a853','#fbbc04','#9c27b0','#ff6d00'];
 const VIZ_JOINTS = ['shoulder_pan','shoulder_lift','elbow_flex','wrist_flex','wrist_roll','gripper'];
 
+// vizSegments = {pick: {start,end,label}, place: {start,end,label}} or null
+let vizSegments = null;
+
+const VIZ_PICK_COLOR  = '#c8e6c9';
+const VIZ_PICK_TEXT   = '#2e7d32';
+const VIZ_PLACE_COLOR = '#e1bee7';
+const VIZ_PLACE_TEXT  = '#7b1fa2';
+
+// ── Segment Detection ──
+// Each cycle = ปิด→เปิด→ปิด  (close→open→close)
+// Cycle 1 = pick up, Cycle 2 = place — can overlap
+
+function vizParseObject(task) {
+  let m = task.match(/pick\s+up\s+the\s+(.+?)\s+to\s+the\s+/i);
+  if (m) return m[1];
+  m = task.match(/pick\s+up\s+the\s+(.+)/i);
+  if (m) return m[1].trim();
+  m = task.match(/(?:move|put|bring|grab)\s+the\s+(.+?)\s+(?:to|into|onto)\s+/i);
+  if (m) return m[1];
+  return 'object';
+}
+
+function vizDetectSegments(frames, task) {
+  const n = frames.length;
+  const obj = vizParseObject(task || '');
+  const pickLabel = `pick up the ${obj}`;
+  const placeLabel = `place the ${obj}`;
+  if (n < 5) return {pick:{start:0,end:n-1,label:pickLabel},place:{start:0,end:n-1,label:placeLabel}};
+
+  const GI = 5;
+  const gripper = frames.map(f => (f.action||[])[GI] || 0);
+  const smooth = (arr, hw) => arr.map((_,i) => {
+    let s=0,c=0;
+    for(let j=Math.max(0,i-hw);j<=Math.min(arr.length-1,i+hw);j++){s+=arr[j];c++;}
+    return s/c;
+  });
+  const sg = smooth(gripper, 3);
+
+  // dist from resting (ปิด) → peaks at เปิด events
+  const rest = sg[0];
+  const dist = sg.map(v => Math.abs(v - rest));
+  const maxDist = Math.max(...dist);
+  const closedThresh = maxDist * 0.25;
+
+  // Find peak1 & peak2 (two เปิด events)
+  let p1 = 0;
+  for(let i=0;i<n;i++) if(dist[i]>dist[p1]) p1=i;
+  const minSep = Math.floor(n * 0.15);
+  let p2 = p1 < n/2 ? n-1 : 0;
+  for(let i=0;i<n;i++) if(Math.abs(i-p1)>=minSep && dist[i]>dist[p2]) p2=i;
+  if(p1>p2) [p1,p2]=[p2,p1];
+
+  // Find the closed valley between the two peaks (ปิด zone)
+  let valleyStart = -1, valleyEnd = -1;
+  for(let i=p1;i<=p2;i++){
+    if(dist[i]<=closedThresh){
+      if(valleyStart<0) valleyStart=i;
+      valleyEnd=i;
+    }
+  }
+
+  // Split valley in half: first half → pick, second half → place
+  let splitFrame;
+  if(valleyStart>=0) splitFrame = Math.floor((valleyStart+valleyEnd)/2);
+  else splitFrame = Math.floor((p1+p2)/2);
+
+  return {
+    pick:  {start:0, end:splitFrame, label:pickLabel},
+    place: {start:splitFrame+1, end:n-1, label:placeLabel},
+  };
+}
+
+// ── Segment Bar Rendering ──
+// 3 visual zones: pick-only | overlap | place-only
+
+function vizRenderSegmentBar() {
+  const bar = document.getElementById('vizSegmentBar');
+  if(!vizSegments || !vizFrameCount){ bar.innerHTML=''; return; }
+  const {pick, place} = vizSegments;
+  const N = vizFrameCount;
+  const pickPct = (pick.end-pick.start+1)/N*100;
+  const placePct = (place.end-place.start+1)/N*100;
+  bar.innerHTML =
+    `<div style="flex:${pickPct};background:${VIZ_PICK_COLOR};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${pick.label}: frames ${pick.start}–${pick.end}"><span style="font-size:0.68rem;font-weight:600;color:${VIZ_PICK_TEXT};white-space:nowrap;padding:0 6px">${pick.label}</span></div>` +
+    `<div style="flex:${placePct};background:${VIZ_PLACE_COLOR};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${place.label}: frames ${place.start}–${place.end}"><span style="font-size:0.68rem;font-weight:600;color:${VIZ_PLACE_TEXT};white-space:nowrap;padding:0 6px">${place.label}</span></div>`;
+}
+
+function vizSegmentBarClick(e) {
+  const bar = document.getElementById('vizSegmentBar');
+  const rect = bar.getBoundingClientRect();
+  const pct = ((e.clientX - rect.left) / rect.width) * 100;
+  vizScrub(pct);
+  document.getElementById('vizScrubber').value = pct;
+}
+
+function vizUpdatePhaseLabel(pct) {
+  const lbl = document.getElementById('vizPhaseLabel');
+  if(!vizSegments){ lbl.style.display='none'; return; }
+  const f = Math.round((pct/100) * (vizFrameCount-1));
+  const {pick, place} = vizSegments;
+
+  if(f <= pick.end){
+    lbl.textContent = pick.label;
+    lbl.style.background = VIZ_PICK_COLOR;
+    lbl.style.color = VIZ_PICK_TEXT;
+  } else {
+    lbl.textContent = place.label;
+    lbl.style.background = VIZ_PLACE_COLOR;
+    lbl.style.color = VIZ_PLACE_TEXT;
+  }
+  lbl.style.display = '';
+}
+
+// ── Chart Plugin for Segment Backgrounds ──
+
+const vizSegmentPlugin = {
+  id: 'segmentBg',
+  beforeDraw(chart) {
+    if(!vizSegments) return;
+    const {ctx, chartArea, scales} = chart;
+    if(!chartArea) return;
+    const xScale = scales.x;
+    ctx.save();
+    // Draw pick range
+    const px1 = xScale.getPixelForValue(vizSegments.pick.start);
+    const px2 = xScale.getPixelForValue(vizSegments.pick.end);
+    ctx.fillStyle = VIZ_PICK_COLOR + '44';
+    ctx.fillRect(px1, chartArea.top, px2-px1, chartArea.bottom-chartArea.top);
+    // Draw place range (overlaps pick if they share frames)
+    const lx1 = xScale.getPixelForValue(vizSegments.place.start);
+    const lx2 = xScale.getPixelForValue(vizSegments.place.end);
+    ctx.fillStyle = VIZ_PLACE_COLOR + '44';
+    ctx.fillRect(lx1, chartArea.top, lx2-lx1, chartArea.bottom-chartArea.top);
+    ctx.restore();
+  }
+};
+
+// ── Chart Drawing ──
+
 function vizDrawChart(frames) {
   const ctx = document.getElementById('vizChart');
   if (vizChart) vizChart.destroy();
+
+  // Detect segments from task description + gripper data
+  vizSegments = vizDetectSegments(frames, vizCurrentTask);
+  vizRenderSegmentBar();
+  vizUpdatePhaseLabel(0);
 
   const labels = frames.map((f,i) => i);
   const datasets = VIZ_JOINTS.map((j, ji) => ({
@@ -2789,6 +2942,7 @@ function vizDrawChart(frames) {
   vizChart = new Chart(ctx, {
     type: 'line',
     data: { labels, datasets },
+    plugins: [vizSegmentPlugin],
     options: {
       responsive: true,
       interaction: { mode: 'index', intersect: false },
