@@ -550,6 +550,8 @@ def connect_robot():
         cap = cv2.VideoCapture(cam_cfg.get("index", 0))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("w", 640))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("h", 480))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         state = {"cap": cap, "frame": None, "lock": threading.Lock(), "running": True, "stopped": threading.Event()}
         cam_state[name] = state
         ok = cap.isOpened()
@@ -564,10 +566,14 @@ def connect_robot():
                             c = cv2.VideoCapture(cam_cfg.get("index", 0))
                             c.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg.get("w", 640))
                             c.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg.get("h", 480))
+                            c.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            c.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                             st["cap"] = c
                             time.sleep(1)
                             continue
-                        ret, frame = c.read()
+                        # Flush stale buffer frames to get the latest one
+                        c.grab()
+                        ret, frame = c.retrieve()
                         if ret:
                             with st["lock"]:
                                 st["frame"] = frame.copy()
