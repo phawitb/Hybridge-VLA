@@ -1145,6 +1145,7 @@ bump_height = min(overshoot + 2, 10) degrees
       </select>
       <button class="btn btn-sm" onclick="vizRefreshDatasets()">Refresh</button>
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
+      <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
     </div>
 
@@ -2625,6 +2626,7 @@ async function vizRefreshDatasets() {
 document.getElementById('vizDatasetSelect').addEventListener('change', async function() {
   const name = this.value;
   const infoSection = document.getElementById('vizInfoSection');
+  document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   if (!name) { infoSection.style.display = 'none'; return; }
   vizCurrentDataset = name;
   try {
@@ -2868,6 +2870,52 @@ async function vizDoCombine() {
       st.style.color = '#d93025';
     }
   } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+  btn.disabled = false;
+}
+
+// ── Delete Dataset ──
+
+function vizShowDeleteDataset() {
+  const name = vizCurrentDataset;
+  if (!name) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:8px;color:#d93025">Delete Dataset</h3>
+    <p style="margin-bottom:12px;font-size:0.9rem">This will permanently delete <strong>${name}</strong> and all its data. This cannot be undone.</p>
+    <div class="form-group" style="margin-bottom:14px">
+      <label class="form-label">Type <strong style="user-select:all">${name}</strong> to confirm</label>
+      <input type="text" id="deleteDsConfirm" class="form-input" placeholder="${name}" style="width:100%" oninput="document.getElementById('deleteDsBtn').disabled = this.value !== '${name}'">
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn btn-danger" id="deleteDsBtn" onclick="vizDoDeleteDataset()" disabled>Delete</button>
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Cancel</button>
+      <span id="deleteDsStatus" style="font-size:0.85rem;color:#888"></span>
+    </div>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+  document.getElementById('deleteDsConfirm').focus();
+}
+
+async function vizDoDeleteDataset() {
+  const name = vizCurrentDataset;
+  const btn = document.getElementById('deleteDsBtn');
+  const st = document.getElementById('deleteDsStatus');
+  btn.disabled = true;
+  st.textContent = 'Deleting...';
+  st.style.color = '#d93025';
+  try {
+    const r = await fetch(`/api/datasets/${name}`, {method: 'DELETE'});
+    const d = await r.json();
+    if (d.ok) {
+      closeModal();
+      vizCurrentDataset = null;
+      document.getElementById('vizInfoSection').style.display = 'none';
+      document.getElementById('vizDeleteDsBtn').style.display = 'none';
+      vizRefreshDatasets();
+    } else {
+      st.textContent = d.error || 'Error';
+    }
+  } catch(e) { st.textContent = e.message; }
   btn.disabled = false;
 }
 

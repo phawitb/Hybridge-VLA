@@ -1168,6 +1168,21 @@ async def combine_datasets(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.delete("/api/datasets/{name}")
+async def delete_dataset(name: str):
+    """Delete an entire dataset directory."""
+    import shutil
+    dataset_dir = ROOT / "data" / name
+    if not dataset_dir.exists() or not (dataset_dir / "meta" / "info.json").exists():
+        return {"ok": False, "error": "Dataset not found"}
+    try:
+        shutil.rmtree(dataset_dir)
+        print(f"[Dataset] Deleted dataset: {name}")
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/datasets/{name}/info")
 async def dataset_info(name: str):
     """Get full info.json + tasks for a dataset."""
