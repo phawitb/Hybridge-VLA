@@ -1147,6 +1147,7 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
+      <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
       <div style="flex:1"></div>
       <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
@@ -2596,6 +2597,7 @@ async function dcPollStatus() {
 
 let vizCurrentDataset = null;
 let vizCurrentTask = '';
+let vizAugInfo = null; // augmentation metadata if dataset is augmented
 let vizSelectMode = false;
 let vizChart = null;
 let vizEpisodesData = [];
@@ -2628,6 +2630,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   const infoSection = document.getElementById('vizInfoSection');
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
   if (!name) { infoSection.style.display = 'none'; return; }
   vizCurrentDataset = name;
   try {
@@ -2640,6 +2643,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const allTasks = d.tasks || [];
     const task = allTasks.length ? allTasks[0] : '-';
     vizCurrentTask = task;
+    vizAugInfo = d.augmentation || null;
     // Show split button if task has pick/place pattern
     const splitBtn = document.getElementById('vizSplitBtn');
     const canSplit = /pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(task);
@@ -2945,12 +2949,98 @@ async function vizDoDeleteDataset() {
       vizCurrentDataset = null;
       document.getElementById('vizInfoSection').style.display = 'none';
       document.getElementById('vizDeleteDsBtn').style.display = 'none';
+      document.getElementById('vizPushHfBtn').style.display = 'none';
       vizRefreshDatasets();
     } else {
       st.textContent = d.error || 'Error';
     }
   } catch(e) { st.textContent = e.message; }
   btn.disabled = false;
+}
+
+// ── Push to Hugging Face ──
+
+let hfPushPollTimer = null;
+
+function vizShowPushHf() {
+  const name = vizCurrentDataset;
+  if (!name) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:8px">Push to Hugging Face</h3>
+    <p style="margin-bottom:12px;font-size:0.9rem;color:#555">Upload <strong>${name}</strong> to Hugging Face Hub as a dataset repository.</p>
+    <div class="form-group" style="margin-bottom:14px">
+      <label class="form-label">Repository ID (username/dataset-name)</label>
+      <input type="text" id="hfRepoId" class="form-input" style="width:100%" value="phawitbinabik/${name}">
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn" id="hfPushBtn" onclick="vizDoPushHf()" style="background:#ff9d00;color:#000">Push</button>
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Cancel</button>
+      <span id="hfPushStatus" style="font-size:0.85rem;color:#888"></span>
+    </div>
+    <div id="hfPushProgress" style="display:none;margin-top:14px">
+      <div style="height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden">
+        <div id="hfPushBar" style="height:100%;width:0%;background:#ff9d00;transition:width 0.3s"></div>
+      </div>
+      <div id="hfPushDetail" style="font-size:0.78rem;color:#888;margin-top:4px"></div>
+    </div>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+  document.getElementById('hfRepoId').focus();
+}
+
+async function vizDoPushHf() {
+  const name = vizCurrentDataset;
+  const repoId = document.getElementById('hfRepoId').value.trim();
+  if (!repoId || !repoId.includes('/')) {
+    document.getElementById('hfPushStatus').textContent = 'Enter valid repo ID (username/name)';
+    return;
+  }
+  const btn = document.getElementById('hfPushBtn');
+  const st = document.getElementById('hfPushStatus');
+  btn.disabled = true;
+  st.textContent = 'Starting push...';
+  try {
+    const r = await fetch(`/api/datasets/${name}/push-hf`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({repo_id: repoId})
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = d.error || 'Error';
+      btn.disabled = false;
+      return;
+    }
+    document.getElementById('hfPushProgress').style.display = '';
+    hfPushPollTimer = setInterval(hfPushPoll, 1000);
+  } catch(e) {
+    st.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+async function hfPushPoll() {
+  try {
+    const r = await fetch('/api/hf-push/status');
+    const d = await r.json();
+    const bar = document.getElementById('hfPushBar');
+    const detail = document.getElementById('hfPushDetail');
+    const st = document.getElementById('hfPushStatus');
+    if (bar) bar.style.width = d.progress + '%';
+    if (detail) detail.textContent = d.status || '';
+    if (d.error) {
+      st.textContent = d.error.substring(0, 200);
+      st.style.color = '#d93025';
+      clearInterval(hfPushPollTimer);
+      const btn = document.getElementById('hfPushBtn');
+      if (btn) btn.disabled = false;
+    } else if (!d.running && d.progress >= 100) {
+      st.textContent = 'Pushed successfully!';
+      st.style.color = '#34a853';
+      clearInterval(hfPushPollTimer);
+    }
+  } catch(e) {}
 }
 
 // ── Data Augmentation ──
@@ -2969,11 +3059,16 @@ function vizShowAugment() {
       </div>
       <div class="form-group" style="min-width:80px">
         <label class="form-label">Multiplier</label>
-        <select id="augMultiplier" class="form-input" style="width:100%">
+        <select id="augMultiplier" class="form-input" style="width:100%" onchange="augUpdateEpCount()">
           ${[2,3,4,5,6,7,8,9,10].map(n => `<option value="${n}" ${n===3?'selected':''}>${n}x</option>`).join('')}
         </select>
       </div>
+      <div class="form-group" style="min-width:120px">
+        <label class="form-label">Target Episodes</label>
+        <input type="number" id="augTargetEps" class="form-input" style="width:100%" min="${vizEpisodesData.length + 1}" value="${vizEpisodesData.length * 3}" oninput="augUpdateFromTarget()">
+      </div>
     </div>
+    <div id="augEpInfo" style="margin:-8px 0 14px;font-size:0.82rem;color:#555"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
       <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
         <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
@@ -3039,6 +3134,44 @@ function vizShowAugment() {
     });
   });
   document.getElementById('modalOverlay').classList.add('visible');
+  augUpdateEpCount();
+}
+
+function augUpdateEpCount() {
+  const orig = vizEpisodesData.length;
+  const mult = parseInt(document.getElementById('augMultiplier').value) || 2;
+  const target = orig * mult;
+  document.getElementById('augTargetEps').value = target;
+  augShowEpInfo(orig, target);
+}
+
+function augUpdateFromTarget() {
+  const orig = vizEpisodesData.length;
+  const input = document.getElementById('augTargetEps');
+  const target = parseInt(input.value);
+  if (!target || target <= orig) return;
+  // Sync multiplier dropdown as approximate indicator
+  const approxMult = Math.round(target / orig);
+  const sel = document.getElementById('augMultiplier');
+  if (approxMult >= 2 && approxMult <= 10 && approxMult * orig === target) {
+    sel.value = approxMult;
+  } else {
+    sel.value = '';
+  }
+  augShowEpInfo(orig, target);
+}
+
+function augShowEpInfo(orig, target) {
+  const base = Math.floor(target / orig);
+  const remainder = target % orig;
+  let dist = '';
+  if (remainder === 0) {
+    dist = `${base} copies each`;
+  } else {
+    dist = `${remainder} eps get ${base + 1} copies, ${orig - remainder} eps get ${base} copies`;
+  }
+  document.getElementById('augEpInfo').innerHTML =
+    `Original: <strong>${orig}</strong> eps | Target: <strong>${target}</strong> eps (${dist})`;
 }
 
 function _augCollectTechniques() {
@@ -3058,9 +3191,11 @@ function _augCollectTechniques() {
 
 async function vizDoAugment() {
   const newName = document.getElementById('augNewName').value.trim();
-  const multiplier = parseInt(document.getElementById('augMultiplier').value);
+  const targetEps = parseInt(document.getElementById('augTargetEps').value);
+  const orig = vizEpisodesData.length;
   const st = document.getElementById('augStatus');
   if (!newName) { st.textContent = 'Enter a dataset name'; st.style.color = '#d93025'; return; }
+  if (!targetEps || targetEps <= orig) { st.textContent = 'Target must be more than original episodes'; st.style.color = '#d93025'; return; }
 
   const techniques = _augCollectTechniques();
   const btn = document.getElementById('augStartBtn');
@@ -3072,7 +3207,7 @@ async function vizDoAugment() {
     const r = await fetch(`/api/datasets/${vizCurrentDataset}/augment`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: newName, multiplier, techniques}),
+      body: JSON.stringify({name: newName, target_episodes: targetEps, techniques}),
     });
     const d = await r.json();
     if (d.ok) {
@@ -3136,6 +3271,11 @@ async function vizLoadEpisode() {
   // Videos without individual controls — synced via unified Play/Pause
   const vids = document.getElementById('vizVideos');
   vids.innerHTML = '';
+
+  // Check if this episode has augmentation info
+  const augEp = vizAugInfo && vizAugInfo.episodes ? vizAugInfo.episodes[ep] : null;
+  const showOriginal = augEp && !augEp.is_original && augEp.source_video;
+
   ['observation.images.top', 'observation.images.wrist'].forEach(cam => {
     const label = cam.split('.').pop();
     const camKey = `videos/${cam}`;
@@ -3144,15 +3284,98 @@ async function vizLoadEpisode() {
     const chunk = String(chunkIdx).padStart(3, '0');
     const file = String(fileIdx).padStart(3, '0');
     const path = `/data/${name}/videos/${cam}/chunk-${chunk}/file-${file}.mp4`;
-    vids.innerHTML += `
-      <div style="flex:1;min-width:200px">
-        <div style="font-size:0.82rem;font-weight:600;color:#555;margin-bottom:4px">${label}</div>
-        <video muted preload="auto" class="viz-video" style="width:100%;border-radius:8px;border:1px solid #e0e0e0;background:#000" src="${path}"></video>
-      </div>`;
+
+    if (showOriginal) {
+      // Show original + augmented side by side
+      const sv = augEp.source_video[label];
+      const srcDs = vizAugInfo.source_dataset;
+      const srcChunk = String(sv.chunk_index).padStart(3, '0');
+      const srcFile = String(sv.file_index).padStart(3, '0');
+      const srcPath = `/data/${srcDs}/videos/${cam}/chunk-${srcChunk}/file-${srcFile}.mp4`;
+      vids.innerHTML += `
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:0.82rem;font-weight:600;color:#555;margin-bottom:4px">${label}</div>
+          <div style="display:flex;gap:4px">
+            <div style="flex:1">
+              <div style="font-size:0.7rem;color:#888;margin-bottom:2px">Original (ep ${augEp.source_episode})</div>
+              <video muted preload="auto" class="viz-video" data-ep-start="${sv.from_timestamp}" data-ep-end="${sv.to_timestamp}" style="width:100%;border-radius:6px;border:1px solid #c8e6c9;background:#000" src="${srcPath}"></video>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:0.7rem;color:#888;margin-bottom:2px">Augmented</div>
+              <video muted preload="auto" class="viz-video" data-ep-start="${vizEpStart}" data-ep-end="${vizEpEnd}" style="width:100%;border-radius:6px;border:1px solid #bbdefb;background:#000" src="${path}"></video>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      vids.innerHTML += `
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:0.82rem;font-weight:600;color:#555;margin-bottom:4px">${label}</div>
+          <video muted preload="auto" class="viz-video" data-ep-start="${vizEpStart}" data-ep-end="${vizEpEnd}" style="width:100%;border-radius:8px;border:1px solid #e0e0e0;background:#000" src="${path}"></video>
+        </div>`;
+    }
   });
-  // Seek all videos to episode start
+
+  // Show augmentation details panel
+  let augDetailEl = document.getElementById('vizAugDetails');
+  if (!augDetailEl) {
+    augDetailEl = document.createElement('div');
+    augDetailEl.id = 'vizAugDetails';
+    vids.parentNode.insertBefore(augDetailEl, vids.nextSibling);
+  }
+  if (augEp && !augEp.is_original && augEp.params) {
+    const p = augEp.params;
+    let details = [];
+    if (p.camera) {
+      const cd = p.camera;
+      let parts = [];
+      if (cd.rotation) parts.push(`rotation: ${cd.rotation}deg`);
+      if (cd.perspective) parts.push('perspective warp');
+      if (cd.translate) parts.push(`translate: [${cd.translate.join(', ')}]`);
+      if (cd.scale) parts.push(`scale: ${cd.scale}`);
+      if (cd.shear) parts.push(`shear: ${cd.shear}`);
+      details.push(`<span style="color:#1565c0;font-weight:600">Camera:</span> ${parts.join(', ')}`);
+    }
+    if (p.light) {
+      const ld = p.light;
+      let parts = [];
+      if (ld.brightness) parts.push(`brightness: ${ld.brightness}`);
+      if (ld.contrast) parts.push(`contrast: ${ld.contrast}`);
+      if (ld.saturation) parts.push(`saturation: ${ld.saturation}`);
+      if (ld.color_jitter) parts.push('color jitter');
+      if (ld.shadow) parts.push(`shadow: ${ld.shadow}`);
+      if (ld.noise_sigma) parts.push(`noise: ${ld.noise_sigma}`);
+      if (ld.blur_kernel) parts.push(`blur: ${ld.blur_kernel}px`);
+      details.push(`<span style="color:#e65100;font-weight:600">Light:</span> ${parts.join(', ')}`);
+    }
+    if (p.robot) {
+      const rd = p.robot;
+      let parts = [];
+      if (rd.trim_frames) parts.push(`trim: ${rd.trim_frames} frames`);
+      if (rd.initial_noise) parts.push(`initial noise: [${rd.initial_noise.join(', ')}]`);
+      if (rd.jitter_sigma) parts.push(`jitter: ${rd.jitter_sigma}`);
+      details.push(`<span style="color:#2e7d32;font-weight:600">Robot:</span> ${parts.join(', ')}`);
+    }
+    if (p.language) {
+      details.push(`<span style="color:#6a1b9a;font-weight:600">Language:</span> "${p.language.augmented_task}"`);
+    }
+    augDetailEl.innerHTML = `
+      <div style="margin-top:8px;padding:10px 14px;background:#f5f5f5;border-radius:8px;border:1px solid #e0e0e0;font-size:0.8rem;line-height:1.7">
+        <div style="font-weight:700;color:#333;margin-bottom:4px">Augmentation Details (copy ${augEp.copy_index}, source ep ${augEp.source_episode})</div>
+        ${details.join('<br>')}
+      </div>`;
+  } else if (augEp && augEp.is_original) {
+    augDetailEl.innerHTML = `
+      <div style="margin-top:8px;padding:8px 14px;background:#e8f5e9;border-radius:8px;border:1px solid #c8e6c9;font-size:0.8rem;color:#2e7d32">
+        Original episode (copy 0, source ep ${augEp.source_episode}) — no augmentation applied
+      </div>`;
+  } else {
+    augDetailEl.innerHTML = '';
+  }
+
+  // Seek all videos to their respective episode start
   document.querySelectorAll('.viz-video').forEach(v => {
-    v.addEventListener('loadedmetadata', () => { v.currentTime = vizEpStart; });
+    const startTime = parseFloat(v.dataset.epStart) || vizEpStart;
+    v.addEventListener('loadedmetadata', () => { v.currentTime = startTime; });
   });
   // Reset scrubber, time, segments
   document.getElementById('vizScrubber').value = 0;
@@ -3200,18 +3423,22 @@ function vizUpdateLoop() {
   if (!vizPlaying) return;
   const videos = document.querySelectorAll('.viz-video');
   if (!videos.length) return;
+  // Use first video's own timestamps for progress
   const v = videos[0];
-  const duration = vizEpEnd - vizEpStart;
-  const elapsed = v.currentTime - vizEpStart;
-  const pct = duration > 0 ? Math.min(100, Math.max(0, (elapsed / duration) * 100)) : 0;
+  const vStart = parseFloat(v.dataset.epStart) || vizEpStart;
+  const vEnd = parseFloat(v.dataset.epEnd) || vizEpEnd;
+  const vDuration = vEnd - vStart;
+  const elapsed = v.currentTime - vStart;
+  const pct = vDuration > 0 ? Math.min(100, Math.max(0, (elapsed / vDuration) * 100)) : 0;
 
+  const mainDuration = vizEpEnd - vizEpStart;
   document.getElementById('vizScrubber').value = pct;
-  document.getElementById('vizTimeDisplay').textContent = elapsed.toFixed(1) + 's';
+  document.getElementById('vizTimeDisplay').textContent = ((pct / 100) * mainDuration).toFixed(1) + 's';
   vizUpdateChartCursor(pct);
   vizUpdatePhaseLabel(pct);
 
   // Stop at episode end
-  if (v.currentTime >= vizEpEnd - 0.05) {
+  if (v.currentTime >= vEnd - 0.05) {
     vizStopPlay();
     return;
   }
@@ -3220,8 +3447,11 @@ function vizUpdateLoop() {
 
 function vizScrub(pct) {
   const duration = vizEpEnd - vizEpStart;
-  const t = vizEpStart + (pct / 100) * duration;
-  document.querySelectorAll('.viz-video').forEach(v => { v.currentTime = t; });
+  document.querySelectorAll('.viz-video').forEach(v => {
+    const vStart = parseFloat(v.dataset.epStart) || vizEpStart;
+    const vEnd = parseFloat(v.dataset.epEnd) || vizEpEnd;
+    v.currentTime = vStart + (pct / 100) * (vEnd - vStart);
+  });
   document.getElementById('vizTimeDisplay').textContent = ((pct / 100) * duration).toFixed(1) + 's';
   vizUpdateChartCursor(pct);
   vizUpdatePhaseLabel(pct);

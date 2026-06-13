@@ -1195,6 +1195,137 @@ async def delete_dataset(name: str):
         return {"ok": False, "error": str(e)}
 
 
+# ── Push to Hugging Face ──
+
+hf_push_state = {
+    "running": False,
+    "progress": 0,
+    "status": "",
+    "error": None,
+}
+
+
+def _run_hf_push(dataset_name: str, repo_id: str):
+    """Background thread: push dataset to Hugging Face Hub."""
+    state = hf_push_state
+    state["running"] = True
+    state["progress"] = 10
+    state["status"] = "Preparing upload..."
+    state["error"] = None
+
+    dataset_dir = ROOT / "data" / dataset_name
+
+    try:
+        # Build list of files to upload (exclude augmentation.json and tmp dirs)
+        upload_files = []
+        for f in sorted(dataset_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(dataset_dir)
+            # Skip augmentation metadata & tmp streaming dirs
+            if rel.name == "augmentation.json":
+                continue
+            parts = rel.parts
+            if parts[0].startswith("tmp"):
+                continue
+            upload_files.append((str(f), str(rel)))
+
+        if not upload_files:
+            state["error"] = "No files to upload"
+            state["status"] = "Error: no files"
+            return
+
+        state["status"] = f"Uploading {len(upload_files)} files to {repo_id}..."
+        state["progress"] = 20
+
+        # Use huggingface_hub via lerobot env python
+        # Build a small script that uploads files
+        script = f"""
+import sys, os
+from huggingface_hub import HfApi, CommitOperationAdd
+api = HfApi()
+repo_id = {repr(repo_id)}
+# Create repo if needed
+api.create_repo(repo_id, repo_type="dataset", exist_ok=True)
+ops = []
+files = {upload_files!r}
+for local, remote in files:
+    ops.append(CommitOperationAdd(path_in_repo=remote, path_or_fileobj=local))
+    print(f"ADD {{remote}}", flush=True)
+api.create_commit(
+    repo_id=repo_id,
+    repo_type="dataset",
+    operations=ops,
+    commit_message="Upload dataset via Hybridge VLA",
+)
+print("DONE", flush=True)
+"""
+        lerobot_python = "/opt/miniconda3/envs/lerobot/bin/python"
+        if not Path(lerobot_python).exists():
+            # Fallback: try current python
+            lerobot_python = "python3"
+
+        proc = subprocess.Popen(
+            [lerobot_python, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        total = len(upload_files)
+        uploaded = 0
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("ADD "):
+                uploaded += 1
+                pct = 20 + int(uploaded / total * 70)
+                state["progress"] = min(pct, 90)
+                state["status"] = f"Uploading ({uploaded}/{total}): {line[4:]}"
+            elif line == "DONE":
+                state["progress"] = 100
+                state["status"] = f"Pushed {total} files to {repo_id}"
+
+        proc.wait()
+        if proc.returncode != 0:
+            err = proc.stderr.read()
+            state["error"] = err or f"Process exited with code {proc.returncode}"
+            state["status"] = f"Error: {state['error'][:200]}"
+        else:
+            state["progress"] = 100
+            state["status"] = f"Done! Pushed to {repo_id}"
+            print(f"[HF Push] Pushed {dataset_name} -> {repo_id} ({total} files)")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        state["error"] = str(e)
+        state["status"] = f"Error: {e}"
+    finally:
+        state["running"] = False
+
+
+@app.post("/api/datasets/{name}/push-hf")
+async def push_to_hf(name: str, request: Request):
+    """Push dataset to Hugging Face Hub."""
+    if hf_push_state["running"]:
+        return {"ok": False, "error": "Push already in progress"}
+    dataset_dir = ROOT / "data" / name
+    if not dataset_dir.exists() or not (dataset_dir / "meta" / "info.json").exists():
+        return {"ok": False, "error": "Dataset not found"}
+    body = await request.json()
+    repo_id = body.get("repo_id", "").strip()
+    if not repo_id or "/" not in repo_id:
+        return {"ok": False, "error": "Invalid repo_id (format: username/dataset-name)"}
+    threading.Thread(target=_run_hf_push, args=(name, repo_id), daemon=True).start()
+    return {"ok": True, "message": f"Pushing to {repo_id}..."}
+
+
+@app.get("/api/hf-push/status")
+async def hf_push_status():
+    """Get HF push progress."""
+    return dict(hf_push_state)
+
+
 @app.get("/api/datasets/{name}/info")
 async def dataset_info(name: str):
     """Get full info.json + tasks for a dataset."""
@@ -1212,7 +1343,15 @@ async def dataset_info(name: str):
             task_list = tbl.to_pydict().get("task", [])
         except Exception:
             pass
-    return {"ok": True, "info": info, "tasks": task_list}
+    # Read augmentation metadata if exists
+    aug_path = ROOT / "data" / name / "meta" / "augmentation.json"
+    aug_info = None
+    if aug_path.exists():
+        try:
+            aug_info = json.loads(aug_path.read_text())
+        except Exception:
+            pass
+    return {"ok": True, "info": info, "tasks": task_list, "augmentation": aug_info}
 
 
 @app.get("/api/datasets/{name}/episodes")
@@ -1974,7 +2113,7 @@ def _aug_process_video(src_path, dst_path, from_ts, to_ts, fps, cam_p, light_p, 
 
 # --- Main augmentation runner ---
 
-def _run_augmentation(src_name, new_name, multiplier, techniques):
+def _run_augmentation(src_name, new_name, target_episodes, techniques):
     """Background thread: create augmented dataset."""
     import shutil
     import cv2
@@ -2042,7 +2181,17 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
             src_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
 
         n_src_eps = len(src_frames)
-        total_steps = n_src_eps * multiplier
+
+        # Distribute target_episodes evenly across source episodes
+        # Each source ep gets at least 1 copy (original) + augmented copies
+        sorted_eps = sorted(src_frames.keys())
+        copies_per_ep = {}  # ep -> total copies (including original)
+        base = target_episodes // n_src_eps
+        remainder = target_episodes % n_src_eps
+        for i, ep in enumerate(sorted_eps):
+            copies_per_ep[ep] = base + (1 if i < remainder else 0)
+
+        total_steps = target_episodes
         current_step = 0
 
         # Create output dirs
@@ -2054,6 +2203,7 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
 
         combined_data = []
         combined_ep = []
+        aug_episode_info = []  # per-episode augmentation details
         all_new_tasks = list(src_tasks)
         task_set = set(src_tasks)
         new_ep_idx = 0
@@ -2064,22 +2214,20 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
         robot_opts = techniques.get("robot_noise", {})
         lang_opts = techniques.get("language", {})
 
-        for copy_idx in range(multiplier):
-            is_original = (copy_idx == 0)
-
-            # Generate augmentation params for this copy
-            cam_p = None if is_original else (_augp_camera(cam_opts) if cam_opts.get("enabled") else None)
-            light_p = None if is_original else (_augp_light(light_opts) if light_opts.get("enabled") else None)
-
-            for old_ep in sorted(src_frames.keys()):
+        for old_ep in sorted_eps:
+            n_copies = copies_per_ep[old_ep]
+            for copy_idx in range(n_copies):
+                is_original = (copy_idx == 0)
                 frames = src_frames[old_ep]
                 ep_meta = next((m for m in ep_meta_list if m["episode_index"] == old_ep), None)
 
-                state["status"] = f"Copy {copy_idx + 1}/{multiplier}, Episode {old_ep + 1}/{n_src_eps}"
+                state["status"] = f"Episode {new_ep_idx + 1}/{target_episodes} (src ep {old_ep}, copy {copy_idx + 1}/{n_copies})"
                 current_step += 1
                 state["progress"] = int(current_step / total_steps * 100)
 
-                # Robot state augmentation params (per-episode random)
+                # Generate augmentation params per episode (all random each time)
+                cam_p = None if is_original else (_augp_camera(cam_opts) if cam_opts.get("enabled") else None)
+                light_p = None if is_original else (_augp_light(light_opts) if light_opts.get("enabled") else None)
                 robot_p = None if is_original else (
                     _augp_robot(robot_opts, len(frames), fps) if robot_opts.get("enabled") else None
                 )
@@ -2170,6 +2318,56 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
                 new_meta["meta/episodes/chunk_index"] = 0
                 new_meta["meta/episodes/file_index"] = 0
 
+                # Track augmentation details per episode
+                ep_aug_info = {
+                    "episode_index": new_ep_idx,
+                    "copy_index": copy_idx,
+                    "source_episode": old_ep,
+                    "is_original": is_original,
+                }
+                if not is_original:
+                    params_detail = {}
+                    if cam_p:
+                        cd = {}
+                        if "angle" in cam_p: cd["rotation"] = round(cam_p["angle"], 1)
+                        if "persp" in cam_p: cd["perspective"] = True
+                        if "tx" in cam_p: cd["translate"] = [round(cam_p["tx"], 3), round(cam_p.get("ty", 0), 3)]
+                        if "scale" in cam_p: cd["scale"] = round(cam_p["scale"], 2)
+                        if "shear" in cam_p: cd["shear"] = round(cam_p["shear"], 3)
+                        params_detail["camera"] = cd
+                    if light_p:
+                        ld = {}
+                        if "brightness" in light_p: ld["brightness"] = round(light_p["brightness"], 2)
+                        if "contrast" in light_p: ld["contrast"] = round(light_p["contrast"], 2)
+                        if "saturation" in light_p: ld["saturation"] = round(light_p["saturation"], 2)
+                        if "hue" in light_p: ld["color_jitter"] = True
+                        if "shadow_a" in light_p: ld["shadow"] = f"{light_p['shadow_dir']} {round(light_p['shadow_a'], 2)}"
+                        if "noise_s" in light_p: ld["noise_sigma"] = round(light_p["noise_s"], 1)
+                        if "blur_k" in light_p: ld["blur_kernel"] = light_p["blur_k"]
+                        params_detail["light"] = ld
+                    if robot_p:
+                        rd = {}
+                        if "trim" in robot_p: rd["trim_frames"] = robot_p["trim"]
+                        if "joint_offset" in robot_p: rd["initial_noise"] = [round(v, 2) for v in robot_p["joint_offset"]]
+                        if "jitter_s" in robot_p: rd["jitter_sigma"] = round(robot_p["jitter_s"], 2)
+                        params_detail["robot"] = rd
+                    if lang_opts.get("enabled") and ep_task_list:
+                        params_detail["language"] = {"augmented_task": ep_task_list[0]}
+                    ep_aug_info["params"] = params_detail
+                # Source video reference for original comparison
+                if ep_meta:
+                    ep_aug_info["source_video"] = {}
+                    for sv_cam in ["observation.images.top", "observation.images.wrist"]:
+                        sv_key = f"videos/{sv_cam}"
+                        sv_label = sv_cam.split(".")[-1]
+                        ep_aug_info["source_video"][sv_label] = {
+                            "chunk_index": ep_meta.get(f"{sv_key}/chunk_index", 0),
+                            "file_index": ep_meta.get(f"{sv_key}/file_index", 0),
+                            "from_timestamp": ep_meta.get(f"{sv_key}/from_timestamp", 0.0),
+                            "to_timestamp": ep_meta.get(f"{sv_key}/to_timestamp", 0.0),
+                        }
+                aug_episode_info.append(ep_aug_info)
+
                 combined_ep.append(new_meta)
                 new_ep_idx += 1
 
@@ -2204,6 +2402,15 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
                 feat["info"]["video.codec"] = "h264"
         (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
 
+        # Save augmentation metadata
+        aug_meta = {
+            "source_dataset": src_name,
+            "target_episodes": target_episodes,
+            "techniques": techniques,
+            "episodes": aug_episode_info,
+        }
+        (new_dir / "meta" / "augmentation.json").write_text(json.dumps(aug_meta, indent=2))
+
         state["progress"] = 100
         state["status"] = f"Done! {new_ep_idx} episodes, {len(combined_data)} frames"
         print(f"[Augment] Created {new_name}: {new_ep_idx} eps, {len(combined_data)} frames")
@@ -2224,7 +2431,7 @@ async def start_augment(name: str, request: Request):
         return {"ok": False, "error": "Augmentation already running"}
     body = await request.json()
     new_name = body.get("name", "").strip().replace(" ", "-").replace("/", "-")
-    multiplier = body.get("multiplier", 2)
+    target_episodes = body.get("target_episodes")
     techniques = body.get("techniques", {})
 
     if not new_name:
@@ -2234,10 +2441,12 @@ async def start_augment(name: str, request: Request):
         return {"ok": False, "error": "Source dataset not found"}
     if (ROOT / "data" / new_name).exists():
         return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
+    if not target_episodes or target_episodes < 1:
+        return {"ok": False, "error": "Invalid target episodes"}
 
     threading.Thread(
         target=_run_augmentation,
-        args=(name, new_name, multiplier, techniques),
+        args=(name, new_name, target_episodes, techniques),
         daemon=True,
     ).start()
     return {"ok": True, "message": "Augmentation started"}
