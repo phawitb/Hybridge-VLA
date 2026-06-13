@@ -1919,33 +1919,57 @@ def _aug_episode_data(rows, robot_p):
 # --- Video augmentation ---
 
 def _aug_process_video(src_path, dst_path, from_ts, to_ts, fps, cam_p, light_p, vid_w, vid_h):
-    """Read video segment, augment frames, write to new file."""
-    import cv2
-    cap = cv2.VideoCapture(str(src_path))
-    if not cap.isOpened():
+    """Read video segment via ffmpeg, augment frames, write to new file."""
+    duration = to_ts - from_ts
+    if duration <= 0 or not Path(src_path).exists():
         return 0.0, 0.0, 0
-    cap.set(cv2.CAP_PROP_POS_MSEC, from_ts * 1000)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(dst_path), fourcc, fps, (vid_w, vid_h))
-    count = 0
-    while True:
-        pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-        if pos_ms / 1000 >= to_ts:
-            break
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if frame.shape[1] != vid_w or frame.shape[0] != vid_h:
-            frame = cv2.resize(frame, (vid_w, vid_h))
-        if cam_p or light_p:
-            frame = _aug_frame(frame, cam_p, light_p)
-        writer.write(frame)
-        count += 1
-    new_from = 0.0
-    new_to = count / fps if fps > 0 else 0.0
-    cap.release()
-    writer.release()
-    return new_from, new_to, count
+
+    # Read frames from source using ffmpeg pipe (handles av1 and all codecs)
+    read_cmd = [
+        "ffmpeg", "-v", "quiet",
+        "-ss", str(from_ts), "-i", str(src_path),
+        "-t", str(duration),
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s", f"{vid_w}x{vid_h}",
+        "pipe:1",
+    ]
+    # Write frames to output using ffmpeg pipe (h264 for broad compatibility)
+    write_cmd = [
+        "ffmpeg", "-y", "-v", "quiet",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s", f"{vid_w}x{vid_h}", "-r", str(fps),
+        "-i", "pipe:0",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "fast", "-crf", "23",
+        str(dst_path),
+    ]
+
+    try:
+        reader = subprocess.Popen(read_cmd, stdout=subprocess.PIPE)
+        writer = subprocess.Popen(write_cmd, stdin=subprocess.PIPE)
+
+        frame_size = vid_w * vid_h * 3
+        count = 0
+        while True:
+            raw = reader.stdout.read(frame_size)
+            if len(raw) < frame_size:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape(vid_h, vid_w, 3)
+            if cam_p or light_p:
+                frame = _aug_frame(frame, cam_p, light_p)
+            writer.stdin.write(frame.tobytes())
+            count += 1
+
+        reader.stdout.close()
+        writer.stdin.close()
+        reader.wait()
+        writer.wait()
+
+        new_to = count / fps if fps > 0 else 0.0
+        return 0.0, new_to, count
+    except Exception as e:
+        print(f"[Augment] Video processing error: {e}")
+        return 0.0, 0.0, 0
 
 
 # --- Main augmentation runner ---
@@ -2173,11 +2197,11 @@ def _run_augmentation(src_name, new_name, multiplier, techniques):
         new_info["total_frames"] = len(combined_data)
         new_info["total_tasks"] = len(all_new_tasks)
         new_info["splits"] = {"train": f"0:{new_ep_idx}"}
-        # Update video codec to mp4v (since we re-encoded)
+        # Update video codec to h264 (re-encoded with libx264 via ffmpeg)
         for feat_key in ["observation.images.top", "observation.images.wrist"]:
             feat = new_info.get("features", {}).get(feat_key, {})
             if "info" in feat:
-                feat["info"]["video.codec"] = "mp4v"
+                feat["info"]["video.codec"] = "h264"
         (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
 
         state["progress"] = 100
