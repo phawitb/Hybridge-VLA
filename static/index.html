@@ -1147,14 +1147,13 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
+      <div style="flex:1"></div>
+      <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
     </div>
 
     <div id="vizInfoSection" style="display:none">
       <!-- Info bar -->
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-        <div id="vizInfoGrid" style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88rem;flex:1"></div>
-        <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
-      </div>
+      <div id="vizInfoGrid" style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88rem;margin-bottom:16px"></div>
 
       <!-- Main 2-column layout -->
       <div style="display:flex;gap:16px;align-items:flex-start">
