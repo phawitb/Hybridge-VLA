@@ -1131,6 +1131,321 @@ async def delete_episodes(name: str, request: Request):
         return {"ok": False, "error": str(e)}
 
 
+def _detect_segments(frames_action, fps):
+    """Detect pick/place segments from gripper data (port of JS vizDetectSegments).
+
+    Returns list of dicts: {start, end, phase} where phase is 'idle', 'pick', or 'place'.
+    start/end are frame indices.
+    """
+    import numpy as np
+    n = len(frames_action)
+    if n < 5:
+        return [{"start": 0, "end": n - 1, "phase": "pick"}]
+
+    GI = 5  # gripper index
+
+    def smooth(arr, hw):
+        out = np.empty(len(arr))
+        for i in range(len(arr)):
+            lo, hi = max(0, i - hw), min(len(arr) - 1, i + hw)
+            out[i] = np.mean(arr[lo:hi + 1])
+        return out
+
+    gripper = np.array([a[GI] if len(a) > GI else 0.0 for a in frames_action])
+    arm_vel = np.zeros(n)
+    for i in range(1, n):
+        v = 0.0
+        for j in range(6):
+            a0 = frames_action[i - 1][j] if j < len(frames_action[i - 1]) else 0.0
+            a1 = frames_action[i][j] if j < len(frames_action[i]) else 0.0
+            v += abs(a1 - a0)
+        arm_vel[i] = v
+
+    sg = smooth(gripper, 3)
+    sv = smooth(arm_vel, 5)
+
+    # Velocity threshold for idle detection
+    sv_sorted = np.sort(sv)
+    vel_thresh = max(sv_sorted[int(n * 0.85)] * 0.12, 0.3)
+
+    # Active range
+    active_start, active_end = 0, n - 1
+    for i in range(n):
+        if sv[i] > vel_thresh:
+            active_start = i
+            break
+    for i in range(n - 1, -1, -1):
+        if sv[i] > vel_thresh:
+            active_end = i
+            break
+
+    # Gripper peaks
+    rest = sg[0]
+    dist = np.abs(sg - rest)
+    max_dist = np.max(dist)
+    closed_thresh = max_dist * 0.25
+
+    p1 = active_start
+    for i in range(active_start, active_end + 1):
+        if dist[i] > dist[p1]:
+            p1 = i
+    min_sep = int(n * 0.15)
+    p2 = n - 1 if p1 < n / 2 else 0
+    for i in range(n):
+        if abs(i - p1) >= min_sep and dist[i] > dist[p2]:
+            p2 = i
+    if p1 > p2:
+        p1, p2 = p2, p1
+
+    # Valley between peaks → split in half
+    valley_start, valley_end = -1, -1
+    for i in range(p1, p2 + 1):
+        if dist[i] <= closed_thresh:
+            if valley_start < 0:
+                valley_start = i
+            valley_end = i
+    if valley_start >= 0:
+        split_frame = (valley_start + valley_end) // 2
+    else:
+        split_frame = (p1 + p2) // 2
+
+    segs = []
+    if active_start > 0:
+        segs.append({"start": 0, "end": active_start - 1, "phase": "idle"})
+    segs.append({"start": active_start, "end": split_frame, "phase": "pick"})
+    segs.append({"start": split_frame + 1, "end": active_end, "phase": "place"})
+    if active_end < n - 1:
+        segs.append({"start": active_end + 1, "end": n - 1, "phase": "idle"})
+    return segs
+
+
+def _parse_object_from_task(task):
+    """Extract object name from task description."""
+    import re
+    m = re.search(r"pick\s+up\s+the\s+(.+?)\s+to\s+the\s+", task, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r"pick\s+up\s+the\s+(.+)", task, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"(?:move|put|bring|grab)\s+the\s+(.+?)\s+(?:to|into|onto)\s+", task, re.I)
+    if m:
+        return m.group(1)
+    return "object"
+
+
+@app.post("/api/datasets/{name}/split")
+async def split_dataset(name: str):
+    """Split a dataset by pick/place segments, creating new sub-datasets."""
+    import shutil
+
+    dataset_dir = ROOT / "data" / name
+    info_path = dataset_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        info = json.loads(info_path.read_text())
+        fps = info.get("fps", 30)
+
+        # Read task
+        tasks_path = dataset_dir / "meta" / "tasks.parquet"
+        task = ""
+        if tasks_path.exists():
+            tbl = pq.read_table(str(tasks_path))
+            tasks = tbl.to_pydict().get("task", [])
+            if tasks:
+                task = tasks[0]
+        obj = _parse_object_from_task(task)
+        pick_label = f"pick up the {obj}"
+        place_label = f"place the {obj}"
+
+        # Read all episode metadata
+        ep_dir = dataset_dir / "meta" / "episodes"
+        all_ep_meta = []
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    all_ep_meta.append({k: v[i] for k, v in d.items()})
+
+        # Read all data frames grouped by episode
+        data_dir = dataset_dir / "data"
+        all_frames = {}  # ep_index -> [rows]
+        if data_dir.exists():
+            for pf in sorted(data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep = d["episode_index"][i]
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    all_frames.setdefault(ep, []).append(row)
+
+        # Sort frames within each episode by frame_index
+        for ep in all_frames:
+            all_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
+
+        # Detect segments for each episode
+        ep_segments = {}
+        for ep in sorted(all_frames.keys()):
+            actions = [f.get("action", [0] * 6) for f in all_frames[ep]]
+            segs = _detect_segments(actions, fps)
+            ep_segments[ep] = segs
+
+        # Build sub-datasets for pick and place
+        phase_configs = [
+            ("pick", pick_label),
+            ("place", place_label),
+        ]
+
+        created = []
+
+        for phase, phase_label in phase_configs:
+            slug = phase_label.replace(" ", "-")
+            new_name = f"{name}_{slug}"
+            new_dir = ROOT / "data" / new_name
+
+            # Skip if already exists
+            if new_dir.exists():
+                shutil.rmtree(new_dir)
+
+            new_dir.mkdir(parents=True)
+            (new_dir / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+            (new_dir / "data" / "chunk-000").mkdir(parents=True)
+
+            new_data_rows = []
+            new_ep_rows = []
+            new_ep_idx = 0
+            global_frame_idx = 0
+
+            for ep in sorted(all_frames.keys()):
+                frames = all_frames[ep]
+                segs = ep_segments[ep]
+                seg = next((s for s in segs if s["phase"] == phase), None)
+                if not seg:
+                    continue
+
+                ep_meta = next((m for m in all_ep_meta if m["episode_index"] == ep), None)
+                start, end = seg["start"], seg["end"]
+                seg_frames = frames[start:end + 1]
+                seg_length = len(seg_frames)
+
+                if seg_length == 0:
+                    continue
+
+                # Re-index data frames
+                ep_global_start = global_frame_idx
+                for fi, row in enumerate(seg_frames):
+                    new_row = dict(row)
+                    new_row["episode_index"] = new_ep_idx
+                    new_row["frame_index"] = fi
+                    new_row["index"] = global_frame_idx
+                    new_row["timestamp"] = fi / fps
+                    new_row["task_index"] = 0
+                    new_data_rows.append(new_row)
+                    global_frame_idx += 1
+
+                # Build episode meta
+                new_ep_meta = {}
+                new_ep_meta["episode_index"] = new_ep_idx
+                new_ep_meta["tasks"] = [phase_label]
+                new_ep_meta["length"] = seg_length
+                new_ep_meta["data/chunk_index"] = 0
+                new_ep_meta["data/file_index"] = 0
+                new_ep_meta["dataset_from_index"] = ep_global_start
+                new_ep_meta["dataset_to_index"] = global_frame_idx
+
+                # Video timestamps: segment range within original video
+                for cam in ["observation.images.top", "observation.images.wrist"]:
+                    cam_key = f"videos/{cam}"
+                    if ep_meta:
+                        orig_from = ep_meta.get(f"{cam_key}/from_timestamp", 0.0)
+                        chunk_idx = ep_meta.get(f"{cam_key}/chunk_index", 0)
+                        file_idx = ep_meta.get(f"{cam_key}/file_index", 0)
+                    else:
+                        orig_from, chunk_idx, file_idx = 0.0, 0, 0
+                    new_ep_meta[f"{cam_key}/chunk_index"] = chunk_idx
+                    new_ep_meta[f"{cam_key}/file_index"] = file_idx
+                    new_ep_meta[f"{cam_key}/from_timestamp"] = orig_from + start / fps
+                    new_ep_meta[f"{cam_key}/to_timestamp"] = orig_from + (end + 1) / fps
+
+                # Copy stats from original if available (omit for simplicity)
+                if ep_meta:
+                    for k, v in ep_meta.items():
+                        if k.startswith("stats/"):
+                            new_ep_meta[k] = v
+                    if "meta/episodes/chunk_index" in ep_meta:
+                        new_ep_meta["meta/episodes/chunk_index"] = 0
+                    if "meta/episodes/file_index" in ep_meta:
+                        new_ep_meta["meta/episodes/file_index"] = 0
+
+                new_ep_rows.append(new_ep_meta)
+                new_ep_idx += 1
+
+            if not new_data_rows:
+                shutil.rmtree(new_dir)
+                continue
+
+            # Write data parquet
+            cols = {k: [r[k] for r in new_data_rows] for k in new_data_rows[0]}
+            pq.write_table(pa.table(cols), str(new_dir / "data" / "chunk-000" / "file-000.parquet"))
+
+            # Write episode meta parquet
+            if new_ep_rows:
+                cols = {k: [r[k] for r in new_ep_rows] for k in new_ep_rows[0]}
+                pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
+
+            # Write tasks parquet
+            pq.write_table(
+                pa.table({"task_index": [0], "task": [phase_label]}),
+                str(new_dir / "meta" / "tasks.parquet"),
+            )
+
+            # Copy video files
+            for cam in ["observation.images.top", "observation.images.wrist"]:
+                src_vid_dir = dataset_dir / "videos" / cam
+                dst_vid_dir = new_dir / "videos" / cam
+                if src_vid_dir.exists():
+                    shutil.copytree(str(src_vid_dir), str(dst_vid_dir))
+
+            # Write info.json
+            new_info = dict(info)
+            new_info["total_episodes"] = new_ep_idx
+            new_info["total_frames"] = len(new_data_rows)
+            new_info["total_tasks"] = 1
+            new_info["splits"] = {"train": f"0:{new_ep_idx}"}
+            (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+
+            created.append({
+                "name": new_name,
+                "label": phase_label,
+                "episodes": new_ep_idx,
+                "frames": len(new_data_rows),
+            })
+            print(f"[Dataset] Created split: {new_name} ({new_ep_idx} eps, {len(new_data_rows)} frames)")
+
+        return {"ok": True, "datasets": created}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 # ══════════ Data Collection ══════════
 
 datacollect_state = {

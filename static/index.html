@@ -1149,7 +1149,10 @@ bump_height = min(overshoot + 2, 10) degrees
 
     <div id="vizInfoSection" style="display:none">
       <!-- Info bar -->
-      <div id="vizInfoGrid" style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88rem;margin-bottom:16px"></div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div id="vizInfoGrid" style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88rem;flex:1"></div>
+        <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
+      </div>
 
       <!-- Main 2-column layout -->
       <div style="display:flex;gap:16px;align-items:flex-start">
@@ -2632,6 +2635,10 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const grid = document.getElementById('vizInfoGrid');
     const task = d.tasks && d.tasks.length ? d.tasks[0] : '-';
     vizCurrentTask = task;
+    // Show split button if task has pick/place pattern
+    const splitBtn = document.getElementById('vizSplitBtn');
+    const hasPick = /pick\s+up\s+the\s+/i.test(task);
+    splitBtn.style.display = hasPick ? '' : 'none';
     grid.innerHTML = [
       ['Episodes', info.total_episodes],
       ['Frames', info.total_frames],
@@ -2747,6 +2754,31 @@ async function vizDeleteSelected() {
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
   btn.textContent = 'Delete';
+}
+
+async function vizSplitDataset() {
+  if (!vizCurrentDataset) return;
+  const obj = vizParseObject(vizCurrentTask || '');
+  const pickLabel = `pick up the ${obj}`;
+  const placeLabel = `place the ${obj}`;
+  if (!confirm(`Split dataset "${vizCurrentDataset}" into:\n\n• ${pickLabel}\n• ${placeLabel}\n\nThis will create 2 new datasets.`)) return;
+
+  const btn = document.getElementById('vizSplitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Splitting...';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/split`, {method:'POST'});
+    const d = await r.json();
+    if (d.ok && d.datasets.length) {
+      const summary = d.datasets.map(ds => `• ${ds.name} (${ds.episodes} eps, ${ds.frames} frames)`).join('\n');
+      alert(`Split complete!\n\n${summary}`);
+      vizRefreshDatasets();
+    } else {
+      alert('Error: ' + (d.error || 'No segments detected'));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = 'Split & Generate';
 }
 
 async function vizLoadEpisode() {
