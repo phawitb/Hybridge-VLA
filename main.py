@@ -914,12 +914,23 @@ async def list_datasets():
             if info_path.exists():
                 try:
                     info = json.loads(info_path.read_text())
+                    # Read tasks
+                    task_list = []
+                    tasks_path = d / "meta" / "tasks.parquet"
+                    if tasks_path.exists():
+                        try:
+                            import pyarrow.parquet as pq
+                            tbl = pq.read_table(str(tasks_path))
+                            task_list = tbl.to_pydict().get("task", [])
+                        except Exception:
+                            pass
                     datasets.append({
                         "name": d.name,
                         "total_episodes": info.get("total_episodes", 0),
                         "total_frames": info.get("total_frames", 0),
                         "fps": info.get("fps", 0),
                         "robot_type": info.get("robot_type", ""),
+                        "tasks": task_list,
                     })
                 except Exception:
                     pass

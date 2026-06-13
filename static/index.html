@@ -2823,10 +2823,12 @@ async function vizShowCombine() {
   vizAllDatasets.forEach(ds => {
     const div = document.createElement('div');
     div.style.cssText = 'padding:10px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:10px;cursor:pointer';
+    const tasksHtml = (ds.tasks || []).map(t => `<span style="background:#e8f0fe;color:#1a73e8;padding:1px 6px;border-radius:4px;font-size:0.7rem">${t}</span>`).join(' ');
     div.innerHTML = `<input type="checkbox" class="combine-cb" value="${ds.name}">
       <div style="flex:1;min-width:0">
         <div style="font-size:0.9rem;font-weight:600">${ds.name}</div>
-        <div style="font-size:0.75rem;color:#888">${ds.total_episodes} episodes &middot; ${ds.total_frames} frames</div>
+        <div style="font-size:0.75rem;color:#888;margin-bottom:2px">${ds.total_episodes} episodes &middot; ${ds.total_frames} frames</div>
+        ${tasksHtml ? `<div style="display:flex;gap:4px;flex-wrap:wrap">${tasksHtml}</div>` : ''}
       </div>`;
     div.addEventListener('click', e => {
       if (e.target.tagName !== 'INPUT') {
