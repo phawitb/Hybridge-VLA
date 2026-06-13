@@ -955,7 +955,10 @@ async def dataset_episodes(name: str):
         try:
             import pyarrow.parquet as pq
             for pf in sorted(ep_dir.rglob("*.parquet")):
-                tbl = pq.read_table(str(pf))
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
                 d = tbl.to_pydict()
                 for i in range(len(d.get("episode_index", []))):
                     episodes.append({k: v[i] for k, v in d.items()})
@@ -974,7 +977,10 @@ async def dataset_frames(name: str, episode_index: int):
         import pyarrow.parquet as pq
         rows = []
         for pf in sorted(data_dir.rglob("*.parquet")):
-            tbl = pq.read_table(str(pf))
+            try:
+                tbl = pq.read_table(str(pf))
+            except Exception:
+                continue  # skip corrupted files
             d = tbl.to_pydict()
             for i in range(len(d.get("episode_index", []))):
                 if d["episode_index"][i] == episode_index:
@@ -991,6 +997,140 @@ async def dataset_frames(name: str, episode_index: int):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/datasets/{name}/delete-episodes")
+async def delete_episodes(name: str, request: Request):
+    """Delete selected episodes from a LeRobot dataset and re-index."""
+    body = await request.json()
+    episodes_to_delete = set(body.get("episodes", []))
+    if not episodes_to_delete:
+        return {"ok": False, "error": "No episodes specified"}
+
+    dataset_dir = ROOT / "data" / name
+    info_path = dataset_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        info = json.loads(info_path.read_text())
+        original_total = info.get("total_episodes", 0)
+
+        # --- 1. Filter episode metadata parquet ---
+        ep_dir = dataset_dir / "meta" / "episodes"
+        all_ep_rows = []
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    if d["episode_index"][i] not in episodes_to_delete:
+                        all_ep_rows.append({k: v[i] for k, v in d.items()})
+
+        # Build old→new episode index mapping
+        remaining_old_indices = sorted(set(r["episode_index"] for r in all_ep_rows))
+        ep_remap = {old: new for new, old in enumerate(remaining_old_indices)}
+
+        # Re-index episode metadata
+        for row in all_ep_rows:
+            row["episode_index"] = ep_remap[row["episode_index"]]
+
+        # --- 2. Filter and re-index data parquet ---
+        data_dir = dataset_dir / "data"
+        all_data_rows = []
+        if data_dir.exists():
+            for pf in sorted(data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    if d["episode_index"][i] not in episodes_to_delete:
+                        row = {}
+                        for k, v in d.items():
+                            val = v[i]
+                            if hasattr(val, "tolist"):
+                                val = val.tolist()
+                            row[k] = val
+                        all_data_rows.append(row)
+
+        # Re-index data rows
+        new_total_frames = len(all_data_rows)
+        for idx, row in enumerate(all_data_rows):
+            row["episode_index"] = ep_remap[row["episode_index"]]
+            row["index"] = idx
+
+        # Recalculate dataset_from_index / dataset_to_index for episodes
+        ep_frame_ranges = {}
+        for row in all_data_rows:
+            ep = row["episode_index"]
+            gidx = row["index"]
+            if ep not in ep_frame_ranges:
+                ep_frame_ranges[ep] = [gidx, gidx]
+            else:
+                ep_frame_ranges[ep][0] = min(ep_frame_ranges[ep][0], gidx)
+                ep_frame_ranges[ep][1] = max(ep_frame_ranges[ep][1], gidx)
+        for row in all_ep_rows:
+            ep = row["episode_index"]
+            if ep in ep_frame_ranges:
+                row["dataset_from_index"] = ep_frame_ranges[ep][0]
+                row["dataset_to_index"] = ep_frame_ranges[ep][1] + 1
+
+        # --- 3. Write filtered episode metadata ---
+        # Remove old files
+        if ep_dir.exists():
+            import shutil
+            shutil.rmtree(ep_dir)
+        ep_out = ep_dir / "chunk-000"
+        ep_out.mkdir(parents=True, exist_ok=True)
+        if all_ep_rows:
+            cols = {k: [r[k] for r in all_ep_rows] for k in all_ep_rows[0]}
+            pq.write_table(pa.table(cols), str(ep_out / "file-000.parquet"))
+
+        # --- 4. Write filtered data ---
+        if data_dir.exists():
+            import shutil
+            shutil.rmtree(data_dir)
+        data_out = data_dir / "chunk-000"
+        data_out.mkdir(parents=True, exist_ok=True)
+        if all_data_rows:
+            cols = {k: [r[k] for r in all_data_rows] for k in all_data_rows[0]}
+            pq.write_table(pa.table(cols), str(data_out / "file-000.parquet"))
+
+        # --- 5. Update info.json ---
+        new_total_episodes = len(remaining_old_indices)
+        info["total_episodes"] = new_total_episodes
+        info["total_frames"] = new_total_frames
+        info["splits"] = {"train": f"0:{new_total_episodes}"}
+        info_path.write_text(json.dumps(info, indent=4))
+
+        # --- 6. Delete stats.json (will be regenerated on next train) ---
+        stats_path = dataset_dir / "meta" / "stats.json"
+        if stats_path.exists():
+            stats_path.unlink()
+
+        # Note: video files are left as-is — timestamps in episode metadata
+        # still point to the correct segments within the shared mp4 files.
+
+        deleted_count = original_total - new_total_episodes
+        print(f"[Dataset] Deleted {deleted_count} episode(s) from {name}, {new_total_episodes} remaining")
+        return {
+            "ok": True,
+            "deleted": deleted_count,
+            "remaining_episodes": new_total_episodes,
+            "remaining_frames": new_total_frames,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 # ══════════ Data Collection ══════════
 
 datacollect_state = {
@@ -999,6 +1139,7 @@ datacollect_state = {
     "started_at": None,
     "log_lines": [],
     "log_lock": threading.Lock(),
+    "completed": False,  # True when process exits naturally (all episodes done)
 }
 
 
@@ -1063,19 +1204,44 @@ async def datacollect_verify():
     checks.append({"name": "Teleop port", "detail": teleop_port, "ok": teleop_ok,
                     "error": "" if teleop_ok else f"Port not found: {teleop_port}"})
 
-    # 3. Cameras
+    # 3. Cameras — capture frames and hstack for preview
     import cv2
     cams = robot_cfg.get("cameras", {})
+    cam_frames = []
     for cam_name, cam_cfg in cams.items():
         idx = cam_cfg.get("index", 0)
         cap = cv2.VideoCapture(idx)
         cam_ok = False
+        frame = None
         if cap.isOpened():
-            ret, _ = cap.read()
+            ret, frame = cap.read()
             cam_ok = ret
         cap.release()
         checks.append({"name": f"Camera: {cam_name}", "detail": f"index {idx}", "ok": cam_ok,
                         "error": "" if cam_ok else f"Cannot read from camera index {idx}"})
+        if cam_ok and frame is not None:
+            # Draw camera name label
+            label = cam_name
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale, thickness = 0.9, 2
+            (tw, th), _ = cv2.getTextSize(label, font, scale, thickness)
+            cv2.rectangle(frame, (5, 5), (tw + 20, th + 20), (0, 0, 0), -1)
+            cv2.putText(frame, label, (12, th + 12), font, scale, (255, 255, 255), thickness)
+            cam_frames.append(frame)
+
+    # Build hstacked camera preview
+    camera_preview = None
+    if cam_frames:
+        target_h = max(f.shape[0] for f in cam_frames)
+        resized = []
+        for f in cam_frames:
+            if f.shape[0] != target_h:
+                ratio = target_h / f.shape[0]
+                f = cv2.resize(f, (int(f.shape[1] * ratio), target_h))
+            resized.append(f)
+        stacked = np.hstack(resized)
+        _, buf = cv2.imencode(".jpg", stacked, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        camera_preview = base64.b64encode(buf.tobytes()).decode()
 
     # 4. Disk space
     stat = shutil.disk_usage(str(ROOT))
@@ -1091,7 +1257,10 @@ async def datacollect_verify():
                     "error": "" if bin_ok else f"Binary not found: {lerobot_bin}"})
 
     all_ok = all(c["ok"] for c in checks)
-    return {"ok": all_ok, "checks": checks}
+    result = {"ok": all_ok, "checks": checks}
+    if camera_preview:
+        result["camera_preview"] = camera_preview
+    return result
 
 
 @app.post("/api/datacollect/start")
@@ -1167,6 +1336,7 @@ async def datacollect_start():
         datacollect_state["running"] = True
         datacollect_state["started_at"] = time.time()
         datacollect_state["log_lines"] = []
+        datacollect_state["completed"] = False
         # Start log reader thread
         threading.Thread(target=_datacollect_reader, args=(p, datacollect_state), daemon=True).start()
         print(f"[DataCollect] Started: {' '.join(cmd)}")
@@ -1177,16 +1347,25 @@ async def datacollect_start():
 
 @app.post("/api/datacollect/stop")
 async def datacollect_stop():
-    """Stop lerobot-record subprocess."""
+    """Stop lerobot-record subprocess gracefully using SIGINT."""
     if not datacollect_state["running"]:
         return {"ok": True, "message": "Not recording"}
     p = datacollect_state["process"]
     if p:
-        p.terminate()
+        # Use SIGINT (Ctrl+C) instead of SIGTERM to let lerobot-record
+        # finalize data files properly before exiting
+        import signal as sig
+        p.send_signal(sig.SIGINT)
         try:
-            p.wait(timeout=10)
+            p.wait(timeout=30)  # Give more time for data finalization
         except subprocess.TimeoutExpired:
-            p.kill()
+            print("[DataCollect] SIGINT timeout, sending SIGTERM...")
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print("[DataCollect] SIGTERM timeout, killing...")
+                p.kill()
     datacollect_state["process"] = None
     datacollect_state["running"] = False
     datacollect_state["started_at"] = None
@@ -1200,18 +1379,22 @@ async def datacollect_status():
     elapsed = 0
     if datacollect_state["started_at"] and datacollect_state["running"]:
         elapsed = time.time() - datacollect_state["started_at"]
-    # Check if process exited
+    # Check if process exited naturally (all episodes done)
     p = datacollect_state["process"]
     if p and p.poll() is not None:
+        exit_code = p.returncode
         datacollect_state["running"] = False
         datacollect_state["process"] = None
         datacollect_state["started_at"] = None
+        datacollect_state["completed"] = True
+        print(f"[DataCollect] Process exited with code {exit_code}")
     with datacollect_state["log_lock"]:
         recent_logs = list(datacollect_state["log_lines"][-50:])
     return {
         "running": datacollect_state["running"],
         "elapsed": round(elapsed, 1),
         "logs": recent_logs,
+        "completed": datacollect_state["completed"],
     }
 
 

@@ -328,7 +328,7 @@
   .viz-stat { background:#f8f9fa;border-radius:8px;padding:10px 14px;min-width:100px }
   .viz-stat-label { font-size:0.7rem;color:#888;text-transform:uppercase;letter-spacing:0.5px }
   .viz-stat-value { font-size:1.1rem;font-weight:700;color:#333;margin-top:2px }
-  .viz-ep-item { padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;transition:background 0.15s }
+  .viz-ep-item { padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;transition:background 0.15s;display:flex;align-items:flex-start;gap:0 }
   .viz-ep-item:hover { background:#f0f4ff }
   .viz-ep-item.active { background:#e8f0fe;color:#1a73e8;font-weight:600;border-left:3px solid #1a73e8 }
   .viz-ep-item .ep-meta { font-size:0.75rem;color:#999;margin-top:2px }
@@ -999,6 +999,9 @@ bump_height = min(overshoot + 2, 10) degrees
           <button class="btn" onclick="dcRunVerify()" id="dcVerifyBtn">Run All Checks</button>
           <span id="dcVerifyStatus" style="font-size:0.82rem;color:#888"></span>
         </div>
+        <div id="dcVerifyPreview" style="margin-top:14px;display:none">
+          <img id="dcVerifyImg" style="width:100%;border-radius:8px;border:1px solid #e0e0e0">
+        </div>
       </div>
     </div>
 
@@ -1094,7 +1097,7 @@ bump_height = min(overshoot + 2, 10) degrees
             <input type="checkbox" id="dcPushHub"> Push to Hugging Face Hub after recording
           </label>
           <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="checkbox" id="dcResume"> Resume previous recording session
+            <input type="checkbox" id="dcResume" checked> Resume previous recording session
           </label>
         </div>
       </div>
@@ -1181,7 +1184,13 @@ bump_height = min(overshoot + 2, 10) degrees
         <!-- Right: episode list -->
         <div style="width:220px;flex-shrink:0">
           <div style="background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden">
-            <div style="padding:10px 14px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;font-size:0.82rem;font-weight:700;color:#1a73e8">Episodes</div>
+            <div style="padding:10px 14px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:0.82rem;font-weight:700;color:#1a73e8">Episodes</span>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-sm" id="vizSelectModeBtn" onclick="vizToggleSelectMode()" style="font-size:0.72rem;padding:2px 8px;background:#f0f0f0;color:#555;border:1px solid #d0d0d0">Select</button>
+                <button class="btn btn-sm btn-danger" id="vizDeleteBtn" onclick="vizDeleteSelected()" style="font-size:0.72rem;padding:2px 8px;display:none">Delete</button>
+              </div>
+            </div>
             <div id="vizEpisodeList" style="max-height:calc(100vh - 260px);overflow-y:auto"></div>
           </div>
           <!-- hidden select for compatibility -->
@@ -2302,7 +2311,7 @@ function dcPopulate() {
   document.getElementById('dcWristWidth').value = wristCam.width ?? dc.cam_width ?? 320;
   document.getElementById('dcWristHeight').value = wristCam.height ?? dc.cam_height ?? 240;
   document.getElementById('dcPushHub').checked = dc.push_to_hub || false;
-  document.getElementById('dcResume').checked = dc.resume || false;
+  document.getElementById('dcResume').checked = dc.resume !== undefined ? dc.resume : true;
   // Hardware fields
   const tel = cfg.teleop || {};
   document.getElementById('dcRobotPort').value = cfg.robot_port || '';
@@ -2412,6 +2421,13 @@ async function dcRunVerify() {
     list.innerHTML = html;
     st.textContent = d.ok ? 'All checks passed!' : 'Some checks failed';
     st.style.color = d.ok ? '#34a853' : '#d93025';
+    const preview = document.getElementById('dcVerifyPreview');
+    if(d.camera_preview){
+      document.getElementById('dcVerifyImg').src = 'data:image/jpeg;base64,' + d.camera_preview;
+      preview.style.display = '';
+    } else {
+      preview.style.display = 'none';
+    }
   } catch(e) {
     list.innerHTML = `<div style="color:#d93025">Error: ${e.message}</div>`;
     st.textContent = '';
@@ -2518,14 +2534,16 @@ async function dcStopRecord() {
   const recordBtn = document.getElementById('dcRecordBtn');
   const st = document.getElementById('dcRecordStatus');
   btn.disabled = true;
+  st.textContent = 'Stopping... saving data (please wait)';
+  st.style.color = '#f9a825';
   try {
     await fetch('/api/datacollect/stop', {method:'POST'});
     dcStopPoll();
     btn.style.display = 'none';
     recordBtn.style.display = '';
-    st.textContent = 'Recording finished';
+    st.textContent = 'Recording stopped & saved';
     st.style.color = '#888';
-  } catch(e) { st.textContent = e.message; }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
   btn.disabled = false;
 }
 
@@ -2558,8 +2576,13 @@ async function dcPollStatus() {
       dcStopPoll();
       document.getElementById('dcStopBtn').style.display = 'none';
       document.getElementById('dcRecordBtn').style.display = '';
-      document.getElementById('dcRecordStatus').textContent = 'Recording finished';
-      document.getElementById('dcRecordStatus').style.color = '#888';
+      if (d.completed) {
+        document.getElementById('dcRecordStatus').textContent = '✅ All episodes recorded & saved successfully!';
+        document.getElementById('dcRecordStatus').style.color = '#34a853';
+      } else {
+        document.getElementById('dcRecordStatus').textContent = 'Recording finished';
+        document.getElementById('dcRecordStatus').style.color = '#888';
+      }
     }
   } catch(e) { /* ignore poll errors */ }
 }
@@ -2568,6 +2591,7 @@ async function dcPollStatus() {
 
 let vizCurrentDataset = null;
 let vizCurrentTask = '';
+let vizSelectMode = false;
 let vizChart = null;
 let vizEpisodesData = [];
 let vizPlaying = false;
@@ -2626,6 +2650,11 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const epList = document.getElementById('vizEpisodeList');
     epSel.innerHTML = '';
     epList.innerHTML = '';
+    vizSelectMode = false;
+    document.getElementById('vizSelectModeBtn').textContent = 'Select';
+    document.getElementById('vizSelectModeBtn').style.background = '#f0f0f0';
+    document.getElementById('vizSelectModeBtn').style.color = '#555';
+    document.getElementById('vizDeleteBtn').style.display = 'none';
     for (let i = 0; i < info.total_episodes; i++) {
       const ep = vizEpisodesData[i];
       const len = ep ? ep.length : '?';
@@ -2638,8 +2667,16 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
       const div = document.createElement('div');
       div.className = 'viz-ep-item' + (i === 0 ? ' active' : '');
       div.dataset.ep = i;
-      div.innerHTML = `Episode ${i}<div class="ep-meta">${len} frames &middot; ${dur}s</div>`;
-      div.addEventListener('click', () => vizSelectEpisode(i));
+      div.innerHTML = `<input type="checkbox" class="viz-ep-cb" data-ep="${i}" style="display:none;margin-right:6px;margin-top:2px" onclick="event.stopPropagation();vizUpdateDeleteBtn()"><div style="flex:1;min-width:0"><span>Episode ${i}</span><div class="ep-meta">${len} frames &middot; ${dur}s</div></div>`;
+      div.addEventListener('click', () => {
+        if (vizSelectMode) {
+          const cb = div.querySelector('.viz-ep-cb');
+          cb.checked = !cb.checked;
+          vizUpdateDeleteBtn();
+        } else {
+          vizSelectEpisode(i);
+        }
+      });
       epList.appendChild(div);
     }
     infoSection.style.display = '';
@@ -2653,6 +2690,63 @@ function vizSelectEpisode(idx) {
     el.classList.toggle('active', parseInt(el.dataset.ep) === idx);
   });
   vizLoadEpisode();
+}
+
+function vizToggleSelectMode() {
+  vizSelectMode = !vizSelectMode;
+  const btn = document.getElementById('vizSelectModeBtn');
+  const delBtn = document.getElementById('vizDeleteBtn');
+  if (vizSelectMode) {
+    btn.textContent = 'Cancel';
+    btn.style.background = '#fce8e6';
+    btn.style.color = '#d93025';
+    delBtn.style.display = '';
+    delBtn.disabled = true;
+  } else {
+    btn.textContent = 'Select';
+    btn.style.background = '#f0f0f0';
+    btn.style.color = '#555';
+    delBtn.style.display = 'none';
+  }
+  document.querySelectorAll('.viz-ep-cb').forEach(cb => {
+    cb.style.display = vizSelectMode ? '' : 'none';
+    cb.checked = false;
+  });
+}
+
+function vizUpdateDeleteBtn() {
+  const checked = document.querySelectorAll('.viz-ep-cb:checked').length;
+  const btn = document.getElementById('vizDeleteBtn');
+  btn.disabled = checked === 0;
+  btn.textContent = checked > 0 ? `Delete (${checked})` : 'Delete';
+}
+
+async function vizDeleteSelected() {
+  const checked = [...document.querySelectorAll('.viz-ep-cb:checked')].map(cb => parseInt(cb.dataset.ep));
+  if (!checked.length) return;
+  if (!confirm(`Delete ${checked.length} episode(s)? This cannot be undone.\n\nEpisodes: ${checked.join(', ')}`)) return;
+
+  const btn = document.getElementById('vizDeleteBtn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/delete-episodes`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({episodes: checked}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      alert(`Deleted ${d.deleted} episode(s). ${d.remaining_episodes} remaining.`);
+      // Re-select the dataset to refresh everything
+      vizToggleSelectMode();
+      document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    } else {
+      alert('Error: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = 'Delete';
 }
 
 async function vizLoadEpisode() {
@@ -2778,13 +2872,14 @@ function vizUpdateChartCursor(pct) {
 const VIZ_COLORS = ['#1a73e8','#ea4335','#34a853','#fbbc04','#9c27b0','#ff6d00'];
 const VIZ_JOINTS = ['shoulder_pan','shoulder_lift','elbow_flex','wrist_flex','wrist_roll','gripper'];
 
-// vizSegments = {pick: {start,end,label}, place: {start,end,label}} or null
+// vizSegments = [{start,end,phase,label}, ...] or null
 let vizSegments = null;
 
-const VIZ_PICK_COLOR  = '#c8e6c9';
-const VIZ_PICK_TEXT   = '#2e7d32';
-const VIZ_PLACE_COLOR = '#e1bee7';
-const VIZ_PLACE_TEXT  = '#7b1fa2';
+const VIZ_PHASE = {
+  idle:  { color: '#f0f0f0', text: '#999' },
+  pick:  { color: '#c8e6c9', text: '#2e7d32' },
+  place: { color: '#e1bee7', text: '#7b1fa2' },
+};
 
 // ── Segment Detection ──
 // Each cycle = ปิด→เปิด→ปิด  (close→open→close)
@@ -2805,32 +2900,49 @@ function vizDetectSegments(frames, task) {
   const obj = vizParseObject(task || '');
   const pickLabel = `pick up the ${obj}`;
   const placeLabel = `place the ${obj}`;
-  if (n < 5) return {pick:{start:0,end:n-1,label:pickLabel},place:{start:0,end:n-1,label:placeLabel}};
+  if (n < 5) return [{start:0,end:n-1,phase:'pick',label:pickLabel}];
 
   const GI = 5;
-  const gripper = frames.map(f => (f.action||[])[GI] || 0);
+  const arrMax = a => a.reduce((m,v)=>v>m?v:m, -Infinity);
   const smooth = (arr, hw) => arr.map((_,i) => {
     let s=0,c=0;
     for(let j=Math.max(0,i-hw);j<=Math.min(arr.length-1,i+hw);j++){s+=arr[j];c++;}
     return s/c;
   });
-  const sg = smooth(gripper, 3);
 
-  // dist from resting (ปิด) → peaks at เปิด events
+  const gripper = frames.map(f => (f.action||[])[GI] || 0);
+  const armVel = frames.map((f,i) => {
+    if(i===0) return 0;
+    let v=0;
+    for(let j=0;j<6;j++) v+=Math.abs(((f.action||[])[j]||0)-((frames[i-1].action||[])[j]||0));
+    return v;
+  });
+  const sg = smooth(gripper, 3);
+  const sv = smooth(armVel, 5);
+
+  // Velocity threshold for idle detection
+  const svSorted=[...sv].sort((a,b)=>a-b);
+  const velThresh = Math.max(svSorted[Math.floor(n*0.85)]*0.12, 0.3);
+
+  // Find active range (first & last frame with movement)
+  let activeStart=0, activeEnd=n-1;
+  for(let i=0;i<n;i++) if(sv[i]>velThresh){activeStart=i;break;}
+  for(let i=n-1;i>=0;i--) if(sv[i]>velThresh){activeEnd=i;break;}
+
+  // Gripper peaks for pick/place split
   const rest = sg[0];
   const dist = sg.map(v => Math.abs(v - rest));
-  const maxDist = Math.max(...dist);
+  const maxDist = arrMax(dist);
   const closedThresh = maxDist * 0.25;
 
-  // Find peak1 & peak2 (two เปิด events)
-  let p1 = 0;
-  for(let i=0;i<n;i++) if(dist[i]>dist[p1]) p1=i;
+  let p1 = activeStart;
+  for(let i=activeStart;i<=activeEnd;i++) if(dist[i]>dist[p1]) p1=i;
   const minSep = Math.floor(n * 0.15);
   let p2 = p1 < n/2 ? n-1 : 0;
   for(let i=0;i<n;i++) if(Math.abs(i-p1)>=minSep && dist[i]>dist[p2]) p2=i;
   if(p1>p2) [p1,p2]=[p2,p1];
 
-  // Find the closed valley between the two peaks (ปิด zone)
+  // Valley between peaks → split in half
   let valleyStart = -1, valleyEnd = -1;
   for(let i=p1;i<=p2;i++){
     if(dist[i]<=closedThresh){
@@ -2838,31 +2950,33 @@ function vizDetectSegments(frames, task) {
       valleyEnd=i;
     }
   }
-
-  // Split valley in half: first half → pick, second half → place
   let splitFrame;
   if(valleyStart>=0) splitFrame = Math.floor((valleyStart+valleyEnd)/2);
   else splitFrame = Math.floor((p1+p2)/2);
 
-  return {
-    pick:  {start:0, end:splitFrame, label:pickLabel},
-    place: {start:splitFrame+1, end:n-1, label:placeLabel},
-  };
+  // Build segments: [idle?] [pick] [place] [idle?]
+  const segs = [];
+  if(activeStart > 0)
+    segs.push({start:0, end:activeStart-1, phase:'idle', label:'idle'});
+  segs.push({start:activeStart, end:splitFrame, phase:'pick', label:pickLabel});
+  segs.push({start:splitFrame+1, end:activeEnd, phase:'place', label:placeLabel});
+  if(activeEnd < n-1)
+    segs.push({start:activeEnd+1, end:n-1, phase:'idle', label:'idle'});
+
+  return segs;
 }
 
 // ── Segment Bar Rendering ──
-// 3 visual zones: pick-only | overlap | place-only
 
 function vizRenderSegmentBar() {
   const bar = document.getElementById('vizSegmentBar');
   if(!vizSegments || !vizFrameCount){ bar.innerHTML=''; return; }
-  const {pick, place} = vizSegments;
   const N = vizFrameCount;
-  const pickPct = (pick.end-pick.start+1)/N*100;
-  const placePct = (place.end-place.start+1)/N*100;
-  bar.innerHTML =
-    `<div style="flex:${pickPct};background:${VIZ_PICK_COLOR};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${pick.label}: frames ${pick.start}–${pick.end}"><span style="font-size:0.68rem;font-weight:600;color:${VIZ_PICK_TEXT};white-space:nowrap;padding:0 6px">${pick.label}</span></div>` +
-    `<div style="flex:${placePct};background:${VIZ_PLACE_COLOR};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${place.label}: frames ${place.start}–${place.end}"><span style="font-size:0.68rem;font-weight:600;color:${VIZ_PLACE_TEXT};white-space:nowrap;padding:0 6px">${place.label}</span></div>`;
+  bar.innerHTML = vizSegments.map(seg => {
+    const pct = (seg.end-seg.start+1)/N*100;
+    const st = VIZ_PHASE[seg.phase] || VIZ_PHASE.idle;
+    return `<div style="flex:${pct};background:${st.color};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${seg.label}: frames ${seg.start}–${seg.end}"><span style="font-size:0.68rem;font-weight:600;color:${st.text};white-space:nowrap;padding:0 6px">${pct>5?seg.label:''}</span></div>`;
+  }).join('');
 }
 
 function vizSegmentBarClick(e) {
@@ -2877,18 +2991,16 @@ function vizUpdatePhaseLabel(pct) {
   const lbl = document.getElementById('vizPhaseLabel');
   if(!vizSegments){ lbl.style.display='none'; return; }
   const f = Math.round((pct/100) * (vizFrameCount-1));
-  const {pick, place} = vizSegments;
-
-  if(f <= pick.end){
-    lbl.textContent = pick.label;
-    lbl.style.background = VIZ_PICK_COLOR;
-    lbl.style.color = VIZ_PICK_TEXT;
+  const seg = vizSegments.find(s => f>=s.start && f<=s.end);
+  if(seg){
+    const st = VIZ_PHASE[seg.phase] || VIZ_PHASE.idle;
+    lbl.textContent = seg.label;
+    lbl.style.background = st.color;
+    lbl.style.color = st.text;
+    lbl.style.display = '';
   } else {
-    lbl.textContent = place.label;
-    lbl.style.background = VIZ_PLACE_COLOR;
-    lbl.style.color = VIZ_PLACE_TEXT;
+    lbl.style.display = 'none';
   }
-  lbl.style.display = '';
 }
 
 // ── Chart Plugin for Segment Backgrounds ──
@@ -2901,16 +3013,13 @@ const vizSegmentPlugin = {
     if(!chartArea) return;
     const xScale = scales.x;
     ctx.save();
-    // Draw pick range
-    const px1 = xScale.getPixelForValue(vizSegments.pick.start);
-    const px2 = xScale.getPixelForValue(vizSegments.pick.end);
-    ctx.fillStyle = VIZ_PICK_COLOR + '44';
-    ctx.fillRect(px1, chartArea.top, px2-px1, chartArea.bottom-chartArea.top);
-    // Draw place range (overlaps pick if they share frames)
-    const lx1 = xScale.getPixelForValue(vizSegments.place.start);
-    const lx2 = xScale.getPixelForValue(vizSegments.place.end);
-    ctx.fillStyle = VIZ_PLACE_COLOR + '44';
-    ctx.fillRect(lx1, chartArea.top, lx2-lx1, chartArea.bottom-chartArea.top);
+    vizSegments.forEach(seg => {
+      const st = VIZ_PHASE[seg.phase] || VIZ_PHASE.idle;
+      const x1 = xScale.getPixelForValue(seg.start);
+      const x2 = xScale.getPixelForValue(seg.end);
+      ctx.fillStyle = st.color + '66';
+      ctx.fillRect(x1, chartArea.top, x2-x1, chartArea.bottom-chartArea.top);
+    });
     ctx.restore();
   }
 };
@@ -2922,9 +3031,11 @@ function vizDrawChart(frames) {
   if (vizChart) vizChart.destroy();
 
   // Detect segments from task description + gripper data
-  vizSegments = vizDetectSegments(frames, vizCurrentTask);
-  vizRenderSegmentBar();
-  vizUpdatePhaseLabel(0);
+  try {
+    vizSegments = vizDetectSegments(frames, vizCurrentTask);
+    vizRenderSegmentBar();
+    vizUpdatePhaseLabel(0);
+  } catch(e) { console.error('Segment detection error:', e); }
 
   const labels = frames.map((f,i) => i);
   const datasets = VIZ_JOINTS.map((j, ji) => ({

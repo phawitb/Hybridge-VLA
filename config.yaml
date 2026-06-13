@@ -181,7 +181,7 @@ data_collection:
   num_episodes: 50
   encoder_threads: 4
   push_to_hub: false
-  resume: false
+  resume: true
   cameras:
     top:
       fps: 30
