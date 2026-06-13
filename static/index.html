@@ -1146,6 +1146,7 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" onclick="vizRefreshDatasets()">Refresh</button>
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
+      <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
       <div style="flex:1"></div>
       <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
@@ -2626,6 +2627,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   const name = this.value;
   const infoSection = document.getElementById('vizInfoSection');
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   if (!name) { infoSection.style.display = 'none'; return; }
   vizCurrentDataset = name;
   try {
@@ -2949,6 +2951,172 @@ async function vizDoDeleteDataset() {
     }
   } catch(e) { st.textContent = e.message; }
   btn.disabled = false;
+}
+
+// ── Data Augmentation ──
+
+let augPollTimer = null;
+
+function vizShowAugment() {
+  if (!vizCurrentDataset) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:16px">Data Augmentation</h3>
+    <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <div class="form-group" style="flex:1;min-width:180px">
+        <label class="form-label">New Dataset Name</label>
+        <input type="text" id="augNewName" class="form-input" placeholder="e.g. ${vizCurrentDataset}-aug3x" style="width:100%">
+      </div>
+      <div class="form-group" style="min-width:80px">
+        <label class="form-label">Multiplier</label>
+        <select id="augMultiplier" class="form-input" style="width:100%">
+          ${[2,3,4,5,6,7,8,9,10].map(n => `<option value="${n}" ${n===3?'selected':''}>${n}x</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+        <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <input type="checkbox" id="augCamEnabled" checked> Camera View Shift
+        </label>
+        <div style="padding-left:20px;font-size:0.82rem;display:flex;flex-direction:column;gap:3px">
+          <label><input type="checkbox" class="aug-cam" value="perspective" checked> Perspective shift</label>
+          <label><input type="checkbox" class="aug-cam" value="affine" checked> Affine transform</label>
+          <label><input type="checkbox" class="aug-cam" value="rotation" checked> Rotation</label>
+        </div>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+        <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <input type="checkbox" id="augLightEnabled" checked> Light & Image Quality
+        </label>
+        <div style="padding-left:20px;font-size:0.82rem;display:flex;flex-direction:column;gap:3px">
+          <label><input type="checkbox" class="aug-light" value="brightness" checked> Brightness / Contrast</label>
+          <label><input type="checkbox" class="aug-light" value="saturation" checked> Saturation</label>
+          <label><input type="checkbox" class="aug-light" value="color_jitter" checked> Color jitter</label>
+          <label><input type="checkbox" class="aug-light" value="shadow" checked> Shadow simulation</label>
+          <label><input type="checkbox" class="aug-light" value="noise" checked> Noise</label>
+          <label><input type="checkbox" class="aug-light" value="blur" checked> Blur</label>
+        </div>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+        <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <input type="checkbox" id="augLangEnabled" checked> Language Robustness
+        </label>
+        <div style="padding-left:20px;font-size:0.82rem;display:flex;flex-direction:column;gap:3px">
+          <label><input type="checkbox" class="aug-lang" value="paraphrase" checked> Paraphrase</label>
+          <label><input type="checkbox" class="aug-lang" value="synonym" checked> Synonym replacement</label>
+          <label><input type="checkbox" class="aug-lang" value="typo" checked> Typo injection</label>
+        </div>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+        <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
+          <input type="checkbox" id="augRobotEnabled" checked> Robot State & Motion Noise
+        </label>
+        <div style="padding-left:20px;font-size:0.82rem;display:flex;flex-direction:column;gap:3px">
+          <label><input type="checkbox" class="aug-robot" value="random_start" checked> Random start offset</label>
+          <label><input type="checkbox" class="aug-robot" value="initial_noise" checked> Initial joint noise</label>
+          <label><input type="checkbox" class="aug-robot" value="trajectory_jitter" checked> Trajectory jitter</label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <button class="btn" id="augStartBtn" onclick="vizDoAugment()" style="background:#e8710a">Start Augmentation</button>
+      <button class="btn btn-sm" onclick="augStopPoll();closeModal()" style="background:#f0f0f0;color:#555">Cancel</button>
+      <span id="augStatus" style="font-size:0.85rem;color:#888"></span>
+    </div>
+    <div id="augProgressWrap" style="display:none">
+      <div style="background:#e0e0e0;border-radius:6px;height:20px;overflow:hidden">
+        <div id="augProgressBar" style="height:100%;background:#e8710a;transition:width 0.3s;width:0%;border-radius:6px"></div>
+      </div>
+      <div id="augProgressText" style="font-size:0.82rem;color:#888;margin-top:4px;text-align:center"></div>
+    </div>
+  `;
+  // Toggle sub-checkboxes when parent is toggled
+  ['augCamEnabled','augLightEnabled','augLangEnabled','augRobotEnabled'].forEach(id => {
+    document.getElementById(id).addEventListener('change', function() {
+      const cls = {augCamEnabled:'aug-cam',augLightEnabled:'aug-light',augLangEnabled:'aug-lang',augRobotEnabled:'aug-robot'}[id];
+      document.querySelectorAll('.'+cls).forEach(cb => cb.disabled = !this.checked);
+    });
+  });
+  document.getElementById('modalOverlay').classList.add('visible');
+}
+
+function _augCollectTechniques() {
+  const get = (cls, parentId) => {
+    const enabled = document.getElementById(parentId).checked;
+    const opts = {enabled};
+    document.querySelectorAll('.'+cls).forEach(cb => { opts[cb.value] = cb.checked && enabled; });
+    return opts;
+  };
+  return {
+    camera_shift: get('aug-cam', 'augCamEnabled'),
+    light_quality: get('aug-light', 'augLightEnabled'),
+    language: get('aug-lang', 'augLangEnabled'),
+    robot_noise: get('aug-robot', 'augRobotEnabled'),
+  };
+}
+
+async function vizDoAugment() {
+  const newName = document.getElementById('augNewName').value.trim();
+  const multiplier = parseInt(document.getElementById('augMultiplier').value);
+  const st = document.getElementById('augStatus');
+  if (!newName) { st.textContent = 'Enter a dataset name'; st.style.color = '#d93025'; return; }
+
+  const techniques = _augCollectTechniques();
+  const btn = document.getElementById('augStartBtn');
+  btn.disabled = true;
+  st.textContent = 'Starting...';
+  st.style.color = '#e8710a';
+
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/augment`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: newName, multiplier, techniques}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('augProgressWrap').style.display = '';
+      augStartPoll();
+    } else {
+      st.textContent = d.error || 'Error';
+      st.style.color = '#d93025';
+      btn.disabled = false;
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; btn.disabled = false; }
+}
+
+function augStartPoll() {
+  augStopPoll();
+  augPollTimer = setInterval(augPollStatus, 1000);
+}
+function augStopPoll() {
+  if (augPollTimer) { clearInterval(augPollTimer); augPollTimer = null; }
+}
+
+async function augPollStatus() {
+  try {
+    const r = await fetch('/api/augment/status');
+    const d = await r.json();
+    const bar = document.getElementById('augProgressBar');
+    const text = document.getElementById('augProgressText');
+    const st = document.getElementById('augStatus');
+    bar.style.width = d.progress + '%';
+    text.textContent = d.status + ` (${d.progress}%)`;
+    if (!d.running) {
+      augStopPoll();
+      if (d.error) {
+        st.textContent = 'Error: ' + d.error;
+        st.style.color = '#d93025';
+      } else {
+        st.textContent = d.status;
+        st.style.color = '#34a853';
+        bar.style.background = '#34a853';
+        setTimeout(() => { closeModal(); vizRefreshDatasets(); }, 1500);
+      }
+      document.getElementById('augStartBtn').disabled = false;
+    }
+  } catch(e) {}
 }
 
 async function vizLoadEpisode() {

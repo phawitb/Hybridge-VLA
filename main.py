@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import random
 import re
 import subprocess
 import threading
@@ -1712,6 +1713,520 @@ async def split_dataset(name: str):
         import traceback
         traceback.print_exc()
         return {"ok": False, "error": str(e)}
+
+
+# ══════════ Data Augmentation ══════════
+
+augment_state = {
+    "running": False,
+    "progress": 0,
+    "status": "",
+    "error": None,
+}
+
+
+def _augp_camera(opts):
+    """Generate random camera shift parameters."""
+    p = {}
+    if opts.get("perspective"):
+        p["persp"] = np.random.uniform(-0.05, 0.05, (4, 2))
+    if opts.get("affine"):
+        p["tx"] = random.uniform(-0.04, 0.04)
+        p["ty"] = random.uniform(-0.04, 0.04)
+        p["shear"] = random.uniform(-0.03, 0.03)
+        p["scale"] = random.uniform(0.95, 1.05)
+    if opts.get("rotation"):
+        p["angle"] = random.uniform(-4, 4)
+    return p or None
+
+
+def _augp_light(opts):
+    """Generate random light/quality parameters."""
+    p = {}
+    if opts.get("brightness"):
+        p["brightness"] = random.uniform(0.75, 1.25)
+    if opts.get("contrast"):
+        p["contrast"] = random.uniform(0.75, 1.25)
+    if opts.get("saturation"):
+        p["saturation"] = random.uniform(0.65, 1.35)
+    if opts.get("color_jitter"):
+        p["hue"] = random.randint(-8, 8)
+        p["sat_off"] = random.randint(-15, 15)
+        p["val_off"] = random.randint(-15, 15)
+    if opts.get("shadow"):
+        p["shadow_dir"] = random.choice(["left", "right", "top", "bottom"])
+        p["shadow_a"] = random.uniform(0.15, 0.4)
+    if opts.get("noise"):
+        p["noise_s"] = random.uniform(4, 12)
+    if opts.get("blur"):
+        p["blur_k"] = random.choice([3, 5])
+        p["blur_s"] = random.uniform(0.4, 1.2)
+    return p or None
+
+
+def _augp_robot(opts, n_frames, fps):
+    """Generate random robot state noise parameters."""
+    p = {}
+    if opts.get("random_start") and n_frames > 30:
+        p["trim"] = random.randint(1, max(1, int(n_frames * 0.12)))
+    if opts.get("initial_noise"):
+        p["joint_offset"] = [random.gauss(0, 1.5) for _ in range(5)] + [0.0]  # no gripper
+    if opts.get("trajectory_jitter"):
+        p["jitter_s"] = random.uniform(0.3, 1.0)
+    p["fps"] = fps
+    return p or None
+
+
+# --- Language augmentation ---
+
+_PICK_SYNS = ["pick up", "grab", "lift", "take", "grasp"]
+_PLACE_SYNS = ["place", "put", "set down", "drop", "lay"]
+_PREP_SYNS = {"to": ["to", "into", "onto", "in", "on"],
+              "from": ["from", "out of", "off"]}
+
+
+def _aug_task_text(task, opts):
+    """Generate language variation of task text."""
+    if not opts or not opts.get("enabled"):
+        return task
+    result = task
+    do_syn = opts.get("synonym") or opts.get("paraphrase")
+    if do_syn:
+        # Replace verb
+        for verb, syns in [("pick up", _PICK_SYNS), ("place", _PLACE_SYNS)]:
+            if verb in result.lower():
+                rep = random.choice(syns)
+                result = re.sub(re.escape(verb), rep, result, count=1, flags=re.I)
+        # Replace preposition
+        for prep, syns in _PREP_SYNS.items():
+            pat = rf"\b{prep}\b"
+            if re.search(pat, result, re.I):
+                result = re.sub(pat, random.choice(syns), result, count=1, flags=re.I)
+    if opts.get("typo") and random.random() < 0.35:
+        words = result.split()
+        if len(words) > 2:
+            idx = random.randint(1, len(words) - 1)
+            w = list(words[idx])
+            if len(w) > 2:
+                pos = random.randint(0, len(w) - 2)
+                op = random.choice(["swap", "del", "dup"])
+                if op == "swap":
+                    w[pos], w[pos + 1] = w[pos + 1], w[pos]
+                elif op == "del":
+                    w.pop(pos)
+                else:
+                    w.insert(pos, w[pos])
+                words[idx] = "".join(w)
+            result = " ".join(words)
+    return result
+
+
+# --- Frame augmentation ---
+
+def _aug_frame(frame, cam_p, light_p):
+    """Apply camera + light augmentation to one frame."""
+    import cv2
+    h, w = frame.shape[:2]
+    f = frame
+
+    if cam_p:
+        if "persp" in cam_p:
+            pts1 = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+            pts2 = (pts1 + cam_p["persp"] * [w, h]).astype(np.float32)
+            M = cv2.getPerspectiveTransform(pts1, pts2)
+            f = cv2.warpPerspective(f, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+        if "tx" in cam_p:
+            M = np.float32([[cam_p.get("scale", 1), cam_p.get("shear", 0), cam_p["tx"] * w],
+                            [0, cam_p.get("scale", 1), cam_p.get("ty", 0) * h]])
+            f = cv2.warpAffine(f, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+        if "angle" in cam_p:
+            M = cv2.getRotationMatrix2D((w / 2, h / 2), cam_p["angle"], 1.0)
+            f = cv2.warpAffine(f, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+    if light_p:
+        ff = f.astype(np.float32)
+        if "brightness" in light_p:
+            ff *= light_p["brightness"]
+        if "contrast" in light_p:
+            mean = ff.mean(axis=(0, 1), keepdims=True)
+            ff = (ff - mean) * light_p["contrast"] + mean
+        ff = np.clip(ff, 0, 255).astype(np.uint8)
+        if "saturation" in light_p:
+            hsv = cv2.cvtColor(ff, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] *= light_p["saturation"]
+            ff = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
+        if "hue" in light_p:
+            hsv = cv2.cvtColor(ff, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 0] = (hsv[:, :, 0] + light_p["hue"]) % 180
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] + light_p["sat_off"], 0, 255)
+            hsv[:, :, 2] = np.clip(hsv[:, :, 2] + light_p["val_off"], 0, 255)
+            ff = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        if "shadow_a" in light_p:
+            hh, ww = ff.shape[:2]
+            a = light_p["shadow_a"]
+            d = light_p["shadow_dir"]
+            if d in ("left", "right"):
+                g = np.linspace(1 - a, 1, ww) if d == "left" else np.linspace(1, 1 - a, ww)
+                shadow = np.tile(g, (hh, 1))
+            else:
+                g = np.linspace(1 - a, 1, hh) if d == "top" else np.linspace(1, 1 - a, hh)
+                shadow = np.tile(g.reshape(-1, 1), (1, ww))
+            ff = (ff.astype(np.float32) * shadow[:, :, np.newaxis]).clip(0, 255).astype(np.uint8)
+        if "noise_s" in light_p:
+            noise = np.random.normal(0, light_p["noise_s"], ff.shape)
+            ff = np.clip(ff.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        if "blur_k" in light_p:
+            ff = cv2.GaussianBlur(ff, (light_p["blur_k"], light_p["blur_k"]), light_p["blur_s"])
+        f = ff
+    return f
+
+
+# --- Robot state augmentation ---
+
+def _aug_episode_data(rows, robot_p):
+    """Augment robot state/action data for one episode."""
+    if not robot_p:
+        return rows
+    rows = [dict(r) for r in rows]
+
+    # Random start trim
+    trim = robot_p.get("trim", 0)
+    if trim > 0 and trim < len(rows):
+        rows = rows[trim:]
+    fps = robot_p.get("fps", 30)
+
+    offset = robot_p.get("joint_offset", None)
+    jitter = robot_p.get("jitter_s", 0)
+
+    for i, r in enumerate(rows):
+        r["frame_index"] = i
+        r["timestamp"] = i / fps
+        action = list(r.get("action", []))
+        state = list(r.get("observation.state", []))
+        for j in range(min(len(action), 5)):  # skip gripper j=5
+            if offset:
+                action[j] += offset[j]
+                state[j] += offset[j]
+            if jitter > 0:
+                jit = random.gauss(0, jitter)
+                action[j] += jit
+                state[j] += jit
+        r["action"] = action
+        r["observation.state"] = state
+    return rows
+
+
+# --- Video augmentation ---
+
+def _aug_process_video(src_path, dst_path, from_ts, to_ts, fps, cam_p, light_p, vid_w, vid_h):
+    """Read video segment, augment frames, write to new file."""
+    import cv2
+    cap = cv2.VideoCapture(str(src_path))
+    if not cap.isOpened():
+        return 0.0, 0.0, 0
+    cap.set(cv2.CAP_PROP_POS_MSEC, from_ts * 1000)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(dst_path), fourcc, fps, (vid_w, vid_h))
+    count = 0
+    while True:
+        pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+        if pos_ms / 1000 >= to_ts:
+            break
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame.shape[1] != vid_w or frame.shape[0] != vid_h:
+            frame = cv2.resize(frame, (vid_w, vid_h))
+        if cam_p or light_p:
+            frame = _aug_frame(frame, cam_p, light_p)
+        writer.write(frame)
+        count += 1
+    new_from = 0.0
+    new_to = count / fps if fps > 0 else 0.0
+    cap.release()
+    writer.release()
+    return new_from, new_to, count
+
+
+# --- Main augmentation runner ---
+
+def _run_augmentation(src_name, new_name, multiplier, techniques):
+    """Background thread: create augmented dataset."""
+    import shutil
+    import cv2
+
+    state = augment_state
+    state["running"] = True
+    state["progress"] = 0
+    state["status"] = "Loading source dataset..."
+    state["error"] = None
+
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        src_dir = ROOT / "data" / src_name
+        new_dir = ROOT / "data" / new_name
+        info = json.loads((src_dir / "meta" / "info.json").read_text())
+        fps = info.get("fps", 30)
+        vid_w = info.get("features", {}).get("observation.images.top", {}).get("shape", [240, 320, 3])[1]
+        vid_h = info.get("features", {}).get("observation.images.top", {}).get("shape", [240, 320, 3])[0]
+
+        # Read tasks
+        src_tasks = []
+        tp = src_dir / "meta" / "tasks.parquet"
+        if tp.exists():
+            try:
+                src_tasks = pq.read_table(str(tp)).to_pydict().get("task", [])
+            except Exception:
+                pass
+
+        # Read episode metadata
+        ep_meta_list = []
+        ep_dir = src_dir / "meta" / "episodes"
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep_meta_list.append({k: v[i] for k, v in d.items()})
+        ep_meta_list.sort(key=lambda r: r.get("episode_index", 0))
+
+        # Read all data frames by episode
+        src_frames = {}
+        data_dir = src_dir / "data"
+        if data_dir.exists():
+            for pf in sorted(data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep = d["episode_index"][i]
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    src_frames.setdefault(ep, []).append(row)
+        for ep in src_frames:
+            src_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
+
+        n_src_eps = len(src_frames)
+        total_steps = n_src_eps * multiplier
+        current_step = 0
+
+        # Create output dirs
+        new_dir.mkdir(parents=True, exist_ok=True)
+        (new_dir / "meta" / "episodes" / "chunk-000").mkdir(parents=True, exist_ok=True)
+        (new_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
+        for cam in ["observation.images.top", "observation.images.wrist"]:
+            (new_dir / "videos" / cam / "chunk-000").mkdir(parents=True, exist_ok=True)
+
+        combined_data = []
+        combined_ep = []
+        all_new_tasks = list(src_tasks)
+        task_set = set(src_tasks)
+        new_ep_idx = 0
+        global_frame_idx = 0
+
+        cam_opts = techniques.get("camera_shift", {})
+        light_opts = techniques.get("light_quality", {})
+        robot_opts = techniques.get("robot_noise", {})
+        lang_opts = techniques.get("language", {})
+
+        for copy_idx in range(multiplier):
+            is_original = (copy_idx == 0)
+
+            # Generate augmentation params for this copy
+            cam_p = None if is_original else (_augp_camera(cam_opts) if cam_opts.get("enabled") else None)
+            light_p = None if is_original else (_augp_light(light_opts) if light_opts.get("enabled") else None)
+
+            for old_ep in sorted(src_frames.keys()):
+                frames = src_frames[old_ep]
+                ep_meta = next((m for m in ep_meta_list if m["episode_index"] == old_ep), None)
+
+                state["status"] = f"Copy {copy_idx + 1}/{multiplier}, Episode {old_ep + 1}/{n_src_eps}"
+                current_step += 1
+                state["progress"] = int(current_step / total_steps * 100)
+
+                # Robot state augmentation params (per-episode random)
+                robot_p = None if is_original else (
+                    _augp_robot(robot_opts, len(frames), fps) if robot_opts.get("enabled") else None
+                )
+
+                # Augment data
+                aug_rows = _aug_episode_data(frames, robot_p) if not is_original else [dict(r) for r in frames]
+
+                # Language augmentation — per-episode variation
+                if is_original:
+                    ep_task_list = ep_meta["tasks"] if ep_meta and "tasks" in ep_meta else src_tasks[:1]
+                else:
+                    orig_tasks = ep_meta["tasks"] if ep_meta and "tasks" in ep_meta else src_tasks[:1]
+                    ep_task_list = [_aug_task_text(t, lang_opts) for t in orig_tasks]
+                # Track new tasks
+                for t in ep_task_list:
+                    if t not in task_set:
+                        task_set.add(t)
+                        all_new_tasks.append(t)
+                task_to_idx = {t: i for i, t in enumerate(all_new_tasks)}
+
+                ep_global_start = global_frame_idx
+                for fi, row in enumerate(aug_rows):
+                    nr = dict(row)
+                    nr["episode_index"] = new_ep_idx
+                    nr["frame_index"] = fi
+                    nr["index"] = global_frame_idx
+                    nr["timestamp"] = fi / fps
+                    # Remap task_index
+                    old_ti = row.get("task_index", 0)
+                    if old_ti < len(ep_task_list):
+                        nr["task_index"] = task_to_idx.get(ep_task_list[old_ti], 0)
+                    elif ep_task_list:
+                        nr["task_index"] = task_to_idx.get(ep_task_list[0], 0)
+                    combined_data.append(nr)
+                    global_frame_idx += 1
+
+                # Process videos
+                new_meta = {"episode_index": new_ep_idx}
+                new_meta["tasks"] = ep_task_list
+                new_meta["length"] = len(aug_rows)
+                new_meta["data/chunk_index"] = 0
+                new_meta["data/file_index"] = 0
+                new_meta["dataset_from_index"] = ep_global_start
+                new_meta["dataset_to_index"] = global_frame_idx
+
+                for cam in ["observation.images.top", "observation.images.wrist"]:
+                    cam_key = f"videos/{cam}"
+                    orig_chunk = ep_meta.get(f"{cam_key}/chunk_index", 0) if ep_meta else 0
+                    orig_file = ep_meta.get(f"{cam_key}/file_index", 0) if ep_meta else 0
+                    orig_from = ep_meta.get(f"{cam_key}/from_timestamp", 0.0) if ep_meta else 0.0
+                    orig_to = ep_meta.get(f"{cam_key}/to_timestamp", 0.0) if ep_meta else 0.0
+                    src_vid = src_dir / "videos" / cam / f"chunk-{orig_chunk:03d}" / f"file-{orig_file:03d}.mp4"
+
+                    dst_vid = new_dir / "videos" / cam / "chunk-000" / f"file-{new_ep_idx:03d}.mp4"
+                    new_meta[f"{cam_key}/chunk_index"] = 0
+                    new_meta[f"{cam_key}/file_index"] = new_ep_idx
+
+                    if is_original and src_vid.exists():
+                        # Copy original video segment (no augmentation)
+                        new_from, new_to, _ = _aug_process_video(
+                            src_vid, dst_vid, orig_from, orig_to, fps, None, None, vid_w, vid_h
+                        )
+                    elif src_vid.exists() and (cam_p or light_p):
+                        new_from, new_to, _ = _aug_process_video(
+                            src_vid, dst_vid, orig_from, orig_to, fps, cam_p, light_p, vid_w, vid_h
+                        )
+                    elif src_vid.exists():
+                        # No image augmentation, just copy segment
+                        new_from, new_to, _ = _aug_process_video(
+                            src_vid, dst_vid, orig_from, orig_to, fps, None, None, vid_w, vid_h
+                        )
+                    else:
+                        new_from, new_to = 0.0, 0.0
+
+                    # Apply random_start trim to video timestamps
+                    trim = robot_p.get("trim", 0) if robot_p else 0
+                    if trim > 0:
+                        new_from += trim / fps
+
+                    new_meta[f"{cam_key}/from_timestamp"] = new_from
+                    new_meta[f"{cam_key}/to_timestamp"] = new_to
+
+                # Copy stats from original
+                if ep_meta:
+                    for k, v in ep_meta.items():
+                        if k.startswith("stats/"):
+                            new_meta[k] = v
+                new_meta["meta/episodes/chunk_index"] = 0
+                new_meta["meta/episodes/file_index"] = 0
+
+                combined_ep.append(new_meta)
+                new_ep_idx += 1
+
+        # Write output
+        state["status"] = "Writing dataset..."
+        state["progress"] = 95
+
+        # Data parquet
+        cols = {k: [r[k] for r in combined_data] for k in combined_data[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "data" / "chunk-000" / "file-000.parquet"))
+
+        # Episode meta parquet
+        cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
+
+        # Tasks parquet
+        pq.write_table(
+            pa.table({"task_index": list(range(len(all_new_tasks))), "task": all_new_tasks}),
+            str(new_dir / "meta" / "tasks.parquet"),
+        )
+
+        # Info
+        new_info = dict(info)
+        new_info["total_episodes"] = new_ep_idx
+        new_info["total_frames"] = len(combined_data)
+        new_info["total_tasks"] = len(all_new_tasks)
+        new_info["splits"] = {"train": f"0:{new_ep_idx}"}
+        # Update video codec to mp4v (since we re-encoded)
+        for feat_key in ["observation.images.top", "observation.images.wrist"]:
+            feat = new_info.get("features", {}).get(feat_key, {})
+            if "info" in feat:
+                feat["info"]["video.codec"] = "mp4v"
+        (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+
+        state["progress"] = 100
+        state["status"] = f"Done! {new_ep_idx} episodes, {len(combined_data)} frames"
+        print(f"[Augment] Created {new_name}: {new_ep_idx} eps, {len(combined_data)} frames")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        state["error"] = str(e)
+        state["status"] = f"Error: {e}"
+    finally:
+        state["running"] = False
+
+
+@app.post("/api/datasets/{name}/augment")
+async def start_augment(name: str, request: Request):
+    """Start data augmentation in background."""
+    if augment_state["running"]:
+        return {"ok": False, "error": "Augmentation already running"}
+    body = await request.json()
+    new_name = body.get("name", "").strip().replace(" ", "-").replace("/", "-")
+    multiplier = body.get("multiplier", 2)
+    techniques = body.get("techniques", {})
+
+    if not new_name:
+        return {"ok": False, "error": "Enter a dataset name"}
+    src_dir = ROOT / "data" / name
+    if not (src_dir / "meta" / "info.json").exists():
+        return {"ok": False, "error": "Source dataset not found"}
+    if (ROOT / "data" / new_name).exists():
+        return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
+
+    threading.Thread(
+        target=_run_augmentation,
+        args=(name, new_name, multiplier, techniques),
+        daemon=True,
+    ).start()
+    return {"ok": True, "message": "Augmentation started"}
+
+
+@app.get("/api/augment/status")
+async def augment_status():
+    return {
+        "running": augment_state["running"],
+        "progress": augment_state["progress"],
+        "status": augment_state["status"],
+        "error": augment_state["error"],
+    }
 
 
 # ══════════ Data Collection ══════════
