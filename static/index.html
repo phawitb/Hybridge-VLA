@@ -2636,24 +2636,39 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const info = d.info;
     // Info grid
     const grid = document.getElementById('vizInfoGrid');
-    const task = d.tasks && d.tasks.length ? d.tasks[0] : '-';
+    const allTasks = d.tasks || [];
+    const task = allTasks.length ? allTasks[0] : '-';
     vizCurrentTask = task;
     // Show split button if task has pick/place pattern
     const splitBtn = document.getElementById('vizSplitBtn');
     const canSplit = /pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(task);
     splitBtn.style.display = canSplit ? '' : 'none';
-    grid.innerHTML = [
-      ['Episodes', info.total_episodes],
-      ['Frames', info.total_frames],
-      ['FPS', info.fps],
-      ['Robot', info.robot_type],
-      ['Task', task],
-    ].map(([l,v]) => `<div class="viz-stat"><div class="viz-stat-label">${l}</div><div class="viz-stat-value">${v}</div></div>`).join('');
 
     // Fetch episodes metadata (timestamps for video seeking)
     const epR = await fetch(`/api/datasets/${name}/episodes`);
     const epD = await epR.json();
     vizEpisodesData = epD.ok ? epD.episodes : [];
+
+    // Count episodes per task
+    const taskCounts = {};
+    vizEpisodesData.forEach(ep => {
+      const ts = ep.tasks ? (Array.isArray(ep.tasks) ? ep.tasks : [ep.tasks]) : [];
+      ts.forEach(t => { taskCounts[t] = (taskCounts[t] || 0) + 1; });
+    });
+    const taskKeys = Object.keys(taskCounts);
+    let taskHtml;
+    if (taskKeys.length <= 1) {
+      taskHtml = `<div class="viz-stat"><div class="viz-stat-label">Task</div><div class="viz-stat-value">${task}</div></div>`;
+    } else {
+      const lines = taskKeys.map(t => `<div style="display:flex;justify-content:space-between;gap:8px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t}</span><span style="flex-shrink:0;font-weight:600">${taskCounts[t]}</span></div>`).join('');
+      taskHtml = `<div class="viz-stat" style="flex:2;min-width:200px"><div class="viz-stat-label">Tasks (${taskKeys.length})</div><div class="viz-stat-value" style="font-size:0.82rem">${lines}<div style="border-top:1px solid #e0e0e0;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between"><span>Total</span><span style="font-weight:700">${info.total_episodes}</span></div></div></div>`;
+    }
+    grid.innerHTML = [
+      ['Episodes', info.total_episodes],
+      ['Frames', info.total_frames],
+      ['FPS', info.fps],
+      ['Robot', info.robot_type],
+    ].map(([l,v]) => `<div class="viz-stat"><div class="viz-stat-label">${l}</div><div class="viz-stat-value">${v}</div></div>`).join('') + taskHtml;
 
     // Build episode list + hidden select
     const epSel = document.getElementById('vizEpisodeSelect');
