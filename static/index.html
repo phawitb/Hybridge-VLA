@@ -2649,18 +2649,24 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const epD = await epR.json();
     vizEpisodesData = epD.ok ? epD.episodes : [];
 
-    // Count episodes per task
+    // Count episodes per task + assign colors
+    const _TC = ['#1a73e8','#34a853','#a142f4','#e8710a','#e8453c','#00bcd4','#e91e90','#f9ab00','#8bc34a','#795548'];
     const taskCounts = {};
+    const taskColorMap = {};
+    let _ci = 0;
     vizEpisodesData.forEach(ep => {
       const ts = ep.tasks ? (Array.isArray(ep.tasks) ? ep.tasks : [ep.tasks]) : [];
-      ts.forEach(t => { taskCounts[t] = (taskCounts[t] || 0) + 1; });
+      ts.forEach(t => {
+        taskCounts[t] = (taskCounts[t] || 0) + 1;
+        if (!(t in taskColorMap)) taskColorMap[t] = _TC[_ci++ % _TC.length];
+      });
     });
     const taskKeys = Object.keys(taskCounts);
     let taskHtml;
     if (taskKeys.length <= 1) {
       taskHtml = `<div class="viz-stat"><div class="viz-stat-label">Task</div><div class="viz-stat-value">${task}</div></div>`;
     } else {
-      const lines = taskKeys.map(t => `<div style="display:flex;justify-content:space-between;gap:8px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t}</span><span style="flex-shrink:0;font-weight:600">${taskCounts[t]}</span></div>`).join('');
+      const lines = taskKeys.map(t => `<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:${taskColorMap[t]};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t}</span><span style="flex-shrink:0;font-weight:600">${taskCounts[t]}</span></div>`).join('');
       taskHtml = `<div class="viz-stat" style="flex:2;min-width:200px"><div class="viz-stat-label">Tasks (${taskKeys.length})</div><div class="viz-stat-value" style="font-size:0.82rem">${lines}<div style="border-top:1px solid #e0e0e0;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between"><span>Total</span><span style="font-weight:700">${info.total_episodes}</span></div></div></div>`;
     }
     grid.innerHTML = [
@@ -2680,6 +2686,14 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     document.getElementById('vizSelectModeBtn').style.background = '#f0f0f0';
     document.getElementById('vizSelectModeBtn').style.color = '#555';
     document.getElementById('vizDeleteBtn').style.display = 'none';
+    // Build task→color map
+    const TASK_COLORS = ['#1a73e8','#34a853','#a142f4','#e8710a','#e8453c','#00bcd4','#e91e90','#f9ab00','#8bc34a','#795548'];
+    const vizTaskColorMap = {};
+    let _tci = 0;
+    vizEpisodesData.forEach(ep => {
+      const ts = ep && ep.tasks ? (Array.isArray(ep.tasks) ? ep.tasks : [ep.tasks]) : [];
+      ts.forEach(t => { if (!(t in vizTaskColorMap)) vizTaskColorMap[t] = TASK_COLORS[_tci++ % TASK_COLORS.length]; });
+    });
     for (let i = 0; i < info.total_episodes; i++) {
       const ep = vizEpisodesData[i];
       const len = ep ? ep.length : '?';
@@ -2693,7 +2707,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
       div.className = 'viz-ep-item' + (i === 0 ? ' active' : '');
       div.dataset.ep = i;
       const epTasks = ep && ep.tasks ? (Array.isArray(ep.tasks) ? ep.tasks : [ep.tasks]) : [];
-      const epTaskHtml = epTasks.map(t => `<div style="font-size:0.68rem;color:#1a73e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t}</div>`).join('');
+      const epTaskHtml = epTasks.map(t => { const c = vizTaskColorMap[t] || '#888'; return `<div style="font-size:0.68rem;color:${c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t}</div>`; }).join('');
       div.innerHTML = `<input type="checkbox" class="viz-ep-cb" data-ep="${i}" style="display:none;margin-right:6px;margin-top:2px" onclick="event.stopPropagation();vizUpdateDeleteBtn()"><div style="flex:1;min-width:0"><span>Episode ${i}</span><div class="ep-meta">${len} frames &middot; ${dur}s</div>${epTaskHtml}</div>`;
       div.addEventListener('click', () => {
         if (vizSelectMode) {
