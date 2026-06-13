@@ -1144,6 +1144,7 @@ bump_height = min(overshoot + 2, 10) degrees
         <option value="">-- Select dataset --</option>
       </select>
       <button class="btn btn-sm" onclick="vizRefreshDatasets()">Refresh</button>
+      <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
     </div>
 
@@ -2779,6 +2780,95 @@ async function vizSplitDataset() {
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
   btn.textContent = 'Split & Generate';
+}
+
+// ── Combine Datasets ──
+
+let vizAllDatasets = []; // cached from last refresh
+
+async function vizShowCombine() {
+  // Fetch latest dataset list
+  try {
+    const r = await fetch('/api/datasets');
+    const d = await r.json();
+    vizAllDatasets = d.datasets || [];
+  } catch(e) { alert('Error loading datasets'); return; }
+
+  if (vizAllDatasets.length < 2) {
+    alert('Need at least 2 datasets to combine.');
+    return;
+  }
+
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:16px">Combine Datasets</h3>
+    <div class="form-group" style="margin-bottom:14px">
+      <label class="form-label">New Dataset Name</label>
+      <input type="text" id="combineNewName" class="form-input" placeholder="e.g. combined-pick-place" style="width:100%">
+    </div>
+    <div class="form-group" style="margin-bottom:14px">
+      <label class="form-label">Select Datasets to Combine</label>
+      <div id="combineList" style="max-height:320px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px"></div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn" id="combineBtn" onclick="vizDoCombine()" style="background:#1a73e8">Combine</button>
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Cancel</button>
+      <span id="combineStatus" style="font-size:0.85rem;color:#888"></span>
+    </div>
+  `;
+
+  const list = document.getElementById('combineList');
+  vizAllDatasets.forEach(ds => {
+    const div = document.createElement('div');
+    div.style.cssText = 'padding:10px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:10px;cursor:pointer';
+    div.innerHTML = \`<input type="checkbox" class="combine-cb" value="\${ds.name}">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:0.9rem;font-weight:600">\${ds.name}</div>
+        <div style="font-size:0.75rem;color:#888">\${ds.total_episodes} episodes &middot; \${ds.total_frames} frames</div>
+      </div>\`;
+    div.addEventListener('click', e => {
+      if (e.target.tagName !== 'INPUT') {
+        const cb = div.querySelector('.combine-cb');
+        cb.checked = !cb.checked;
+      }
+    });
+    list.appendChild(div);
+  });
+
+  document.getElementById('modalOverlay').classList.add('visible');
+}
+
+async function vizDoCombine() {
+  const newName = document.getElementById('combineNewName').value.trim();
+  const selected = [...document.querySelectorAll('.combine-cb:checked')].map(cb => cb.value);
+  const st = document.getElementById('combineStatus');
+
+  if (!newName) { st.textContent = 'Enter a dataset name'; st.style.color = '#d93025'; return; }
+  if (selected.length < 2) { st.textContent = 'Select at least 2 datasets'; st.style.color = '#d93025'; return; }
+
+  const btn = document.getElementById('combineBtn');
+  btn.disabled = true;
+  st.textContent = 'Combining...';
+  st.style.color = '#1a73e8';
+
+  try {
+    const r = await fetch('/api/datasets/combine', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: newName, datasets: selected}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = '';
+      closeModal();
+      alert(\`Combined! "\${d.name}" — \${d.episodes} episodes, \${d.frames} frames\`);
+      vizRefreshDatasets();
+    } else {
+      st.textContent = d.error || 'Error';
+      st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+  btn.disabled = false;
 }
 
 async function vizLoadEpisode() {
