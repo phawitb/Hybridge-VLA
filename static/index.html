@@ -2637,8 +2637,8 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     vizCurrentTask = task;
     // Show split button if task has pick/place pattern
     const splitBtn = document.getElementById('vizSplitBtn');
-    const hasPick = /pick\s+up\s+the\s+/i.test(task);
-    splitBtn.style.display = hasPick ? '' : 'none';
+    const canSplit = /pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(task);
+    splitBtn.style.display = canSplit ? '' : 'none';
     grid.innerHTML = [
       ['Episodes', info.total_episodes],
       ['Frames', info.total_frames],
