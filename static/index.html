@@ -3062,9 +3062,13 @@ function vizDrawChart(frames) {
   const ctx = document.getElementById('vizChart');
   if (vizChart) vizChart.destroy();
 
-  // Detect segments from task description + gripper data
+  // Detect segments only for full pick-place tasks (not already-split datasets)
   try {
-    vizSegments = vizDetectSegments(frames, vizCurrentTask);
+    if (/pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(vizCurrentTask || '')) {
+      vizSegments = vizDetectSegments(frames, vizCurrentTask);
+    } else {
+      vizSegments = null;
+    }
     vizRenderSegmentBar();
     vizUpdatePhaseLabel(0);
   } catch(e) { console.error('Segment detection error:', e); }
