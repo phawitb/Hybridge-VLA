@@ -128,6 +128,61 @@ async def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+def _read_env():
+    """Read .env file as dict."""
+    env = {}
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    return env
+
+
+def _write_env(env: dict):
+    """Write dict to .env file."""
+    lines = [f"{k}={v}" for k, v in env.items()]
+    (ROOT / ".env").write_text("\n".join(lines) + "\n")
+
+
+@app.get("/api/env")
+async def get_env():
+    """Get env tokens (masked)."""
+    env = _read_env()
+    masked = {}
+    for k, v in env.items():
+        if v and len(v) > 8:
+            masked[k] = v[:4] + "*" * (len(v) - 8) + v[-4:]
+        elif v:
+            masked[k] = "****"
+        else:
+            masked[k] = ""
+    return {"ok": True, "env": masked, "keys": list(env.keys())}
+
+
+@app.post("/api/env/save")
+async def save_env(request: Request):
+    """Save env tokens to .env file."""
+    data = await request.json()
+    env = _read_env()
+    for key in ["GEMINI_API_KEY", "HF_TOKEN"]:
+        if key in data:
+            val = data[key].strip()
+            # Skip masked values (don't overwrite with mask)
+            if val and "*" not in val:
+                env[key] = val
+            elif not val:
+                env.pop(key, None)
+    _write_env(env)
+    # Reload env vars
+    load_dotenv(ROOT / ".env", override=True)
+    return {"ok": True}
+
+
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
@@ -146,6 +201,7 @@ async def get_config():
         "camera_wrist_index": cams.get("wrist", {}).get("index", 1),
         "teleop": cfg.get("teleop", {}),
         "click_to_move": cfg.get("click_to_move", {"target_height": 0, "safety_height": 10}),
+        "hf_repo_name": cfg.get("hf_repo_name", ""),
         "data_collection": cfg.get("data_collection", {
             "repo_id": "phawitbinabik/so101-pick-place", "dataset_root": "./data/so101-pick-place",
             "task": "pick up the pink bow to the green bowl", "num_episodes": 50,
@@ -181,6 +237,8 @@ async def save_config(request: Request):
         cfg["prompt_template"] = data["prompt_template"]
     if "default_instruction" in data:
         cfg["default_instruction"] = data["default_instruction"]
+    if "hf_repo_name" in data:
+        cfg["hf_repo_name"] = data["hf_repo_name"]
     if "teleop" in data:
         tel = data["teleop"]
         cfg.setdefault("teleop", {})
@@ -1152,11 +1210,10 @@ async def combine_datasets(request: Request):
         cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
         pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
 
-        # Write tasks parquet
-        pq.write_table(
-            pa.table({"task_index": list(range(len(all_tasks))), "task": all_tasks}),
-            str(new_dir / "meta" / "tasks.parquet"),
-        )
+        # Write tasks parquet (task strings as index, matching LeRobot format)
+        import pandas as pd
+        tasks_df = pd.DataFrame({"task_index": list(range(len(all_tasks)))}, index=pd.Index(all_tasks, name="task"))
+        tasks_df.to_parquet(str(new_dir / "meta" / "tasks.parquet"))
 
         # Write info.json
         new_info = dict(base_info)
@@ -1165,6 +1222,7 @@ async def combine_datasets(request: Request):
         new_info["total_tasks"] = len(all_tasks)
         new_info["splits"] = {"train": f"0:{new_ep_idx}"}
         (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+        _compute_stats_json(combined_data, new_dir)
 
         print(f"[Dataset] Combined {len(source_names)} datasets into {new_name} ({new_ep_idx} eps, {len(combined_data)} frames)")
         return {
@@ -1202,6 +1260,7 @@ hf_push_state = {
     "progress": 0,
     "status": "",
     "error": None,
+    "logs": [],
 }
 
 
@@ -1212,6 +1271,7 @@ def _run_hf_push(dataset_name: str, repo_id: str):
     state["progress"] = 10
     state["status"] = "Preparing upload..."
     state["error"] = None
+    state["logs"] = []
 
     dataset_dir = ROOT / "data" / dataset_name
 
@@ -1237,21 +1297,23 @@ def _run_hf_push(dataset_name: str, repo_id: str):
 
         state["status"] = f"Uploading {len(upload_files)} files to {repo_id}..."
         state["progress"] = 20
+        state["logs"].append(f"$ Preparing {len(upload_files)} files for {repo_id}")
 
         # Use huggingface_hub via lerobot env python
-        # Build a small script that uploads files
         script = f"""
 import sys, os
 from huggingface_hub import HfApi, CommitOperationAdd
 api = HfApi()
 repo_id = {repr(repo_id)}
-# Create repo if needed
+print(f"Creating/checking repo: {{repo_id}}", flush=True)
 api.create_repo(repo_id, repo_type="dataset", exist_ok=True)
+print("Repo ready. Preparing commit...", flush=True)
 ops = []
 files = {upload_files!r}
 for local, remote in files:
     ops.append(CommitOperationAdd(path_in_repo=remote, path_or_fileobj=local))
     print(f"ADD {{remote}}", flush=True)
+print(f"Committing {{len(ops)}} files...", flush=True)
 api.create_commit(
     repo_id=repo_id,
     repo_type="dataset",
@@ -1262,20 +1324,32 @@ print("DONE", flush=True)
 """
         lerobot_python = "/opt/miniconda3/envs/lerobot/bin/python"
         if not Path(lerobot_python).exists():
-            # Fallback: try current python
             lerobot_python = "python3"
+
+        # Pass HF_TOKEN from .env to subprocess
+        sub_env = dict(os.environ)
+        hf_token = _read_env().get("HF_TOKEN", "")
+        if hf_token:
+            sub_env["HF_TOKEN"] = hf_token
 
         proc = subprocess.Popen(
             [lerobot_python, "-c", script],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
+            env=sub_env,
         )
 
         total = len(upload_files)
         uploaded = 0
         for line in proc.stdout:
-            line = line.strip()
+            line = line.rstrip()
+            if not line:
+                continue
+            state["logs"].append(line)
+            # Keep log buffer bounded
+            if len(state["logs"]) > 500:
+                state["logs"] = state["logs"][-300:]
             if line.startswith("ADD "):
                 uploaded += 1
                 pct = 20 + int(uploaded / total * 70)
@@ -1287,12 +1361,13 @@ print("DONE", flush=True)
 
         proc.wait()
         if proc.returncode != 0:
-            err = proc.stderr.read()
-            state["error"] = err or f"Process exited with code {proc.returncode}"
-            state["status"] = f"Error: {state['error'][:200]}"
+            state["logs"].append(f"[EXIT CODE {proc.returncode}]")
+            state["error"] = f"Process exited with code {proc.returncode}"
+            state["status"] = f"Error: exit code {proc.returncode}"
         else:
             state["progress"] = 100
             state["status"] = f"Done! Pushed to {repo_id}"
+            state["logs"].append(f"Successfully pushed to {repo_id}")
             print(f"[HF Push] Pushed {dataset_name} -> {repo_id} ({total} files)")
 
     except Exception as e:
@@ -1324,6 +1399,38 @@ async def push_to_hf(name: str, request: Request):
 async def hf_push_status():
     """Get HF push progress."""
     return dict(hf_push_state)
+
+
+@app.get("/api/datasets/{name}/segments/{ep}")
+async def get_segments(name: str, ep: int):
+    """Get saved segments for an episode."""
+    seg_path = ROOT / "data" / name / "meta" / "segments.json"
+    if seg_path.exists():
+        try:
+            data = json.loads(seg_path.read_text())
+            segs = data.get(str(ep))
+            if segs:
+                return {"ok": True, "segments": segs}
+        except Exception:
+            pass
+    return {"ok": True, "segments": None}
+
+
+@app.post("/api/datasets/{name}/segments/{ep}")
+async def save_segments(name: str, ep: int, request: Request):
+    """Save segments for an episode."""
+    body = await request.json()
+    segments = body.get("segments", [])
+    seg_path = ROOT / "data" / name / "meta" / "segments.json"
+    data = {}
+    if seg_path.exists():
+        try:
+            data = json.loads(seg_path.read_text())
+        except Exception:
+            pass
+    data[str(ep)] = segments
+    seg_path.write_text(json.dumps(data, indent=2))
+    return {"ok": True}
 
 
 @app.get("/api/datasets/{name}/info")
@@ -1708,12 +1815,28 @@ async def split_dataset(name: str):
         for ep in all_frames:
             all_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
 
-        # Detect segments for each episode
+        # Load saved segments or auto-detect
+        saved_segs = {}
+        seg_path = dataset_dir / "meta" / "segments.json"
+        if seg_path.exists():
+            try:
+                saved_segs = json.loads(seg_path.read_text())
+            except Exception:
+                pass
+
         ep_segments = {}
         for ep in sorted(all_frames.keys()):
-            actions = [f.get("action", [0] * 6) for f in all_frames[ep]]
-            segs = _detect_segments(actions, fps)
-            ep_segments[ep] = segs
+            saved = saved_segs.get(str(ep))
+            if saved:
+                # Convert saved segments (from frontend format) to backend format
+                ep_segments[ep] = [
+                    {"start": s["start"], "end": s["end"], "phase": s["phase"]}
+                    for s in saved
+                ]
+            else:
+                actions = [f.get("action", [0] * 6) for f in all_frames[ep]]
+                segs = _detect_segments(actions, fps)
+                ep_segments[ep] = segs
 
         # Build sub-datasets for pick and place
         phase_configs = [
@@ -1818,11 +1941,10 @@ async def split_dataset(name: str):
                 cols = {k: [r[k] for r in new_ep_rows] for k in new_ep_rows[0]}
                 pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
 
-            # Write tasks parquet
-            pq.write_table(
-                pa.table({"task_index": [0], "task": [phase_label]}),
-                str(new_dir / "meta" / "tasks.parquet"),
-            )
+            # Write tasks parquet (task strings as index, matching LeRobot format)
+            import pandas as pd
+            tasks_df = pd.DataFrame({"task_index": [0]}, index=pd.Index([phase_label], name="task"))
+            tasks_df.to_parquet(str(new_dir / "meta" / "tasks.parquet"))
 
             # Copy video files
             for cam in ["observation.images.top", "observation.images.wrist"]:
@@ -1838,6 +1960,7 @@ async def split_dataset(name: str):
             new_info["total_tasks"] = 1
             new_info["splits"] = {"train": f"0:{new_ep_idx}"}
             (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+            _compute_stats_json(new_data_rows, new_dir)
 
             created.append({
                 "name": new_name,
@@ -1864,54 +1987,113 @@ augment_state = {
 }
 
 
-def _augp_camera(opts):
+def _compute_stats_json(data_rows, new_dir):
+    """Compute aggregate stats.json for a dataset from data rows."""
+    # Keys to compute stats for
+    stat_keys = ["action", "observation.state", "timestamp", "frame_index",
+                 "episode_index", "index", "task_index"]
+    stats = {}
+    for key in stat_keys:
+        vals = []
+        for row in data_rows:
+            v = row.get(key)
+            if v is None:
+                continue
+            if isinstance(v, (list, tuple)):
+                vals.append(v)
+            else:
+                vals.append([v])
+        if not vals:
+            continue
+        arr = np.array(vals, dtype=np.float64)
+        stats[key] = {
+            "min": np.min(arr, axis=0).tolist(),
+            "max": np.max(arr, axis=0).tolist(),
+            "mean": np.mean(arr, axis=0).tolist(),
+            "std": np.std(arr, axis=0).tolist(),
+            "count": [len(arr)],
+            "q01": np.quantile(arr, 0.01, axis=0).tolist(),
+            "q10": np.quantile(arr, 0.10, axis=0).tolist(),
+            "q50": np.quantile(arr, 0.50, axis=0).tolist(),
+            "q90": np.quantile(arr, 0.90, axis=0).tolist(),
+            "q99": np.quantile(arr, 0.99, axis=0).tolist(),
+        }
+    # Image stats: use placeholder [0..255] range (actual pixel stats require decoding all frames)
+    for cam in ["observation.images.top", "observation.images.wrist"]:
+        n_pixels = 240 * 320 * 3
+        stats[cam] = {
+            "min": [0.0] * 3,
+            "max": [255.0] * 3,
+            "mean": [127.5] * 3,
+            "std": [73.9] * 3,
+            "count": [len(data_rows)],
+            "q01": [0.0] * 3,
+            "q10": [25.5] * 3,
+            "q50": [127.5] * 3,
+            "q90": [229.5] * 3,
+            "q99": [255.0] * 3,
+        }
+    (new_dir / "meta" / "stats.json").write_text(json.dumps(stats, indent=2))
+
+
+# Intensity level scales (1=very subtle, 5=very strong)
+# Each value is a multiplier applied to the max range of each parameter
+_INTENSITY_SCALE = {1: 0.25, 2: 0.5, 3: 1.0, 4: 1.5, 5: 2.0}
+
+
+def _augp_camera(opts, intensity=3):
     """Generate random camera shift parameters."""
+    s = _INTENSITY_SCALE.get(intensity, 1.0)
     p = {}
     if opts.get("perspective"):
-        p["persp"] = np.random.uniform(-0.05, 0.05, (4, 2))
+        p["persp"] = np.random.uniform(-0.05 * s, 0.05 * s, (4, 2))
     if opts.get("affine"):
-        p["tx"] = random.uniform(-0.04, 0.04)
-        p["ty"] = random.uniform(-0.04, 0.04)
-        p["shear"] = random.uniform(-0.03, 0.03)
-        p["scale"] = random.uniform(0.95, 1.05)
+        p["tx"] = random.uniform(-0.04 * s, 0.04 * s)
+        p["ty"] = random.uniform(-0.04 * s, 0.04 * s)
+        p["shear"] = random.uniform(-0.03 * s, 0.03 * s)
+        p["scale"] = random.uniform(1 - 0.05 * s, 1 + 0.05 * s)
     if opts.get("rotation"):
-        p["angle"] = random.uniform(-4, 4)
+        p["angle"] = random.uniform(-4 * s, 4 * s)
     return p or None
 
 
-def _augp_light(opts):
+def _augp_light(opts, intensity=3):
     """Generate random light/quality parameters."""
+    s = _INTENSITY_SCALE.get(intensity, 1.0)
     p = {}
     if opts.get("brightness"):
-        p["brightness"] = random.uniform(0.75, 1.25)
+        p["brightness"] = random.uniform(1 - 0.25 * s, 1 + 0.25 * s)
     if opts.get("contrast"):
-        p["contrast"] = random.uniform(0.75, 1.25)
+        p["contrast"] = random.uniform(1 - 0.25 * s, 1 + 0.25 * s)
     if opts.get("saturation"):
-        p["saturation"] = random.uniform(0.65, 1.35)
+        p["saturation"] = random.uniform(1 - 0.35 * s, 1 + 0.35 * s)
     if opts.get("color_jitter"):
-        p["hue"] = random.randint(-8, 8)
-        p["sat_off"] = random.randint(-15, 15)
-        p["val_off"] = random.randint(-15, 15)
+        h = int(8 * s)
+        sv = int(15 * s)
+        p["hue"] = random.randint(-h, h)
+        p["sat_off"] = random.randint(-sv, sv)
+        p["val_off"] = random.randint(-sv, sv)
     if opts.get("shadow"):
         p["shadow_dir"] = random.choice(["left", "right", "top", "bottom"])
-        p["shadow_a"] = random.uniform(0.15, 0.4)
+        p["shadow_a"] = random.uniform(0.15 * s, 0.4 * s)
     if opts.get("noise"):
-        p["noise_s"] = random.uniform(4, 12)
+        p["noise_s"] = random.uniform(4 * s, 12 * s)
     if opts.get("blur"):
-        p["blur_k"] = random.choice([3, 5])
-        p["blur_s"] = random.uniform(0.4, 1.2)
+        p["blur_k"] = random.choice([3, 5] if s <= 1.0 else [3, 5, 7])
+        p["blur_s"] = random.uniform(0.4 * s, 1.2 * s)
     return p or None
 
 
-def _augp_robot(opts, n_frames, fps):
+def _augp_robot(opts, n_frames, fps, intensity=3):
     """Generate random robot state noise parameters."""
+    s = _INTENSITY_SCALE.get(intensity, 1.0)
     p = {}
     if opts.get("random_start") and n_frames > 30:
-        p["trim"] = random.randint(1, max(1, int(n_frames * 0.12)))
+        p["trim"] = random.randint(1, max(1, int(n_frames * 0.12 * s)))
     if opts.get("initial_noise"):
-        p["joint_offset"] = [random.gauss(0, 1.5) for _ in range(5)] + [0.0]  # no gripper
+        p["joint_offset"] = [random.gauss(0, 1.5 * s) for _ in range(5)] + [0.0]
     if opts.get("trajectory_jitter"):
-        p["jitter_s"] = random.uniform(0.3, 1.0)
+        p["jitter_s"] = random.uniform(0.3 * s, 1.0 * s)
     p["fps"] = fps
     return p or None
 
@@ -2113,7 +2295,7 @@ def _aug_process_video(src_path, dst_path, from_ts, to_ts, fps, cam_p, light_p, 
 
 # --- Main augmentation runner ---
 
-def _run_augmentation(src_name, new_name, target_episodes, techniques):
+def _run_augmentation(src_name, new_name, target_episodes, techniques, intensity=3):
     """Background thread: create augmented dataset."""
     import shutil
     import cv2
@@ -2226,10 +2408,10 @@ def _run_augmentation(src_name, new_name, target_episodes, techniques):
                 state["progress"] = int(current_step / total_steps * 100)
 
                 # Generate augmentation params per episode (all random each time)
-                cam_p = None if is_original else (_augp_camera(cam_opts) if cam_opts.get("enabled") else None)
-                light_p = None if is_original else (_augp_light(light_opts) if light_opts.get("enabled") else None)
+                cam_p = None if is_original else (_augp_camera(cam_opts, intensity) if cam_opts.get("enabled") else None)
+                light_p = None if is_original else (_augp_light(light_opts, intensity) if light_opts.get("enabled") else None)
                 robot_p = None if is_original else (
-                    _augp_robot(robot_opts, len(frames), fps) if robot_opts.get("enabled") else None
+                    _augp_robot(robot_opts, len(frames), fps, intensity) if robot_opts.get("enabled") else None
                 )
 
                 # Augment data
@@ -2383,11 +2565,10 @@ def _run_augmentation(src_name, new_name, target_episodes, techniques):
         cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
         pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
 
-        # Tasks parquet
-        pq.write_table(
-            pa.table({"task_index": list(range(len(all_new_tasks))), "task": all_new_tasks}),
-            str(new_dir / "meta" / "tasks.parquet"),
-        )
+        # Tasks parquet (task strings as index, matching LeRobot format)
+        import pandas as pd
+        tasks_df = pd.DataFrame({"task_index": list(range(len(all_new_tasks)))}, index=pd.Index(all_new_tasks, name="task"))
+        tasks_df.to_parquet(str(new_dir / "meta" / "tasks.parquet"))
 
         # Info
         new_info = dict(info)
@@ -2402,10 +2583,15 @@ def _run_augmentation(src_name, new_name, target_episodes, techniques):
                 feat["info"]["video.codec"] = "h264"
         (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
 
+        # Compute aggregate stats.json
+        state["status"] = "Computing stats..."
+        _compute_stats_json(combined_data, new_dir)
+
         # Save augmentation metadata
         aug_meta = {
             "source_dataset": src_name,
             "target_episodes": target_episodes,
+            "intensity": intensity,
             "techniques": techniques,
             "episodes": aug_episode_info,
         }
@@ -2432,6 +2618,7 @@ async def start_augment(name: str, request: Request):
     body = await request.json()
     new_name = body.get("name", "").strip().replace(" ", "-").replace("/", "-")
     target_episodes = body.get("target_episodes")
+    intensity = body.get("intensity", 3)
     techniques = body.get("techniques", {})
 
     if not new_name:
@@ -2443,10 +2630,12 @@ async def start_augment(name: str, request: Request):
         return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
     if not target_episodes or target_episodes < 1:
         return {"ok": False, "error": "Invalid target episodes"}
+    if intensity not in (1, 2, 3, 4, 5):
+        intensity = 3
 
     threading.Thread(
         target=_run_augmentation,
-        args=(name, new_name, target_episodes, techniques),
+        args=(name, new_name, target_episodes, techniques, intensity),
         daemon=True,
     ).start()
     return {"ok": True, "message": "Augmentation started"}

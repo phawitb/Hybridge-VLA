@@ -193,6 +193,12 @@
   }
   .modal-close { position: absolute; top: 10px; right: 14px; background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #999; }
   .modal-close:hover { color: #222; }
+  .train-cmd {
+    position: relative; background: #1e1e1e; color: #d4d4d4;
+    font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 0.75rem; line-height: 1.7;
+    padding: 16px 50px 16px 20px !important; border-radius: 8px;
+    white-space: pre; overflow-x: auto; margin: 6px 0 14px 0;
+  }
 
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
@@ -345,7 +351,7 @@
     <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
     <div class="nav-item" data-tab="run">Run</div>
     <div class="nav-item" data-tab="data-collect">Data Collection</div>
-    <div class="nav-item" data-tab="visualize">Visualize Data</div>
+    <div class="nav-item" data-tab="visualize">Datasets</div>
   </div>
 </div>
 
@@ -397,6 +403,34 @@
           <span id="cfgCamScanStatus" style="font-size:0.82rem;color:#888"></span>
         </div>
         <div id="cfgCamScanResult" style="margin-top:10px"></div>
+      </div>
+
+      <div class="config-card">
+        <h3>API Keys & Tokens</h3>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Gemini API Key</label>
+            <div style="display:flex;gap:6px">
+              <input type="password" id="cfgGeminiKey" placeholder="Enter Gemini API key" style="flex:1">
+              <button class="btn btn-sm" onclick="this.previousElementSibling.type = this.previousElementSibling.type === 'password' ? 'text' : 'password'" style="font-size:0.75rem;padding:4px 8px">Show</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Hugging Face Token</label>
+            <div style="display:flex;gap:6px">
+              <input type="password" id="cfgHfToken" placeholder="Enter HF token (hf_...)" style="flex:1">
+              <button class="btn btn-sm" onclick="this.previousElementSibling.type = this.previousElementSibling.type === 'password' ? 'text' : 'password'" style="font-size:0.75rem;padding:4px 8px">Show</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:10px">
+          <label class="form-label">HF Default Repo Name (username)</label>
+          <input type="text" id="cfgHfRepoName" placeholder="e.g. phawitbinabik">
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+          <button class="btn btn-sm" onclick="cfgSaveTokens()" style="background:#34a853">Save Tokens</button>
+          <span id="cfgTokenStatus" style="font-size:0.82rem;color:#888"></span>
+        </div>
       </div>
 
       <div class="config-card">
@@ -1134,7 +1168,7 @@ bump_height = min(overshoot + 2, 10) degrees
 
   </div><!-- /page-data-collect -->
 
-  <!-- ==================== Visualize Data ==================== -->
+  <!-- ==================== Datasets ==================== -->
   <div class="page" id="page-visualize">
     <div class="page-title"><span>Visualize</span> Data</div>
 
@@ -1148,6 +1182,7 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
+      <button class="btn btn-sm" id="vizTrainBtn" onclick="vizShowTrainGuide()" style="display:none;background:#34a853;color:#fff">Training</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
       <div style="flex:1"></div>
       <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
@@ -1171,7 +1206,11 @@ bump_height = min(overshoot + 2, 10) degrees
               <span id="vizEpisodeInfo" style="font-size:0.82rem;color:#888"></span>
             </div>
             <input type="range" id="vizScrubber" min="0" max="100" value="0" step="0.1" style="width:100%" oninput="vizScrub(this.value)">
-            <div id="vizSegmentBar" style="height:22px;display:flex;border-radius:4px;overflow:hidden;margin-top:4px;cursor:pointer" onclick="vizSegmentBarClick(event)"></div>
+            <div id="vizSegmentBar" style="position:relative;height:26px;border-radius:4px;overflow:visible;margin-top:4px;cursor:pointer;user-select:none"></div>
+            <div style="display:flex;align-items:center;margin-top:2px">
+              <span id="vizSegInfo" style="font-size:0.7rem;color:#999"></span>
+              <span style="font-size:0.65rem;color:#bbb;margin-left:auto">Click = change phase | Double-click = split | Drag handle = adjust | Drag to edge = merge</span>
+            </div>
           </div>
 
           <!-- Videos side by side -->
@@ -1310,9 +1349,59 @@ function cfgPopulate() {
     sel.appendChild(og);
   }
 
+  // HF repo name
+  document.getElementById('cfgHfRepoName').value = cfg.hf_repo_name || '';
+
   // Methods for config
   cfgMethods = [...cfg.available_methods];
   cfgRenderMethods();
+
+  // Load env tokens (masked)
+  cfgLoadTokens();
+}
+
+async function cfgLoadTokens() {
+  try {
+    const r = await fetch('/api/env');
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('cfgGeminiKey').value = d.env.GEMINI_API_KEY || '';
+      document.getElementById('cfgHfToken').value = d.env.HF_TOKEN || '';
+    }
+  } catch(e) {}
+}
+
+async function cfgSaveTokens() {
+  const st = document.getElementById('cfgTokenStatus');
+  st.textContent = 'Saving...'; st.style.color = '#888';
+  try {
+    // Save tokens to .env
+    const r1 = await fetch('/api/env/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        GEMINI_API_KEY: document.getElementById('cfgGeminiKey').value,
+        HF_TOKEN: document.getElementById('cfgHfToken').value,
+      }),
+    });
+    const d1 = await r1.json();
+    // Save HF repo name to config.yaml
+    const r2 = await fetch('/api/config/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({hf_repo_name: document.getElementById('cfgHfRepoName').value.trim()}),
+    });
+    const d2 = await r2.json();
+    if (d1.ok && d2.ok) {
+      st.textContent = 'Saved!'; st.style.color = '#34a853';
+      cfgLoadTokens();
+      // Reload config
+      const r3 = await fetch('/api/config');
+      cfg = await r3.json();
+    } else {
+      st.textContent = (d1.error || d2.error || 'Error'); st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
 }
 
 function cfgRenderMethods() {
@@ -2593,7 +2682,7 @@ async function dcPollStatus() {
   } catch(e) { /* ignore poll errors */ }
 }
 
-// ══════════ Visualize Data ══════════
+// ══════════ Datasets ══════════
 
 let vizCurrentDataset = null;
 let vizCurrentTask = '';
@@ -2631,6 +2720,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizTrainBtn').style.display = name ? '' : 'none';
   if (!name) { infoSection.style.display = 'none'; return; }
   vizCurrentDataset = name;
   try {
@@ -2950,6 +3040,7 @@ async function vizDoDeleteDataset() {
       document.getElementById('vizInfoSection').style.display = 'none';
       document.getElementById('vizDeleteDsBtn').style.display = 'none';
       document.getElementById('vizPushHfBtn').style.display = 'none';
+      document.getElementById('vizTrainBtn').style.display = 'none';
       vizRefreshDatasets();
     } else {
       st.textContent = d.error || 'Error';
@@ -2971,7 +3062,7 @@ function vizShowPushHf() {
     <p style="margin-bottom:12px;font-size:0.9rem;color:#555">Upload <strong>${name}</strong> to Hugging Face Hub as a dataset repository.</p>
     <div class="form-group" style="margin-bottom:14px">
       <label class="form-label">Repository ID (username/dataset-name)</label>
-      <input type="text" id="hfRepoId" class="form-input" style="width:100%" value="phawitbinabik/${name}">
+      <input type="text" id="hfRepoId" class="form-input" style="width:100%" value="${(cfg.hf_repo_name || 'phawitbinabik') + '/' + name}">
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <button class="btn" id="hfPushBtn" onclick="vizDoPushHf()" style="background:#ff9d00;color:#000">Push</button>
@@ -2983,6 +3074,7 @@ function vizShowPushHf() {
         <div id="hfPushBar" style="height:100%;width:0%;background:#ff9d00;transition:width 0.3s"></div>
       </div>
       <div id="hfPushDetail" style="font-size:0.78rem;color:#888;margin-top:4px"></div>
+      <div id="hfPushLog" style="margin-top:8px;background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.72rem;line-height:1.5;padding:10px 12px;border-radius:6px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
     </div>
   `;
   document.getElementById('modalOverlay').classList.add('visible');
@@ -3027,8 +3119,14 @@ async function hfPushPoll() {
     const bar = document.getElementById('hfPushBar');
     const detail = document.getElementById('hfPushDetail');
     const st = document.getElementById('hfPushStatus');
+    const logEl = document.getElementById('hfPushLog');
     if (bar) bar.style.width = d.progress + '%';
     if (detail) detail.textContent = d.status || '';
+    // Render logs
+    if (logEl && d.logs && d.logs.length) {
+      logEl.textContent = d.logs.join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
     if (d.error) {
       st.textContent = d.error.substring(0, 200);
       st.style.color = '#d93025';
@@ -3041,6 +3139,164 @@ async function hfPushPoll() {
       clearInterval(hfPushPollTimer);
     }
   } catch(e) {}
+}
+
+// ── Training Guide ──
+
+function vizShowTrainGuide() {
+  const name = vizCurrentDataset;
+  if (!name) return;
+  const repoId = (cfg.hf_repo_name || 'phawitbinabik') + '/' + name;
+  const policyRepo = (cfg.hf_repo_name || 'phawitbinabik') + '/smolvla_' + name;
+  const dataDir = `./data/${name}`;
+
+  const copyBtnStyle = 'position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1';
+
+  const cmd1 = [
+    `hf download ${repoId} \\`,
+    `  --repo-type dataset \\`,
+    `  --local-dir ${dataDir}`,
+  ].join('\n');
+
+  const trainArgs = [
+    `lerobot-train \\`,
+    `  --policy.type=smolvla \\`,
+    `  --dataset.repo_id=${repoId} \\`,
+    `  --dataset.root=${dataDir} \\`,
+    `  --policy.load_vlm_weights=true \\`,
+    `  --policy.vlm_model_name="HuggingFaceTB/SmolVLM2-500M-Video-Instruct" \\`,
+    `  --policy.train_expert_only=true \\`,
+    `  --policy.freeze_vision_encoder=true \\`,
+    `  --policy.use_amp=true \\`,
+    `  --steps=100000 \\`,
+    `  --batch_size=32 \\`,
+    `  --policy.optimizer_lr=0.0003 \\`,
+  ];
+
+  const cmd2 = [...trainArgs,
+    `  --wandb.enable=false \\`,
+    `  --output_dir=outputs/train/smolvla_${name} \\`,
+    `  --job_name=smolvla_${name} \\`,
+    `  --policy.repo_id=${policyRepo}`,
+  ].join('\n');
+
+  const cmd3 = [...trainArgs,
+    `  --wandb.enable=true \\`,
+    `  --output_dir=outputs/train/smolvla_${name} \\`,
+    `  --job_name=smolvla_${name} \\`,
+    `  --policy.repo_id=${policyRepo}`,
+  ].join('\n');
+
+  const cmd0a = [
+    `conda create -n lerobot python=3.12 -y`,
+    `conda activate lerobot`,
+    ``,
+    `conda install ffmpeg=7.1.1 -c conda-forge -y`,
+  ].join('\n');
+
+  const cmd0b = [
+    `cd /home/jupyter-phawit/so101-v2`,
+    `git clone https://github.com/huggingface/lerobot.git`,
+    `cd lerobot`,
+    ``,
+    `pip install -e .`,
+    ``,
+    `pip install -e ".[all]"`,
+    `pip install wandb`,
+  ].join('\n');
+
+  const cmd0c = [
+    `pip install "transformers>=4.48.0" "huggingface-hub>=1.5.0,<2.0"`,
+    `pip install python-dateutil`,
+  ].join('\n');
+
+  const outDir = `outputs/train/smolvla_${name}`;
+  const cmd4 = [...trainArgs,
+    `  --wandb.enable=false \\`,
+    `  --output_dir=${outDir} \\`,
+    `  --job_name=smolvla_${name} \\`,
+    `  --policy.repo_id=${policyRepo} \\`,
+    `  --resume=true \\`,
+    `  --checkpoint_path=${outDir}/checkpoints/last`,
+  ].join('\n');
+
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:4px">Training Guide</h3>
+    <p style="margin-bottom:16px;font-size:0.88rem;color:#555">Commands for training <strong>${name}</strong> with SmolVLA on GPU server.</p>
+
+    <div style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 0: Create ENV and Install Packages</div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">One-time setup on the GPU server. Skip if already done.</div>
+      <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Create conda environment</div>
+      <div class="train-cmd" id="trainCmd0a"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0a')">Copy</button>${_escHtml(cmd0a)}</div>
+      <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Clone and install LeRobot</div>
+      <div class="train-cmd" id="trainCmd0b"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0b')">Copy</button>${_escHtml(cmd0b)}</div>
+      <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Install additional dependencies</div>
+      <div class="train-cmd" id="trainCmd0c"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0c')">Copy</button>${_escHtml(cmd0c)}</div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 1: Download dataset from HF</div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Run on the GPU server to download the dataset locally.</div>
+      <div class="train-cmd" id="trainCmd1"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd1')">Copy</button>${_escHtml(cmd1)}</div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 2: Start training</div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">SmolVLA training with recommended settings. W&B logging disabled.</div>
+      <div class="train-cmd" id="trainCmd2"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd2')">Copy</button>${_escHtml(cmd2)}</div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 2 (alt): Training with W&B logging</div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Same as above but with Weights & Biases enabled for tracking.</div>
+      <div class="train-cmd" id="trainCmd3"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd3')">Copy</button>${_escHtml(cmd3)}</div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Resume: Continue interrupted training</div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Resume from the last saved checkpoint if training was interrupted. Checkpoints are saved every 20,000 steps.</div>
+      <div class="train-cmd" id="trainCmd4"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd4')">Copy</button>${_escHtml(cmd4)}</div>
+    </div>
+
+    <div style="background:#f0f7ff;border-radius:6px;padding:10px 14px;font-size:0.82rem;color:#333">
+      <strong>Tips:</strong>
+      <ul style="margin:4px 0 0 0;padding-left:18px">
+        <li>Adjust <code>--batch_size</code> based on GPU memory (32 for 24GB, 16 for 12GB)</li>
+        <li>Adjust <code>--steps</code> based on dataset size (~100-200 steps per episode)</li>
+        <li>Checkpoints are saved every <code>--save_freq</code> steps (default 20,000)</li>
+        <li>Output model will be saved to <code>${outDir}</code></li>
+        <li>Model will be pushed to HF as <code>${policyRepo}</code></li>
+      </ul>
+    </div>
+
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Close</button>
+    </div>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+}
+
+function vizCopyCmd(elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  // Get text content excluding the copy button
+  const clone = el.cloneNode(true);
+  const btn = clone.querySelector('button');
+  if (btn) btn.remove();
+  const text = clone.textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    const origBtn = el.querySelector('button');
+    if (origBtn) {
+      origBtn.textContent = 'Copied!';
+      setTimeout(() => { origBtn.textContent = 'Copy'; }, 1500);
+    }
+  });
+}
+
+function _escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ── Data Augmentation ──
@@ -3069,6 +3325,14 @@ function vizShowAugment() {
       </div>
     </div>
     <div id="augEpInfo" style="margin:-8px 0 14px;font-size:0.82rem;color:#555"></div>
+    <div style="margin-bottom:14px">
+      <label class="form-label" style="margin-bottom:6px">Intensity Level: <strong id="augIntensityLabel">3 — Normal</strong></label>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:0.75rem;color:#999">Subtle</span>
+        <input type="range" id="augIntensity" min="1" max="5" value="3" step="1" style="flex:1" oninput="augUpdateIntensityLabel()">
+        <span style="font-size:0.75rem;color:#999">Strong</span>
+      </div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
       <div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px">
         <label style="font-weight:700;font-size:0.85rem;display:flex;align-items:center;gap:6px;margin-bottom:6px">
@@ -3135,6 +3399,13 @@ function vizShowAugment() {
   });
   document.getElementById('modalOverlay').classList.add('visible');
   augUpdateEpCount();
+  augUpdateIntensityLabel();
+}
+
+const _AUG_INTENSITY_NAMES = {1:'Very Subtle', 2:'Subtle', 3:'Normal', 4:'Strong', 5:'Very Strong'};
+function augUpdateIntensityLabel() {
+  const v = parseInt(document.getElementById('augIntensity').value);
+  document.getElementById('augIntensityLabel').textContent = v + ' — ' + (_AUG_INTENSITY_NAMES[v] || 'Normal');
 }
 
 function augUpdateEpCount() {
@@ -3207,7 +3478,7 @@ async function vizDoAugment() {
     const r = await fetch(`/api/datasets/${vizCurrentDataset}/augment`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: newName, target_episodes: targetEps, techniques}),
+      body: JSON.stringify({name: newName, target_episodes: targetEps, intensity: parseInt(document.getElementById('augIntensity').value), techniques}),
     });
     const d = await r.json();
     if (d.ok) {
@@ -3568,23 +3839,152 @@ function vizDetectSegments(frames, task) {
 
 // ── Segment Bar Rendering ──
 
+let vizDragHandle = null;
+let vizDragMoved = false;
+
 function vizRenderSegmentBar() {
   const bar = document.getElementById('vizSegmentBar');
   if(!vizSegments || !vizFrameCount){ bar.innerHTML=''; return; }
   const N = vizFrameCount;
-  bar.innerHTML = vizSegments.map(seg => {
-    const pct = (seg.end-seg.start+1)/N*100;
+  let html = '<div style="display:flex;height:22px;border-radius:4px;overflow:hidden;position:relative">';
+  vizSegments.forEach((seg, i) => {
+    const pct = (seg.end - seg.start + 1) / N * 100;
     const st = VIZ_PHASE[seg.phase] || VIZ_PHASE.idle;
-    return `<div style="flex:${pct};background:${st.color};display:flex;align-items:center;justify-content:center;overflow:hidden" title="${seg.label}: frames ${seg.start}–${seg.end}"><span style="font-size:0.68rem;font-weight:600;color:${st.text};white-space:nowrap;padding:0 6px">${pct>5?seg.label:''}</span></div>`;
-  }).join('');
+    html += `<div class="seg-block" data-seg="${i}" style="flex:${pct};background:${st.color};display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative" title="${seg.label}: frames ${seg.start}–${seg.end}">
+      <span style="font-size:0.68rem;font-weight:600;color:${st.text};white-space:nowrap;padding:0 6px;pointer-events:none">${pct > 5 ? seg.label : ''}</span>
+    </div>`;
+  });
+  html += '</div>';
+  for (let i = 1; i < vizSegments.length; i++) {
+    const leftPct = (vizSegments[i].start) / N * 100;
+    html += `<div class="seg-handle" data-handle="${i}" style="position:absolute;left:calc(${leftPct}% - 5px);top:0;width:10px;height:26px;cursor:col-resize;z-index:10;display:flex;align-items:center;justify-content:center" title="Drag to adjust">
+      <div style="width:3px;height:18px;background:#666;border-radius:2px;opacity:0.6"></div>
+    </div>`;
+  }
+  bar.innerHTML = html;
+
+  // Click → cycle phase, Double-click → split
+  bar.querySelectorAll('.seg-block').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (vizDragMoved) return;
+      vizCycleSegPhase(parseInt(el.dataset.seg));
+    });
+    el.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      const rect = bar.getBoundingClientRect();
+      const pct = (e.clientX - rect.left) / rect.width;
+      const frame = Math.round(pct * (N - 1));
+      vizSplitAtFrame(frame);
+    });
+  });
+
+  // Handle drag
+  bar.querySelectorAll('.seg-handle').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      vizDragMoved = false;
+      vizDragHandle = { idx: parseInt(el.dataset.handle) };
+      document.addEventListener('mousemove', vizHandleDrag);
+      document.addEventListener('mouseup', vizHandleDragEnd);
+    });
+  });
 }
 
-function vizSegmentBarClick(e) {
+function vizHandleDrag(e) {
+  if (!vizDragHandle) return;
+  vizDragMoved = true;
   const bar = document.getElementById('vizSegmentBar');
   const rect = bar.getBoundingClientRect();
-  const pct = ((e.clientX - rect.left) / rect.width) * 100;
-  vizScrub(pct);
-  document.getElementById('vizScrubber').value = pct;
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const frame = Math.round(pct * (vizFrameCount - 1));
+  const i = vizDragHandle.idx;
+  const prevSeg = vizSegments[i - 1];
+  const curSeg = vizSegments[i];
+  const minFrame = prevSeg.start + 2;
+  const maxFrame = curSeg.end - 1;
+  const clampedFrame = Math.max(minFrame, Math.min(maxFrame, frame));
+  prevSeg.end = clampedFrame - 1;
+  curSeg.start = clampedFrame;
+  vizRenderSegmentBar();
+  if (vizChart) vizChart.update('none');
+}
+
+function vizHandleDragEnd() {
+  if (!vizDragHandle) return;
+  const i = vizDragHandle.idx;
+  vizDragHandle = null;
+  document.removeEventListener('mousemove', vizHandleDrag);
+  document.removeEventListener('mouseup', vizHandleDragEnd);
+  if (!vizDragMoved) return;
+  // Auto-merge: if a segment is too small (< 3 frames), merge it
+  for (let j = vizSegments.length - 1; j >= 0; j--) {
+    if (vizSegments[j].end - vizSegments[j].start < 2 && vizSegments.length > 1) {
+      if (j > 0) {
+        vizSegments[j - 1].end = vizSegments[j].end;
+      } else {
+        vizSegments[j + 1].start = vizSegments[j].start;
+      }
+      vizSegments.splice(j, 1);
+    }
+  }
+  vizRenderSegmentBar();
+  if (vizChart) vizChart.update('none');
+  vizSaveSegments();
+}
+
+const VIZ_PHASES_CYCLE = ['idle', 'pick', 'place'];
+
+function vizCycleSegPhase(i) {
+  if (!vizSegments || i < 0 || i >= vizSegments.length) return;
+  const seg = vizSegments[i];
+  const curIdx = VIZ_PHASES_CYCLE.indexOf(seg.phase);
+  seg.phase = VIZ_PHASES_CYCLE[(curIdx + 1) % VIZ_PHASES_CYCLE.length];
+  const obj = vizParseObject(vizCurrentTask || '');
+  if (seg.phase === 'idle') seg.label = 'idle';
+  else if (seg.phase === 'pick') seg.label = `pick up the ${obj}`;
+  else if (seg.phase === 'place') seg.label = `place the ${obj}`;
+  vizRenderSegmentBar();
+  if (vizChart) vizChart.update('none');
+  vizSaveSegments();
+}
+
+function vizSplitAtFrame(frame) {
+  if (!vizSegments || !vizFrameCount) return;
+  const si = vizSegments.findIndex(s => frame >= s.start && frame <= s.end);
+  if (si < 0) return;
+  const seg = vizSegments[si];
+  if (frame - seg.start < 3 || seg.end - frame < 3) return;
+  const newSeg = {start: frame, end: seg.end, phase: 'idle', label: 'idle'};
+  seg.end = frame - 1;
+  vizSegments.splice(si + 1, 0, newSeg);
+  vizRenderSegmentBar();
+  if (vizChart) vizChart.update('none');
+  vizSaveSegments();
+}
+
+async function vizSaveSegments() {
+  if (!vizCurrentDataset || !vizSegments) return;
+  const ep = parseInt(document.getElementById('vizEpisodeSelect').value);
+  if (isNaN(ep)) return;
+  try {
+    await fetch(`/api/datasets/${vizCurrentDataset}/segments/${ep}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({segments: vizSegments}),
+    });
+    document.getElementById('vizSegInfo').textContent = 'Saved';
+    setTimeout(() => { const el = document.getElementById('vizSegInfo'); if (el) el.textContent = ''; }, 1500);
+  } catch(e) {}
+}
+
+async function vizLoadSegments(name, ep) {
+  try {
+    const r = await fetch(`/api/datasets/${name}/segments/${ep}`);
+    const d = await r.json();
+    if (d.ok && d.segments && d.segments.length) return d.segments;
+  } catch(e) {}
+  return null;
 }
 
 function vizUpdatePhaseLabel(pct) {
@@ -3626,16 +4026,20 @@ const vizSegmentPlugin = {
 
 // ── Chart Drawing ──
 
-function vizDrawChart(frames) {
+async function vizDrawChart(frames) {
   const ctx = document.getElementById('vizChart');
   if (vizChart) vizChart.destroy();
 
-  // Detect segments only for full pick-place tasks (not already-split datasets)
+  // Load saved segments, or auto-detect, or default idle
+  const ep = parseInt(document.getElementById('vizEpisodeSelect').value);
   try {
-    if (/pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(vizCurrentTask || '')) {
+    const saved = await vizLoadSegments(vizCurrentDataset, ep);
+    if (saved) {
+      vizSegments = saved;
+    } else if (/pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(vizCurrentTask || '')) {
       vizSegments = vizDetectSegments(frames, vizCurrentTask);
     } else {
-      vizSegments = null;
+      vizSegments = [{start:0, end:frames.length-1, phase:'idle', label:'idle'}];
     }
     vizRenderSegmentBar();
     vizUpdatePhaseLabel(0);
