@@ -926,6 +926,248 @@ async def list_datasets():
     return {"ok": True, "datasets": datasets}
 
 
+@app.post("/api/datasets/combine")
+async def combine_datasets(request: Request):
+    """Combine multiple datasets into a new one."""
+    import shutil
+
+    body = await request.json()
+    source_names = body.get("datasets", [])
+    new_name = body.get("name", "").strip()
+    if not source_names or len(source_names) < 2:
+        return {"ok": False, "error": "Select at least 2 datasets"}
+    if not new_name:
+        return {"ok": False, "error": "Enter a name for the new dataset"}
+    # Sanitize name
+    new_name = new_name.replace(" ", "-").replace("/", "-")
+
+    new_dir = ROOT / "data" / new_name
+    if new_dir.exists():
+        return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
+
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        # Validate all sources exist and collect info
+        sources = []
+        for sname in source_names:
+            sdir = ROOT / "data" / sname
+            info_path = sdir / "meta" / "info.json"
+            if not info_path.exists():
+                return {"ok": False, "error": f"Dataset '{sname}' not found"}
+            info = json.loads(info_path.read_text())
+            sources.append({"name": sname, "dir": sdir, "info": info})
+
+        # Use first source as template for info.json structure
+        base_info = dict(sources[0]["info"])
+        fps = base_info.get("fps", 30)
+
+        # Collect all tasks (deduplicate)
+        all_tasks = []
+        task_set = set()
+        for src in sources:
+            tp = src["dir"] / "meta" / "tasks.parquet"
+            if tp.exists():
+                try:
+                    tbl = pq.read_table(str(tp))
+                    for t in tbl.to_pydict().get("task", []):
+                        if t not in task_set:
+                            task_set.add(t)
+                            all_tasks.append(t)
+                except Exception:
+                    pass
+        task_to_idx = {t: i for i, t in enumerate(all_tasks)}
+
+        # Merge data and episode metadata from all sources
+        combined_data = []
+        combined_ep = []
+        new_ep_idx = 0
+        global_frame_idx = 0
+
+        for src in sources:
+            sdir = src["dir"]
+
+            # Read episode metadata
+            ep_meta_list = []
+            ep_dir = sdir / "meta" / "episodes"
+            if ep_dir.exists():
+                for pf in sorted(ep_dir.rglob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                    except Exception:
+                        continue
+                    d = tbl.to_pydict()
+                    for i in range(len(d.get("episode_index", []))):
+                        ep_meta_list.append({k: v[i] for k, v in d.items()})
+            ep_meta_list.sort(key=lambda r: r.get("episode_index", 0))
+
+            # Read data frames
+            data_dir = sdir / "data"
+            src_frames = {}  # ep -> [rows]
+            if data_dir.exists():
+                for pf in sorted(data_dir.rglob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                    except Exception:
+                        continue
+                    d = tbl.to_pydict()
+                    for i in range(len(d.get("episode_index", []))):
+                        ep = d["episode_index"][i]
+                        row = {}
+                        for k, v in d.items():
+                            val = v[i]
+                            if hasattr(val, "tolist"):
+                                val = val.tolist()
+                            row[k] = val
+                        src_frames.setdefault(ep, []).append(row)
+
+            for ep in src_frames:
+                src_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
+
+            # Read tasks for this source to remap task_index
+            src_tasks = []
+            tp = sdir / "meta" / "tasks.parquet"
+            if tp.exists():
+                try:
+                    tbl = pq.read_table(str(tp))
+                    src_tasks = tbl.to_pydict().get("task", [])
+                except Exception:
+                    pass
+
+            # Process each episode
+            for old_ep in sorted(src_frames.keys()):
+                frames = src_frames[old_ep]
+                ep_meta = next((m for m in ep_meta_list if m["episode_index"] == old_ep), None)
+                ep_global_start = global_frame_idx
+
+                for fi, row in enumerate(frames):
+                    new_row = dict(row)
+                    new_row["episode_index"] = new_ep_idx
+                    new_row["frame_index"] = fi
+                    new_row["index"] = global_frame_idx
+                    # Remap task_index
+                    old_ti = row.get("task_index", 0)
+                    if old_ti < len(src_tasks) and src_tasks[old_ti] in task_to_idx:
+                        new_row["task_index"] = task_to_idx[src_tasks[old_ti]]
+                    else:
+                        new_row["task_index"] = 0
+                    combined_data.append(new_row)
+                    global_frame_idx += 1
+
+                # Build new episode meta
+                new_meta = {}
+                new_meta["episode_index"] = new_ep_idx
+                if ep_meta and "tasks" in ep_meta:
+                    new_meta["tasks"] = ep_meta["tasks"]
+                elif src_tasks:
+                    new_meta["tasks"] = [src_tasks[0]]
+                else:
+                    new_meta["tasks"] = all_tasks[:1] if all_tasks else [""]
+                new_meta["length"] = len(frames)
+                new_meta["data/chunk_index"] = 0
+                new_meta["data/file_index"] = 0
+                new_meta["dataset_from_index"] = ep_global_start
+                new_meta["dataset_to_index"] = global_frame_idx
+
+                # Video timestamps — reference original video files
+                for cam in ["observation.images.top", "observation.images.wrist"]:
+                    cam_key = f"videos/{cam}"
+                    if ep_meta:
+                        orig_chunk = ep_meta.get(f"{cam_key}/chunk_index", 0)
+                        orig_file = ep_meta.get(f"{cam_key}/file_index", 0)
+                        src_vid = sdir / "videos" / cam / f"chunk-{orig_chunk:03d}" / f"file-{orig_file:03d}.mp4"
+                    else:
+                        src_vid = None
+                    new_meta[f"{cam_key}/from_timestamp"] = ep_meta.get(f"{cam_key}/from_timestamp", 0.0) if ep_meta else 0.0
+                    new_meta[f"{cam_key}/to_timestamp"] = ep_meta.get(f"{cam_key}/to_timestamp", 0.0) if ep_meta else 0.0
+                    new_meta[f"{cam_key}/chunk_index"] = 0
+                    new_meta[f"{cam_key}/file_index"] = 0
+                    new_meta[f"_src_vid_{cam}"] = str(src_vid) if src_vid and src_vid.exists() else None
+
+                # Copy stats if available
+                if ep_meta:
+                    for k, v in ep_meta.items():
+                        if k.startswith("stats/"):
+                            new_meta[k] = v
+                    if "meta/episodes/chunk_index" in ep_meta:
+                        new_meta["meta/episodes/chunk_index"] = 0
+                    if "meta/episodes/file_index" in ep_meta:
+                        new_meta["meta/episodes/file_index"] = 0
+
+                combined_ep.append(new_meta)
+                new_ep_idx += 1
+
+        if not combined_data:
+            return {"ok": False, "error": "No data found in source datasets"}
+
+        # Create output directory structure
+        new_dir.mkdir(parents=True)
+        (new_dir / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+        (new_dir / "data" / "chunk-000").mkdir(parents=True)
+
+        # Copy video files — each source gets its own file index
+        for cam in ["observation.images.top", "observation.images.wrist"]:
+            vid_dir = new_dir / "videos" / cam / "chunk-000"
+            vid_dir.mkdir(parents=True)
+            src_vids = []
+            src_vid_set = set()
+            for ep_meta in combined_ep:
+                sv = ep_meta.get(f"_src_vid_{cam}")
+                if sv and sv not in src_vid_set:
+                    src_vid_set.add(sv)
+                    src_vids.append(sv)
+            vid_map = {}
+            for fi, sv in enumerate(src_vids):
+                dst = vid_dir / f"file-{fi:03d}.mp4"
+                shutil.copy2(sv, str(dst))
+                vid_map[sv] = fi
+            cam_key = f"videos/{cam}"
+            for ep_meta in combined_ep:
+                sv = ep_meta.pop(f"_src_vid_{cam}", None)
+                if sv and sv in vid_map:
+                    ep_meta[f"{cam_key}/file_index"] = vid_map[sv]
+
+        # Write data parquet
+        cols = {k: [r[k] for r in combined_data] for k in combined_data[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "data" / "chunk-000" / "file-000.parquet"))
+
+        # Write episode meta parquet
+        for ep in combined_ep:
+            for k in list(ep.keys()):
+                if k.startswith("_src_vid_"):
+                    del ep[k]
+        cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
+
+        # Write tasks parquet
+        pq.write_table(
+            pa.table({"task_index": list(range(len(all_tasks))), "task": all_tasks}),
+            str(new_dir / "meta" / "tasks.parquet"),
+        )
+
+        # Write info.json
+        new_info = dict(base_info)
+        new_info["total_episodes"] = new_ep_idx
+        new_info["total_frames"] = len(combined_data)
+        new_info["total_tasks"] = len(all_tasks)
+        new_info["splits"] = {"train": f"0:{new_ep_idx}"}
+        (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+
+        print(f"[Dataset] Combined {len(source_names)} datasets into {new_name} ({new_ep_idx} eps, {len(combined_data)} frames)")
+        return {
+            "ok": True,
+            "name": new_name,
+            "episodes": new_ep_idx,
+            "frames": len(combined_data),
+            "tasks": all_tasks,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/datasets/{name}/info")
 async def dataset_info(name: str):
     """Get full info.json + tasks for a dataset."""
@@ -1440,254 +1682,6 @@ async def split_dataset(name: str):
             print(f"[Dataset] Created split: {new_name} ({new_ep_idx} eps, {len(new_data_rows)} frames)")
 
         return {"ok": True, "datasets": created}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"ok": False, "error": str(e)}
-
-
-@app.post("/api/datasets/combine")
-async def combine_datasets(request: Request):
-    """Combine multiple datasets into a new one."""
-    import shutil
-
-    body = await request.json()
-    source_names = body.get("datasets", [])
-    new_name = body.get("name", "").strip()
-    if not source_names or len(source_names) < 2:
-        return {"ok": False, "error": "Select at least 2 datasets"}
-    if not new_name:
-        return {"ok": False, "error": "Enter a name for the new dataset"}
-    # Sanitize name
-    new_name = new_name.replace(" ", "-").replace("/", "-")
-
-    new_dir = ROOT / "data" / new_name
-    if new_dir.exists():
-        return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
-
-    try:
-        import pyarrow.parquet as pq
-        import pyarrow as pa
-
-        # Validate all sources exist and collect info
-        sources = []
-        for sname in source_names:
-            sdir = ROOT / "data" / sname
-            info_path = sdir / "meta" / "info.json"
-            if not info_path.exists():
-                return {"ok": False, "error": f"Dataset '{sname}' not found"}
-            info = json.loads(info_path.read_text())
-            sources.append({"name": sname, "dir": sdir, "info": info})
-
-        # Use first source as template for info.json structure
-        base_info = dict(sources[0]["info"])
-        fps = base_info.get("fps", 30)
-
-        # Collect all tasks (deduplicate)
-        all_tasks = []
-        task_set = set()
-        for src in sources:
-            tp = src["dir"] / "meta" / "tasks.parquet"
-            if tp.exists():
-                try:
-                    tbl = pq.read_table(str(tp))
-                    for t in tbl.to_pydict().get("task", []):
-                        if t not in task_set:
-                            task_set.add(t)
-                            all_tasks.append(t)
-                except Exception:
-                    pass
-        task_to_idx = {t: i for i, t in enumerate(all_tasks)}
-
-        # Merge data and episode metadata from all sources
-        combined_data = []
-        combined_ep = []
-        new_ep_idx = 0
-        global_frame_idx = 0
-
-        for src in sources:
-            sdir = src["dir"]
-
-            # Read episode metadata
-            ep_meta_list = []
-            ep_dir = sdir / "meta" / "episodes"
-            if ep_dir.exists():
-                for pf in sorted(ep_dir.rglob("*.parquet")):
-                    try:
-                        tbl = pq.read_table(str(pf))
-                    except Exception:
-                        continue
-                    d = tbl.to_pydict()
-                    for i in range(len(d.get("episode_index", []))):
-                        ep_meta_list.append({k: v[i] for k, v in d.items()})
-            ep_meta_list.sort(key=lambda r: r.get("episode_index", 0))
-
-            # Read data frames
-            data_dir = sdir / "data"
-            src_frames = {}  # ep -> [rows]
-            if data_dir.exists():
-                for pf in sorted(data_dir.rglob("*.parquet")):
-                    try:
-                        tbl = pq.read_table(str(pf))
-                    except Exception:
-                        continue
-                    d = tbl.to_pydict()
-                    for i in range(len(d.get("episode_index", []))):
-                        ep = d["episode_index"][i]
-                        row = {}
-                        for k, v in d.items():
-                            val = v[i]
-                            if hasattr(val, "tolist"):
-                                val = val.tolist()
-                            row[k] = val
-                        src_frames.setdefault(ep, []).append(row)
-
-            for ep in src_frames:
-                src_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
-
-            # Read tasks for this source to remap task_index
-            src_tasks = []
-            tp = sdir / "meta" / "tasks.parquet"
-            if tp.exists():
-                try:
-                    tbl = pq.read_table(str(tp))
-                    src_tasks = tbl.to_pydict().get("task", [])
-                except Exception:
-                    pass
-
-            # Process each episode
-            for old_ep in sorted(src_frames.keys()):
-                frames = src_frames[old_ep]
-                ep_meta = next((m for m in ep_meta_list if m["episode_index"] == old_ep), None)
-                ep_global_start = global_frame_idx
-
-                for fi, row in enumerate(frames):
-                    new_row = dict(row)
-                    new_row["episode_index"] = new_ep_idx
-                    new_row["frame_index"] = fi
-                    new_row["index"] = global_frame_idx
-                    # Remap task_index
-                    old_ti = row.get("task_index", 0)
-                    if old_ti < len(src_tasks) and src_tasks[old_ti] in task_to_idx:
-                        new_row["task_index"] = task_to_idx[src_tasks[old_ti]]
-                    else:
-                        new_row["task_index"] = 0
-                    combined_data.append(new_row)
-                    global_frame_idx += 1
-
-                # Build new episode meta
-                new_meta = {}
-                new_meta["episode_index"] = new_ep_idx
-                if ep_meta and "tasks" in ep_meta:
-                    new_meta["tasks"] = ep_meta["tasks"]
-                elif src_tasks:
-                    new_meta["tasks"] = [src_tasks[0]]
-                else:
-                    new_meta["tasks"] = all_tasks[:1] if all_tasks else [""]
-                new_meta["length"] = len(frames)
-                new_meta["data/chunk_index"] = 0
-                new_meta["data/file_index"] = 0
-                new_meta["dataset_from_index"] = ep_global_start
-                new_meta["dataset_to_index"] = global_frame_idx
-
-                # Video timestamps — reference original video files
-                for cam in ["observation.images.top", "observation.images.wrist"]:
-                    cam_key = f"videos/{cam}"
-                    if ep_meta:
-                        # Remap file_index to new per-source file
-                        orig_chunk = ep_meta.get(f"{cam_key}/chunk_index", 0)
-                        orig_file = ep_meta.get(f"{cam_key}/file_index", 0)
-                        src_vid = sdir / "videos" / cam / f"chunk-{orig_chunk:03d}" / f"file-{orig_file:03d}.mp4"
-                    else:
-                        src_vid = None
-                    # We'll set chunk/file index after copying videos
-                    new_meta[f"{cam_key}/from_timestamp"] = ep_meta.get(f"{cam_key}/from_timestamp", 0.0) if ep_meta else 0.0
-                    new_meta[f"{cam_key}/to_timestamp"] = ep_meta.get(f"{cam_key}/to_timestamp", 0.0) if ep_meta else 0.0
-                    new_meta[f"{cam_key}/chunk_index"] = 0
-                    new_meta[f"{cam_key}/file_index"] = 0
-                    # Store source video path for copying
-                    new_meta[f"_src_vid_{cam}"] = str(src_vid) if src_vid and src_vid.exists() else None
-
-                # Copy stats if available
-                if ep_meta:
-                    for k, v in ep_meta.items():
-                        if k.startswith("stats/"):
-                            new_meta[k] = v
-                    if "meta/episodes/chunk_index" in ep_meta:
-                        new_meta["meta/episodes/chunk_index"] = 0
-                    if "meta/episodes/file_index" in ep_meta:
-                        new_meta["meta/episodes/file_index"] = 0
-
-                combined_ep.append(new_meta)
-                new_ep_idx += 1
-
-        if not combined_data:
-            return {"ok": False, "error": "No data found in source datasets"}
-
-        # Create output directory structure
-        new_dir.mkdir(parents=True)
-        (new_dir / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
-        (new_dir / "data" / "chunk-000").mkdir(parents=True)
-
-        # Copy video files — each source gets its own file index
-        for cam in ["observation.images.top", "observation.images.wrist"]:
-            vid_dir = new_dir / "videos" / cam / "chunk-000"
-            vid_dir.mkdir(parents=True)
-            # Collect unique source video files
-            src_vids = []
-            src_vid_set = set()
-            for ep_meta in combined_ep:
-                sv = ep_meta.get(f"_src_vid_{cam}")
-                if sv and sv not in src_vid_set:
-                    src_vid_set.add(sv)
-                    src_vids.append(sv)
-            # Copy and build mapping: source_path -> file_index
-            vid_map = {}
-            for fi, sv in enumerate(src_vids):
-                dst = vid_dir / f"file-{fi:03d}.mp4"
-                shutil.copy2(sv, str(dst))
-                vid_map[sv] = fi
-            # Update episode metadata with correct file indices
-            cam_key = f"videos/{cam}"
-            for ep_meta in combined_ep:
-                sv = ep_meta.pop(f"_src_vid_{cam}", None)
-                if sv and sv in vid_map:
-                    ep_meta[f"{cam_key}/file_index"] = vid_map[sv]
-
-        # Write data parquet
-        cols = {k: [r[k] for r in combined_data] for k in combined_data[0]}
-        pq.write_table(pa.table(cols), str(new_dir / "data" / "chunk-000" / "file-000.parquet"))
-
-        # Write episode meta parquet (clean out internal keys)
-        for ep in combined_ep:
-            for k in list(ep.keys()):
-                if k.startswith("_src_vid_"):
-                    del ep[k]
-        cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
-        pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
-
-        # Write tasks parquet
-        pq.write_table(
-            pa.table({"task_index": list(range(len(all_tasks))), "task": all_tasks}),
-            str(new_dir / "meta" / "tasks.parquet"),
-        )
-
-        # Write info.json
-        new_info = dict(base_info)
-        new_info["total_episodes"] = new_ep_idx
-        new_info["total_frames"] = len(combined_data)
-        new_info["total_tasks"] = len(all_tasks)
-        new_info["splits"] = {"train": f"0:{new_ep_idx}"}
-        (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
-
-        print(f"[Dataset] Combined {len(source_names)} datasets into {new_name} ({new_ep_idx} eps, {len(combined_data)} frames)")
-        return {
-            "ok": True,
-            "name": new_name,
-            "episodes": new_ep_idx,
-            "frames": len(combined_data),
-            "tasks": all_tasks,
-        }
     except Exception as e:
         import traceback
         traceback.print_exc()
