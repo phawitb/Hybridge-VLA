@@ -2677,7 +2677,9 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
       const div = document.createElement('div');
       div.className = 'viz-ep-item' + (i === 0 ? ' active' : '');
       div.dataset.ep = i;
-      div.innerHTML = `<input type="checkbox" class="viz-ep-cb" data-ep="${i}" style="display:none;margin-right:6px;margin-top:2px" onclick="event.stopPropagation();vizUpdateDeleteBtn()"><div style="flex:1;min-width:0"><span>Episode ${i}</span><div class="ep-meta">${len} frames &middot; ${dur}s</div></div>`;
+      const epTasks = ep && ep.tasks ? (Array.isArray(ep.tasks) ? ep.tasks : [ep.tasks]) : [];
+      const epTaskHtml = epTasks.map(t => `<div style="font-size:0.68rem;color:#1a73e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t}</div>`).join('');
+      div.innerHTML = `<input type="checkbox" class="viz-ep-cb" data-ep="${i}" style="display:none;margin-right:6px;margin-top:2px" onclick="event.stopPropagation();vizUpdateDeleteBtn()"><div style="flex:1;min-width:0"><span>Episode ${i}</span><div class="ep-meta">${len} frames &middot; ${dur}s</div>${epTaskHtml}</div>`;
       div.addEventListener('click', () => {
         if (vizSelectMode) {
           const cb = div.querySelector('.viz-ep-cb');
