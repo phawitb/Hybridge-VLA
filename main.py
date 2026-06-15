@@ -18,7 +18,7 @@ import yaml
 from dotenv import load_dotenv
 from PIL import Image
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).parent
@@ -330,6 +330,208 @@ async def scan_cameras():
     _, jpg = cv2.imencode(".jpg", stacked, [cv2.IMWRITE_JPEG_QUALITY, 80])
     b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
     return {"ok": True, "count": len(frames), "image": b64}
+
+
+# ── Fake Camera ──
+fakecam_state = {
+    "running": False, "threads": [], "stop_event": None,
+    "params": {},
+    "cams": [
+        {"input_idx": 0, "frame": None, "frame_lock": threading.Lock()},
+        {"input_idx": 1, "frame": None, "frame_lock": threading.Lock()},
+    ],
+    "width": 640, "height": 480,
+}
+
+
+@app.post("/api/fakecam/start")
+async def fakecam_start(request: Request):
+    """Start fake cameras: reads from 2 input cameras, applies same augmentation, streams via WebSocket."""
+    if fakecam_state["running"]:
+        return {"ok": False, "error": "Already running"}
+    data = await request.json()
+    input_idx_0 = int(data.get("input_idx_0", 0))
+    input_idx_1 = int(data.get("input_idx_1", 1))
+    params = data.get("params", {})
+    width = int(data.get("width", 640))
+    height = int(data.get("height", 480))
+    fakecam_state["cams"][0]["input_idx"] = input_idx_0
+    fakecam_state["cams"][1]["input_idx"] = input_idx_1
+    fakecam_state["params"] = params
+    fakecam_state["width"] = width
+    fakecam_state["height"] = height
+    stop_event = threading.Event()
+    fakecam_state["stop_event"] = stop_event
+
+    def _run_cam(cam_slot):
+        import cv2
+        cam_state = fakecam_state["cams"][cam_slot]
+        input_idx = cam_state["input_idx"]
+        try:
+            cap = cv2.VideoCapture(input_idx, cv2.CAP_AVFOUNDATION)
+        except Exception:
+            cap = cv2.VideoCapture(input_idx)
+        if not cap.isOpened():
+            print(f"[FakeCam{cam_slot}] Cannot open camera {input_idx}")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        fail_count = 0
+        while not stop_event.is_set():
+            try:
+                ret, frame = cap.read()
+            except Exception:
+                ret = False
+            if not ret:
+                fail_count += 1
+                if fail_count > 100:
+                    print(f"[FakeCam{cam_slot}] Too many read failures, stopping")
+                    break
+                time.sleep(0.01)
+                continue
+            fail_count = 0
+            fh, fw = frame.shape[:2]
+            if fw != width or fh != height:
+                frame = cv2.resize(frame, (width, height))
+            cam_p = _build_cam_params(fakecam_state["params"])
+            light_p = _build_light_params(fakecam_state["params"])
+            if cam_p or light_p:
+                frame = _aug_frame(frame, cam_p, light_p)
+            with cam_state["frame_lock"]:
+                cam_state["frame"] = frame
+            time.sleep(1 / 30)
+        cap.release()
+        cam_state["frame"] = None
+
+    threads = []
+    for i in range(2):
+        t = threading.Thread(target=_run_cam, args=(i,), daemon=True)
+        threads.append(t)
+    fakecam_state["threads"] = threads
+    fakecam_state["running"] = True
+    for t in threads:
+        t.start()
+    return {"ok": True}
+
+
+@app.post("/api/fakecam/stop")
+async def fakecam_stop():
+    if not fakecam_state["running"]:
+        return {"ok": False, "error": "Not running"}
+    fakecam_state["stop_event"].set()
+    fakecam_state["running"] = False
+    for c in fakecam_state["cams"]:
+        c["frame"] = None
+    return {"ok": True}
+
+
+@app.post("/api/fakecam/update-params")
+async def fakecam_update_params(request: Request):
+    data = await request.json()
+    fakecam_state["params"] = data.get("params", {})
+    return {"ok": True}
+
+
+@app.get("/api/fakecam/params")
+async def fakecam_get_params():
+    """Return current fakecam augmentation params (for fakecam_inject.py --from-server)."""
+    return fakecam_state["params"]
+
+
+@app.post("/api/fakecam/save-params")
+async def fakecam_save_params(request: Request):
+    """Save current fakecam params to fakecam_params.json."""
+    data = await request.json()
+    params = data.get("params", fakecam_state["params"])
+    path = ROOT / "fakecam_params.json"
+    with open(path, "w") as f:
+        json.dump(params, f, indent=2)
+    return {"ok": True, "path": str(path)}
+
+
+@app.get("/api/fakecam/status")
+async def fakecam_status():
+    return {
+        "running": fakecam_state["running"],
+        "width": fakecam_state["width"],
+        "height": fakecam_state["height"],
+        "cams": [
+            {"input_idx": c["input_idx"]}
+            for c in fakecam_state["cams"]
+        ],
+    }
+
+
+@app.websocket("/ws/fakecam/{cam_id}")
+async def ws_fakecam(websocket: WebSocket, cam_id: int = 0):
+    """Stream augmented camera frames as JPEG over WebSocket. cam_id: 0 or 1."""
+    import cv2
+    await websocket.accept()
+    if cam_id < 0 or cam_id > 1:
+        await websocket.close()
+        return
+    cam_state = fakecam_state["cams"][cam_id]
+    try:
+        while True:
+            if not fakecam_state["running"]:
+                await asyncio.sleep(0.1)
+                continue
+            with cam_state["frame_lock"]:
+                frame = cam_state["frame"]
+            if frame is None:
+                await asyncio.sleep(0.03)
+                continue
+            _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            await websocket.send_bytes(jpg.tobytes())
+            await asyncio.sleep(1 / 25)
+    except WebSocketDisconnect:
+        pass
+
+
+def _build_cam_params(p):
+    """Convert UI slider values to _aug_frame camera params."""
+    cam = {}
+    rotation = float(p.get("rotation", 0))
+    translate_x = float(p.get("translate_x", 0))
+    translate_y = float(p.get("translate_y", 0))
+    scale = float(p.get("scale", 1.0))
+    shear = float(p.get("shear", 0))
+    if rotation:
+        cam["angle"] = rotation
+    if translate_x or translate_y:
+        cam["tx"] = translate_x / 100  # UI sends percentage
+        cam["ty"] = translate_y / 100
+        cam["scale"] = scale
+        cam["shear"] = shear / 100
+    elif scale != 1.0 or shear:
+        cam["tx"] = 0
+        cam["ty"] = 0
+        cam["scale"] = scale
+        cam["shear"] = shear / 100
+    return cam if cam else None
+
+
+def _build_light_params(p):
+    """Convert UI slider values to _aug_frame light params."""
+    lp = {}
+    brightness = float(p.get("brightness", 1.0))
+    contrast = float(p.get("contrast", 1.0))
+    saturation = float(p.get("saturation", 1.0))
+    noise = float(p.get("noise", 0))
+    blur = int(p.get("blur", 0))
+    if brightness != 1.0:
+        lp["brightness"] = brightness
+    if contrast != 1.0:
+        lp["contrast"] = contrast
+    if saturation != 1.0:
+        lp["saturation"] = saturation
+    if noise > 0:
+        lp["noise_s"] = noise
+    if blur > 0:
+        k = blur * 2 + 1  # must be odd
+        lp["blur_k"] = k
+        lp["blur_s"] = blur * 0.4
+    return lp if lp else None
 
 
 @app.post("/api/test/all")
@@ -1480,6 +1682,179 @@ async def dataset_episodes(name: str):
         except Exception:
             pass
     return {"ok": True, "episodes": episodes}
+
+
+def _match_model_to_dataset(model_name: str, ds_names: list, hf_user: str) -> str | None:
+    """Find the most likely source dataset for a model by name similarity.
+
+    Strategy: strip known prefixes from model name, then find the dataset
+    whose name is the longest match within the remaining string.
+    e.g. 'smolvla_V1-4tasks-augnormal5x' -> 'V1-4tasks-augnormal5x'
+    """
+    # Common model name prefixes to strip
+    prefixes = ["smolvla_", "smolvla-", "pi0_", "pi0-", "act_", "act-",
+                "diffusion_", "diffusion-", "vla_", "vla-", "model_", "model-"]
+    stripped = model_name
+    for p in prefixes:
+        if stripped.lower().startswith(p):
+            stripped = stripped[len(p):]
+            break
+
+    # Score each dataset: prefer exact match, then longest common substring
+    best_ds = None
+    best_score = 0
+    for ds in ds_names:
+        # Exact match after stripping prefix
+        if stripped == ds:
+            return f"{hf_user}/{ds}"
+        # Check if dataset name appears in model name
+        if ds in model_name:
+            score = len(ds)
+            if score > best_score:
+                best_score = score
+                best_ds = ds
+        # Check if stripped model name appears in dataset name
+        elif stripped in ds:
+            score = len(stripped)
+            if score > best_score:
+                best_score = score
+                best_ds = ds
+    if best_ds and best_score >= 2:
+        return f"{hf_user}/{best_ds}"
+    return None
+
+
+@app.get("/api/hf-models")
+async def list_hf_models():
+    """List SmolVLA models from user's HF repo."""
+    cfg = load_config()
+    hf_user = cfg.get("hf_repo_name", "")
+    if not hf_user:
+        return {"ok": False, "error": "HF repo name not set in config"}
+    try:
+        from huggingface_hub import HfApi
+        env = _read_env()
+        token = env.get("HF_TOKEN", None)
+        api = HfApi(token=token)
+        models = list(api.list_models(author=hf_user))
+        # Also list datasets to match model -> dataset
+        datasets = list(api.list_datasets(author=hf_user))
+        ds_names = [d.id.split("/")[-1] for d in datasets]
+
+        result = []
+        for m in models:
+            model_name = m.modelId.split("/")[-1] if "/" in m.modelId else m.modelId
+            # Match model to dataset: strip common prefixes and find longest substring match
+            matched_ds = _match_model_to_dataset(model_name, ds_names, hf_user)
+            result.append({
+                "id": m.modelId,
+                "name": model_name,
+                "last_modified": m.lastModified.isoformat() if m.lastModified else None,
+                "tags": m.tags or [],
+                "private": m.private,
+                "matched_dataset": matched_ds,
+            })
+        return {"ok": True, "models": result, "hf_user": hf_user}
+    except ImportError:
+        return {"ok": False, "error": "huggingface_hub not installed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/dataset-tasks/{repo_id:path}")
+async def dataset_tasks(repo_id: str):
+    """Get task list for a dataset. Try local data/ first, then HF."""
+    # repo_id like "phawitbinabik/V1-4tasks-augnormal5x"
+    ds_name = repo_id.split("/")[-1] if "/" in repo_id else repo_id
+    # Try local
+    tasks_path = ROOT / "data" / ds_name / "meta" / "tasks.parquet"
+    if tasks_path.exists():
+        try:
+            import pyarrow.parquet as pq
+            tbl = pq.read_table(str(tasks_path))
+            d = tbl.to_pydict()
+            tasks = d.get("task", [])
+            # If task is in index (LeRobot format), read from pandas
+            if not tasks:
+                import pandas as pd
+                df = pd.read_parquet(str(tasks_path))
+                tasks = df.index.tolist()
+            return {"ok": True, "tasks": tasks, "source": "local"}
+        except Exception:
+            pass
+    # Try HF
+    try:
+        from huggingface_hub import hf_hub_download
+        env = _read_env()
+        token = env.get("HF_TOKEN", None)
+        import tempfile
+        tmp = hf_hub_download(repo_id=repo_id, filename="meta/tasks.parquet",
+                              repo_type="dataset", token=token)
+        import pandas as pd
+        df = pd.read_parquet(tmp)
+        # LeRobot format: task strings are index
+        if "task" in df.columns:
+            tasks = df["task"].tolist()
+        else:
+            tasks = df.index.tolist()
+        return {"ok": True, "tasks": tasks, "source": "hf"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/datasets/{name}/video-thumbnail")
+async def video_thumbnail(name: str, cam: str = "observation.images.top", chunk: int = 0, file: int = 0, t: float = 0.0):
+    """Extract a single frame from a video at time t and return as JPEG."""
+    import subprocess
+    vid_path = ROOT / "data" / name / "videos" / cam / f"chunk-{chunk:03d}" / f"file-{file:03d}.mp4"
+    if not vid_path.exists():
+        return Response(status_code=404)
+    try:
+        cmd = [
+            "ffmpeg", "-ss", str(t), "-i", str(vid_path),
+            "-frames:v", "1", "-f", "image2", "-vcodec", "mjpeg",
+            "-q:v", "3", "pipe:1"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, timeout=10)
+        if proc.returncode != 0 or not proc.stdout:
+            return Response(status_code=500)
+        return Response(content=proc.stdout, media_type="image/jpeg")
+    except Exception:
+        return Response(status_code=500)
+
+
+@app.get("/api/datasets/{name}/aug-grid")
+async def aug_grid_data(name: str):
+    """Get augmentation grid data: groups of source episodes with their augmented copies."""
+    aug_path = ROOT / "data" / name / "meta" / "augmentation.json"
+    if not aug_path.exists():
+        return {"ok": False, "error": "No augmentation info"}
+    try:
+        aug = json.loads(aug_path.read_text())
+        episodes = aug.get("episodes", [])
+        source_ds = aug.get("source_dataset", "")
+        # Group by source_episode
+        groups = {}
+        for ep in episodes:
+            src = ep.get("source_episode", 0)
+            if src not in groups:
+                groups[src] = {"original": None, "augmented": []}
+            if ep.get("is_original", False):
+                groups[src]["original"] = ep
+            else:
+                groups[src]["augmented"].append(ep)
+        # Build response: list of groups sorted by source_episode
+        result = []
+        for src_ep in sorted(groups.keys()):
+            g = groups[src_ep]
+            result.append({
+                "source_episode": src_ep,
+                "original": g["original"],
+                "augmented": g["augmented"],
+            })
+        return {"ok": True, "source_dataset": source_ds, "groups": result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/datasets/{name}/frames/{episode_index}")

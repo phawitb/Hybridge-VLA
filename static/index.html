@@ -208,6 +208,7 @@
   .doc h2 { font-size: 1.1rem; font-weight: 700; color: #1a73e8; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0; }
   .doc h2:first-child { margin-top: 0; }
   .doc h3 { font-size: 0.95rem; font-weight: 700; color: #333; margin: 18px 0 6px; }
+  .doc h4 { font-size: 0.9rem; font-weight: 600; color: #555; margin: 14px 0 4px; }
   .doc p, .doc li { font-size: 0.88rem; line-height: 1.65; color: #444; }
   .doc p { margin-bottom: 8px; }
   .doc ul, .doc ol { padding-left: 20px; margin-bottom: 10px; }
@@ -352,6 +353,9 @@
     <div class="nav-item" data-tab="run">Run</div>
     <div class="nav-item" data-tab="data-collect">Data Collection</div>
     <div class="nav-item" data-tab="visualize">Datasets</div>
+    <div class="nav-item" data-tab="inference">VLA Inference</div>
+    <div class="nav-item" data-tab="fakecam">Fake Camera</div>
+    <div class="nav-item" data-tab="experiments">Experiments</div>
   </div>
 </div>
 
@@ -1172,6 +1176,13 @@ bump_height = min(overshoot + 2, 10) degrees
   <div class="page" id="page-visualize">
     <div class="page-title"><span>Visualize</span> Data</div>
 
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="viz-explore">Explore</button>
+      <button class="inner-tab" data-inner="viz-docs">Documents</button>
+    </div>
+
+    <div class="inner-page active" id="inner-viz-explore">
+
     <!-- Dataset selector row -->
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
       <select id="vizDatasetSelect" style="min-width:250px;padding:6px 10px;border-radius:6px;border:1px solid #d0d0d0;font-size:0.9rem">
@@ -1224,6 +1235,17 @@ bump_height = min(overshoot + 2, 10) degrees
               <div id="vizChartCursor" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(234,67,53,0.7);pointer-events:none;display:none"></div>
             </div>
           </div>
+
+          <!-- Augmentation Grid -->
+          <div id="vizAugGrid" style="display:none;margin-top:14px">
+            <div class="config-card">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                <h3 style="margin:0">Augmentation Grid</h3>
+                <span id="vizAugGridInfo" style="font-size:0.78rem;color:#888"></span>
+              </div>
+              <div id="vizAugGridContent" style="max-height:500px;overflow-y:auto"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Right: episode list -->
@@ -1244,7 +1266,1270 @@ bump_height = min(overshoot + 2, 10) degrees
 
       </div>
     </div>
+    </div><!-- /inner-viz-explore -->
+
+    <div class="inner-page" id="inner-viz-docs">
+      <div class="doc" style="max-width:900px">
+
+        <h2>Datasets — Documents</h2>
+        <p>คู่มืออธิบายการทำงานของแท็บ Datasets อย่างละเอียด ครอบคลุมทุกฟีเจอร์ตั้งแต่การดูข้อมูล, การจัดการ dataset, การทำ augmentation, การ push ขึ้น Hugging Face, ไปจนถึงการเตรียม training command</p>
+
+        <hr>
+
+        <h2>1. Dataset Explorer</h2>
+        <p>หน้าหลักสำหรับเรียกดูและจัดการ dataset ที่อยู่ในโฟลเดอร์ <code>data/</code></p>
+
+        <h3>1.1 เลือก Dataset</h3>
+        <ul>
+          <li>เลือก dataset จาก dropdown ด้านบน ระบบจะโหลดข้อมูล metadata ทั้งหมด</li>
+          <li>แสดงจำนวน episodes, frames, tasks, FPS และขนาดข้อมูล</li>
+          <li>ถ้า dataset มีหลาย task จะแสดง badge สีแยกตาม task พร้อมจำนวน episodes ต่อ task</li>
+          <li>กด <strong>Refresh</strong> เพื่ออัพเดตรายชื่อ dataset ใหม่</li>
+        </ul>
+
+        <h3>1.2 เล่นวิดีโอ Episode</h3>
+        <ul>
+          <li>เลือก episode จากรายการด้านขวา</li>
+          <li>กด <strong>Play</strong> เพื่อเล่นวิดีโอ top camera และ wrist camera พร้อมกัน</li>
+          <li>ใช้ <strong>scrubber</strong> ลากเพื่อ seek ไปยังตำแหน่งที่ต้องการ</li>
+          <li>แสดงเวลาปัจจุบันและ phase ของ segment (ถ้ามี)</li>
+        </ul>
+
+        <h3>1.3 Segment Bar (การแบ่งช่วง)</h3>
+        <p>แถบสีด้านล่าง scrubber แสดงการแบ่งช่วงของ episode ออกเป็น phase ต่างๆ เช่น idle, pick up, place</p>
+        <ul>
+          <li><strong>คลิก</strong> ที่ segment เพื่อเปลี่ยน phase (วนรอบ: idle &rarr; pick up &rarr; place &rarr; idle)</li>
+          <li><strong>ดับเบิลคลิก</strong> เพื่อแบ่ง segment ออกเป็น 2 ส่วนตรงจุดที่คลิก</li>
+          <li><strong>ลากขอบ</strong> (handle) ซ้าย-ขวา เพื่อปรับขนาด segment</li>
+          <li>ลาก handle จนเหลือ segment เล็กมาก (&lt;2 frames) จะ merge อัตโนมัติ</li>
+          <li>ทุกการเปลี่ยนแปลง <strong>save อัตโนมัติ</strong> ไปยัง <code>meta/segments.json</code></li>
+        </ul>
+
+        <h3>1.4 Joint Trajectories Chart</h3>
+        <p>กราฟแสดงค่า action (เส้นทึบ) และ observation.state (เส้นจาง) ของทุก joint ตลอด episode</p>
+        <ul>
+          <li>แกน X = frame index, แกน Y = ค่า joint position (radians)</li>
+          <li>6 joints: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper</li>
+          <li>เส้นสีแดงแนวตั้ง (cursor) แสดงตำแหน่งปัจจุบันของวิดีโอ</li>
+          <li>พื้นหลังระบายสีตาม segment phase</li>
+        </ul>
+
+        <h3>1.5 Augmentation Grid</h3>
+        <p>ถ้า dataset เป็น augmented dataset จะแสดง grid เปรียบเทียบภาพ</p>
+        <ul>
+          <li><strong>คอลัมน์แรก</strong> (ขอบเขียว) = ภาพจาก original episode</li>
+          <li><strong>คอลัมน์ถัดไป</strong> (ขอบน้ำเงิน) = ภาพที่ผ่านการ augment แต่ละสำเนา</li>
+          <li>แต่ละแถว = 1 source episode กับสำเนา augmented ทั้งหมด</li>
+          <li>ใต้รูปแสดงข้อมูลสรุป params (rotation, brightness, lang)</li>
+          <li>คลิกรูป augmented จะกระโดดไปดู episode นั้นในส่วน player</li>
+          <li>โหลดทีละ 20 แถว กด <strong>Load more</strong> เพื่อดูเพิ่ม</li>
+        </ul>
+
+        <hr>
+
+        <h2>2. การจัดการ Dataset</h2>
+
+        <h3>2.1 ลบ Episode</h3>
+        <ol>
+          <li>กด <strong>Select</strong> ที่มุมขวาบนของรายการ episodes</li>
+          <li>เลือก episode ที่ต้องการลบ (ติ๊ก checkbox)</li>
+          <li>กด <strong>Delete</strong> ระบบจะลบ episode ที่เลือกและ re-index ข้อมูลใหม่</li>
+        </ol>
+
+        <h3>2.2 ลบ Dataset ทั้งหมด</h3>
+        <ul>
+          <li>กดปุ่ม <strong>Delete Dataset</strong> (สีแดง) จะลบโฟลเดอร์ dataset ทั้งหมด</li>
+          <li>มี confirmation dialog ป้องกันการลบผิด</li>
+        </ul>
+
+        <h3>2.3 Combine Datasets</h3>
+        <p>รวม dataset หลายตัวเป็นชุดเดียว</p>
+        <ol>
+          <li>กดปุ่ม <strong>Combine</strong> (สีน้ำเงิน)</li>
+          <li>เลือก dataset ที่ต้องการรวม (เลือกได้หลายตัว)</li>
+          <li>ตั้งชื่อ dataset ใหม่</li>
+          <li>ระบบจะรวม data parquet, videos, tasks, episodes metadata ให้เป็นชุดเดียว</li>
+          <li>task_index จะถูก re-map ให้ไม่ซ้ำกัน</li>
+        </ol>
+
+        <h3>2.4 Split &amp; Generate</h3>
+        <p>แยก episode ออกเป็น sub-dataset ตาม phase (เช่น pick up / place) สำหรับ dataset ที่มี task แบบ "pick up X to Y"</p>
+        <ul>
+          <li>ปุ่มจะแสดงเฉพาะ dataset ที่มี task ตรงรูปแบบ <code>pick up ... to ...</code></li>
+          <li>ใช้ segment data จาก <code>meta/segments.json</code> (ถ้ามี) หรือ auto-detect จาก joint data</li>
+          <li>สร้าง sub-dataset ใหม่ เช่น <code>V1_pick-up-the-pink-bow</code> และ <code>V1_place-the-pink-bow</code></li>
+        </ul>
+
+        <hr>
+
+        <h2>3. Data Augmentation</h2>
+        <p>เพิ่มจำนวน episode ด้วยการสร้างสำเนาที่ปรับเปลี่ยนเล็กน้อย เพื่อให้โมเดลเรียนรู้ได้หลากหลายขึ้น</p>
+
+        <h3>3.1 วิธีใช้งาน</h3>
+        <ol>
+          <li>เลือก dataset แล้วกดปุ่ม <strong>Augment</strong> (สีส้ม)</li>
+          <li>ตั้งชื่อ dataset ใหม่</li>
+          <li>กำหนด <strong>Target Episodes</strong> = จำนวน episode ที่ต้องการ (ต้อง &gt; จำนวน original)</li>
+          <li>หรือเลือกจาก <strong>Multiplier</strong> dropdown (2x, 3x, 5x, 10x)</li>
+          <li>ปรับ <strong>Intensity</strong> (1-5) เพื่อควบคุมความแรงของการเปลี่ยนแปลง</li>
+          <li>เลือก techniques ที่ต้องการ แล้วกด <strong>Start Augmentation</strong></li>
+        </ol>
+
+        <h3>3.2 เทคนิค Augmentation</h3>
+
+        <h4>Camera Shift</h4>
+        <p>ปรับมุมกล้องเสมือน ทำให้โมเดลทนต่อการเปลี่ยนตำแหน่งกล้อง</p>
+        <ul>
+          <li><strong>Perspective warp</strong> — บิดภาพเล็กน้อยเสมือนมุมกล้องเปลี่ยน</li>
+          <li><strong>Affine transform</strong> — ขยาย/หด/เลื่อน/เอียงภาพ</li>
+          <li><strong>Rotation</strong> — หมุนภาพเล็กน้อย</li>
+        </ul>
+
+        <h4>Light &amp; Quality</h4>
+        <p>ปรับแสงและคุณภาพภาพ เสมือนถ่ายในสภาพแสงต่างๆ</p>
+        <ul>
+          <li><strong>Brightness</strong> — ปรับความสว่าง</li>
+          <li><strong>Saturation</strong> — ปรับความอิ่มตัวสี</li>
+          <li><strong>Color jitter</strong> — เปลี่ยนโทนสีเล็กน้อย</li>
+          <li><strong>Shadow</strong> — เพิ่มเงาสุ่ม</li>
+          <li><strong>Noise</strong> — เพิ่ม Gaussian noise</li>
+          <li><strong>Blur</strong> — เบลอภาพเล็กน้อย</li>
+        </ul>
+
+        <h4>Language Augmentation</h4>
+        <p>ปรับเปลี่ยนข้อความ task description เพื่อให้โมเดลเข้าใจคำสั่งที่หลากหลาย</p>
+        <ul>
+          <li><strong>Paraphrase</strong> — เปลี่ยนคำพูดให้มีความหมายเดียวกัน (เช่น "pick up" &rarr; "grab", "lift")</li>
+          <li><strong>Synonym</strong> — สลับคำใกล้เคียง</li>
+          <li><strong>Typo</strong> — เพิ่ม typo เล็กน้อยเสมือนผู้ใช้พิมพ์ผิด</li>
+        </ul>
+
+        <h4>Robot Noise</h4>
+        <p>เพิ่ม noise ในข้อมูล joint เสมือนหุ่นยนต์มีความคลาดเคลื่อนเล็กน้อย</p>
+        <ul>
+          <li><strong>Random start</strong> — ตัด frame เริ่มต้นออก (trim)</li>
+          <li><strong>Initial noise</strong> — เพิ่ม offset ให้ joint ตอนเริ่มต้น</li>
+          <li><strong>Trajectory jitter</strong> — เพิ่ม noise ตลอดเส้นทาง</li>
+        </ul>
+
+        <h3>3.3 Intensity Level</h3>
+        <table style="width:100%;border-collapse:collapse;margin:10px 0">
+          <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Level</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Scale</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">1</td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.25x</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เปลี่ยนแปลงน้อยมาก แทบไม่สังเกตเห็น</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">2</td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.5x</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เปลี่ยนแปลงเล็กน้อย</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">3</td><td style="padding:6px 12px;border:1px solid #e0e0e0">1.0x</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ค่าปกติ (default)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">4</td><td style="padding:6px 12px;border:1px solid #e0e0e0">1.5x</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เปลี่ยนแปลงมาก</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">5</td><td style="padding:6px 12px;border:1px solid #e0e0e0">2.0x</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เปลี่ยนแปลงมากที่สุด</td></tr>
+        </table>
+
+        <h3>3.4 การกระจาย Episode</h3>
+        <p>ระบบจะกระจาย target episodes ให้เท่าๆ กันในทุก source episode</p>
+        <pre>target = 870, source = 174 episodes
+base = 870 / 174 = 5 copies ต่อ episode
+remainder = 870 % 174 = 0
+ทุก episode จะได้ 5 สำเนา (1 original + 4 augmented)</pre>
+        <p>ถ้าหารไม่ลงตัว episode แรกๆ จะได้ +1 copy เพื่อให้ครบตามเป้า</p>
+
+        <hr>
+
+        <h2>4. Push to Hugging Face</h2>
+        <p>อัพโหลด dataset ไปยัง Hugging Face Hub เพื่อใช้ train บน GPU server</p>
+        <ol>
+          <li>กดปุ่ม <strong>Push to HF</strong> (สีส้ม)</li>
+          <li>ตรวจสอบ Repository ID (default: <code>{hf_repo_name}/{dataset_name}</code>)</li>
+          <li>กด <strong>Push</strong> ระบบจะอัพโหลดทั้ง data, videos, metadata</li>
+          <li>แสดง progress bar และ terminal log ระหว่างอัพโหลด</li>
+        </ol>
+        <p><strong>หมายเหตุ:</strong> ต้องตั้งค่า HF_TOKEN ในแท็บ Config &gt; API Keys &amp; Tokens ก่อน</p>
+
+        <hr>
+
+        <h2>5. Training Guide</h2>
+        <p>กดปุ่ม <strong>Training</strong> (สีเขียว) จะแสดง command สำเร็จรูปพร้อม copy ไปใช้บน GPU server</p>
+
+        <h3>5.1 ขั้นตอนที่แสดง</h3>
+        <table style="width:100%;border-collapse:collapse;margin:10px 0">
+          <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Step</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">Step 0</td><td style="padding:6px 12px;border:1px solid #e0e0e0">สร้าง conda env, ติดตั้ง LeRobot และ dependencies (ทำครั้งเดียว)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">Step 1</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Download dataset จาก HF ด้วย <code>hf download</code></td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">Step 2</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เริ่ม training ด้วย <code>lerobot-train</code> (มีทั้งแบบ W&amp;B ปิด/เปิด)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">Resume</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Train ต่อจาก checkpoint กรณี training หลุดกลางทาง</td></tr>
+        </table>
+
+        <h3>5.2 SmolVLA Training Parameters</h3>
+        <table style="width:100%;border-collapse:collapse;margin:10px 0">
+          <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Parameter</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Default</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--batch_size</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">32</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ขนาด batch (ลดเหลือ 16 ถ้า GPU 12GB)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--steps</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">100,000</td><td style="padding:6px 12px;border:1px solid #e0e0e0">จำนวน training steps ทั้งหมด</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.optimizer_lr</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.0003</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Learning rate</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.freeze_vision_encoder</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Freeze vision encoder (ประหยัด VRAM)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.train_expert_only</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Train เฉพาะ expert layers</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.use_amp</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ใช้ mixed precision (FP16) เร็วขึ้น ประหยัด VRAM</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--save_freq</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">20,000</td><td style="padding:6px 12px;border:1px solid #e0e0e0">บันทึก checkpoint ทุกกี่ step</td></tr>
+        </table>
+
+        <hr>
+
+        <h2>6. LeRobot Dataset Format (v3.0)</h2>
+        <p>โครงสร้างไฟล์ของ dataset ที่ใช้ในระบบ</p>
+        <pre>data/{dataset_name}/
+  data/
+    chunk-000/
+      file-000.parquet        # ข้อมูล action, state, timestamps
+  videos/
+    observation.images.top/
+      chunk-000/
+        file-000.mp4          # วิดีโอ top camera
+    observation.images.wrist/
+      chunk-000/
+        file-000.mp4          # วิดีโอ wrist camera
+  meta/
+    info.json                 # ข้อมูลทั่วไป (fps, features, totals)
+    stats.json                # สถิติ min/max/mean/std ของแต่ละ feature
+    tasks.parquet             # รายการ task descriptions
+    episodes/
+      chunk-000/
+        file-000.parquet      # metadata ต่อ episode (length, timestamps)
+    augmentation.json         # (ถ้ามี) ข้อมูลการ augment
+    segments.json             # (ถ้ามี) การแบ่ง segment ที่ manual edit</pre>
+
+        <h3>6.1 Data Parquet Columns</h3>
+        <table style="width:100%;border-collapse:collapse;margin:10px 0">
+          <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Column</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Type</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>action</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">float32[6]</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ค่า joint position ที่หุ่นยนต์ต้องไป (target)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>observation.state</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">float32[6]</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ค่า joint position ปัจจุบัน (current)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>timestamp</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">float32</td><td style="padding:6px 12px;border:1px solid #e0e0e0">เวลา (วินาที) ภายใน episode</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>frame_index</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">int64</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ลำดับ frame ภายใน episode (0, 1, 2, ...)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>episode_index</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">int64</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ลำดับ episode</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>index</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">int64</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ลำดับ global (ต่อเนื่องข้าม episode)</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>task_index</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">int64</td><td style="padding:6px 12px;border:1px solid #e0e0e0">อ้างอิงไปยัง tasks.parquet</td></tr>
+        </table>
+
+        <h3>6.2 tasks.parquet Format</h3>
+        <p>ไฟล์ tasks.parquet ต้องมี task string เป็น <strong>DataFrame index</strong> (ชื่อ "task") ไม่ใช่ column ธรรมดา ถ้าเขียนผิด format จะทำให้ LeRobot training error <code>ValueError: Task cannot be None</code></p>
+        <pre># ถูกต้อง (task เป็น index)
+                          task_index
+task
+pick up the white eraser           0
+place the white eraser             1
+
+# ผิด (task เป็น column)
+   task_index                      task
+0           0  pick up the white eraser
+1           1    place the white eraser</pre>
+
+        <hr>
+
+        <h2>7. API Keys &amp; Tokens</h2>
+        <p>ตั้งค่าใน Config &gt; API Keys &amp; Tokens</p>
+        <table style="width:100%;border-collapse:collapse;margin:10px 0">
+          <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Token</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">เก็บที่</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">ใช้สำหรับ</th></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">GEMINI_API_KEY</td><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>.env</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">Gemini API สำหรับ task planning</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">HF_TOKEN</td><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>.env</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">Hugging Face authentication สำหรับ push dataset</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0">HF Repo Name</td><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>config.yaml</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">Username สำหรับ default repo ID</td></tr>
+        </table>
+
+      </div>
+    </div><!-- /inner-viz-docs -->
+
   </div><!-- /page-visualize -->
+
+  <!-- ==================== VLA Inference ==================== -->
+  <div class="page" id="page-inference">
+    <div class="page-title"><span>VLA</span> Inference</div>
+
+    <div class="config-card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">Select Model</h3>
+      <p style="font-size:0.85rem;color:#666;margin-bottom:12px">Models from your Hugging Face repository. Click <strong>Refresh</strong> to fetch the latest list.</p>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <select id="infModelSelect" style="min-width:350px;padding:8px 12px;border-radius:6px;border:1px solid #d0d0d0;font-size:0.9rem">
+          <option value="">-- Select model --</option>
+        </select>
+        <button class="btn btn-sm" onclick="infLoadModels()" style="background:#1a73e8">Refresh</button>
+        <span id="infModelStatus" style="font-size:0.82rem;color:#888"></span>
+      </div>
+      <div id="infModelInfo" style="display:none;font-size:0.82rem;color:#555;padding:8px 14px;background:#f8f9fa;border-radius:6px;border:1px solid #e0e0e0"></div>
+    </div>
+
+    <div id="infCommands" style="display:none">
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 1: Download Model</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Download the trained model to the GPU server / robot.</p>
+        <div class="train-cmd" id="infCmd1"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('infCmd1')">Copy</button></div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 2: Run Inference</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Run the model on the robot with live camera feeds.</p>
+        <div class="form-group" style="margin-bottom:10px">
+          <label class="form-label">Task instruction</label>
+          <div id="infTaskSelectWrap" style="display:none;margin-bottom:6px">
+            <select id="infTaskSelect" class="form-input" style="width:100%" onchange="infOnTaskSelect()">
+            </select>
+            <div id="infTaskInfo" style="font-size:0.75rem;color:#888;margin-top:3px"></div>
+          </div>
+          <input type="text" id="infTaskInput" class="form-input" style="width:100%" value="" placeholder="e.g. Pick up the red cube and place it in the bowl" oninput="infUpdateCommands()">
+        </div>
+        <div class="train-cmd" id="infCmd2"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('infCmd2')">Copy</button></div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 2 (alt): Run with custom settings</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Additional options for display and FPS control.</p>
+        <div style="display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap">
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">FPS</label>
+            <input type="number" id="infFps" class="form-input" value="30" min="1" max="60" style="width:100%" oninput="infUpdateCommands()">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">Display data</label>
+            <select id="infDisplay" class="form-input" style="width:100%" onchange="infUpdateCommands()">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+        </div>
+        <div class="train-cmd" id="infCmd3"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('infCmd3')">Copy</button></div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 2 (fakecam): Run with Fake Camera augmentation</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Run inference with augmented camera frames using <code>fakecam_inject.py</code>. Save params from the Fake Camera tab first.</p>
+        <div class="train-cmd" id="infCmd4"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('infCmd4')">Copy</button></div>
+      </div>
+
+      <div style="background:#f0f7ff;border-radius:6px;padding:10px 14px;font-size:0.82rem;color:#333">
+        <strong>Tips:</strong>
+        <ul style="margin:4px 0 0 0;padding-left:18px">
+          <li>ต้อง activate conda env ก่อน: <code>conda activate lerobot</code></li>
+          <li>ปรับ <code>--robot.port</code> ให้ตรงกับ port ของหุ่นยนต์บน server/robot</li>
+          <li>ปรับ camera index ให้ตรงกับ device จริง</li>
+          <li>ถ้าต้องการ run บน robot โดยตรง ให้ download model ลง robot แทน GPU server</li>
+          <li>Step 2 (fakecam) ต้อง save params จากหน้า Fake Camera ก่อน หรือใช้ <code>--from-server</code> แทน</li>
+        </ul>
+      </div>
+    </div>
+  </div><!-- /page-inference -->
+
+  <!-- ==================== Fake Camera ==================== -->
+  <div class="page" id="page-fakecam">
+    <div class="page-title"><span>Fake</span> Camera</div>
+    <p style="font-size:0.85rem;color:#666;margin-bottom:16px">Create 2 virtual cameras from real cameras + augmentation filters. Both cameras share the same augmentation parameters.</p>
+
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <!-- Left: Controls -->
+      <div style="flex:1;min-width:300px">
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin-top:0">Input Cameras</h3>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div class="form-group" style="margin:0;min-width:90px">
+              <label class="form-label">Camera 1 Index</label>
+              <input type="number" id="fcInputIdx0" value="0" min="0" max="10" style="width:100%">
+            </div>
+            <div class="form-group" style="margin:0;min-width:90px">
+              <label class="form-label">Camera 2 Index</label>
+              <input type="number" id="fcInputIdx1" value="1" min="0" max="10" style="width:100%">
+            </div>
+            <div class="form-group" style="margin:0;min-width:70px">
+              <label class="form-label">Width</label>
+              <input type="number" id="fcWidth" value="640" min="160" max="1920" step="10" style="width:100%">
+            </div>
+            <div class="form-group" style="margin:0;min-width:70px">
+              <label class="form-label">Height</label>
+              <input type="number" id="fcHeight" value="480" min="120" max="1080" step="10" style="width:100%">
+            </div>
+            <button class="btn btn-sm" id="fcStartBtn" onclick="fcToggle()" style="background:#34a853;margin-top:14px">Start</button>
+          </div>
+          <div id="fcStatusMsg" style="font-size:0.82rem;color:#888;margin-top:8px"></div>
+        </div>
+
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin-top:0">Camera Transform</h3>
+          <div class="form-group">
+            <label class="form-label">Rotation (deg) <span id="fcRotVal">0</span></label>
+            <input type="range" id="fcRotation" min="-30" max="30" value="0" step="0.5" oninput="fcSlider(this,'fcRotVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Translate X (%) <span id="fcTxVal">0</span></label>
+            <input type="range" id="fcTranslateX" min="-30" max="30" value="0" step="0.5" oninput="fcSlider(this,'fcTxVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Translate Y (%) <span id="fcTyVal">0</span></label>
+            <input type="range" id="fcTranslateY" min="-30" max="30" value="0" step="0.5" oninput="fcSlider(this,'fcTyVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Scale <span id="fcScaleVal">1.0</span></label>
+            <input type="range" id="fcScale" min="0.5" max="2.0" value="1.0" step="0.05" oninput="fcSlider(this,'fcScaleVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Shear <span id="fcShearVal">0</span></label>
+            <input type="range" id="fcShear" min="-20" max="20" value="0" step="0.5" oninput="fcSlider(this,'fcShearVal')">
+          </div>
+        </div>
+
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin-top:0">Light & Noise</h3>
+          <div class="form-group">
+            <label class="form-label">Brightness <span id="fcBrightVal">1.0</span></label>
+            <input type="range" id="fcBrightness" min="0.3" max="2.0" value="1.0" step="0.05" oninput="fcSlider(this,'fcBrightVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Contrast <span id="fcContrastVal">1.0</span></label>
+            <input type="range" id="fcContrast" min="0.3" max="2.0" value="1.0" step="0.05" oninput="fcSlider(this,'fcContrastVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Saturation <span id="fcSatVal">1.0</span></label>
+            <input type="range" id="fcSaturation" min="0.0" max="3.0" value="1.0" step="0.05" oninput="fcSlider(this,'fcSatVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Noise <span id="fcNoiseVal">0</span></label>
+            <input type="range" id="fcNoise" min="0" max="50" value="0" step="1" oninput="fcSlider(this,'fcNoiseVal')">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Blur <span id="fcBlurVal">0</span></label>
+            <input type="range" id="fcBlur" min="0" max="10" value="0" step="1" oninput="fcSlider(this,'fcBlurVal')">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm btn-outline" onclick="fcReset()">Reset All</button>
+          <button class="btn btn-sm" onclick="fcSaveParams()" style="background:#f9ab00;color:#000">Save Params</button>
+          <span id="fcSaveStatus" style="font-size:0.78rem;color:#888"></span>
+        </div>
+
+        <div class="config-card" style="margin-top:14px">
+          <h3 style="margin-top:0">Use in Inference</h3>
+          <p style="font-size:0.82rem;color:#666;margin-bottom:8px">Run inference with augmented cameras — no code changes needed. Save params first, then copy the command below.</p>
+          <div class="train-cmd" id="fcInjectCmd"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('fcInjectCmd')">Copy</button>python fakecam_inject.py --params-file fakecam_params.json -- lerobot-rollout ...</div>
+          <p style="font-size:0.78rem;color:#999;margin-top:6px">Or load params from server in real-time:</p>
+          <div class="train-cmd" id="fcInjectCmd2"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('fcInjectCmd2')">Copy</button>python fakecam_inject.py --from-server http://localhost:8000 -- lerobot-rollout ...</div>
+        </div>
+      </div>
+
+      <!-- Right: Live Previews -->
+      <div style="flex:1;min-width:320px">
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin-top:0">Camera 1 Preview</h3>
+          <div style="background:#000;border-radius:8px;overflow:hidden;position:relative;aspect-ratio:4/3">
+            <img id="fcPreview0" style="width:100%;height:100%;object-fit:contain;display:block" alt="Camera 1 Preview">
+            <div id="fcNoSignal0" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#666;font-size:0.9rem">No signal</div>
+          </div>
+        </div>
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin-top:0">Camera 2 Preview</h3>
+          <div style="background:#000;border-radius:8px;overflow:hidden;position:relative;aspect-ratio:4/3">
+            <img id="fcPreview1" style="width:100%;height:100%;object-fit:contain;display:block" alt="Camera 2 Preview">
+            <div id="fcNoSignal1" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#666;font-size:0.9rem">No signal</div>
+          </div>
+        </div>
+        <div style="font-size:0.82rem;color:#555;background:#f8f9fa;border-radius:8px;padding:12px 16px;border:1px solid #e0e0e0">
+          <strong style="color:#1a73e8">How to use Fake Camera in Inference</strong>
+          <ol style="margin:6px 0 0 0;padding-left:18px;line-height:1.8">
+            <li><strong>Preview</strong> — Set camera indices, click <strong>Start</strong> to see augmented live preview. Adjust sliders until satisfied.</li>
+            <li><strong>Save Params</strong> — Click <strong>Save Params</strong> to save augmentation settings to <code>fakecam_params.json</code></li>
+            <li><strong>Run Inference</strong> — Use <code>fakecam_inject.py</code> to wrap your inference command. It monkey-patches <code>cv2.VideoCapture.read()</code> so all camera frames are augmented automatically — no code changes needed.</li>
+            <li><strong>Works everywhere</strong> — No virtual camera device or OBS required. Works on macOS, Linux, any number of cameras.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div><!-- /page-fakecam -->
+
+  <!-- ==================== Experiments ==================== -->
+  <div class="page" id="page-experiments">
+    <div class="page-title"><span>Experiments</span></div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="exp-round1">Round 1</button>
+      <button class="inner-tab" data-inner="exp-round2">Round 2</button>
+    </div>
+
+    <!-- ── Round 1 ── -->
+    <div class="inner-page active" id="inner-exp-round1">
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#d93025">Problem Analysis</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <p><strong>Symptom:</strong> Robot attempts to pick up objects but misses — arm moves to approximately the right area but can't grasp accurately.</p>
+          <p style="margin-top:8px"><strong>Previous training:</strong></p>
+          <ul style="padding-left:20px;margin:4px 0">
+            <li>Model: <code>smolvla_V1-4tasks-aug-light-level1-2x</code></li>
+            <li>Dataset: 174 original episodes (4 tasks) + 2x light augmentation = 348 episodes</li>
+            <li>Training: 100k steps, batch_size=32, loss plateau at <strong>0.014</strong> from step 50k</li>
+            <li>chunk_size=50, n_action_steps=50 (predicts 50 steps ahead per inference call)</li>
+          </ul>
+          <p style="margin-top:8px"><strong>Root causes identified:</strong></p>
+          <ol style="padding-left:20px;margin:4px 0">
+            <li><strong>Insufficient data</strong> — ~43 episodes/task (original) is too few for multi-task SmolVLA</li>
+            <li><strong>No spatial augmentation</strong> — only light augmentation was applied, model has zero tolerance for camera position variation</li>
+            <li><strong>chunk_size too large (50)</strong> — model predicts half the episode at once with no self-correction</li>
+            <li><strong>Overfitting</strong> — data seen ~103 epochs, loss plateau = model memorized data but can't generalize</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#1a73e8">Round 1 Strategy</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600;width:180px">Source dataset</td>
+              <td style="padding:6px 10px"><code>V1-4tasks</code> (174 episodes, 4 tasks)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">Augmentation</td>
+              <td style="padding:6px 10px">5x with <strong>spatial + light</strong> (rotation, affine, perspective, brightness, contrast, saturation)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">Target dataset</td>
+              <td style="padding:6px 10px"><code>V1-4tasks-aug-spatial5x</code> (870 episodes)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">Training steps</td>
+              <td style="padding:6px 10px">100,000</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">chunk_size</td>
+              <td style="padding:6px 10px"><strong>10</strong> (down from 50)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">n_action_steps</td>
+              <td style="padding:6px 10px"><strong>10</strong> (down from 50)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:6px 10px;font-weight:600">Expected loss</td>
+              <td style="padding:6px 10px">&lt; 0.010 (target 0.005-0.008)</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 10px;font-weight:600">Expected result</td>
+              <td style="padding:6px 10px">Accurate grasping with tolerance to minor camera shifts</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 1: Create Augmented Dataset</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:8px">Go to <strong>Datasets</strong> tab → select <strong>V1-4tasks</strong> → click <strong>Augment</strong> with these settings:</p>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333;background:#f8f9fa;border-radius:6px;padding:12px 16px;border:1px solid #e0e0e0">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600;width:180px">Dataset name</td>
+              <td style="padding:4px 10px"><code>V1-4tasks-aug-spatial5x</code></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Target episodes</td>
+              <td style="padding:4px 10px"><strong>870</strong> (174 × 5)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Intensity</td>
+              <td style="padding:4px 10px"><strong>3</strong> (Medium)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Camera Shift (all ON)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Rotation</td>
+              <td style="padding:4px 10px">✅ ON — random ±4° per episode</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Affine</td>
+              <td style="padding:4px 10px">✅ ON — translate ±4%, scale ±5%, shear ±3%</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Perspective</td>
+              <td style="padding:4px 10px">✅ ON — random perspective warp ±5%</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Light Quality</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Brightness</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Contrast</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Saturation</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Others</td>
+              <td style="padding:4px 10px">❌ OFF (noise, blur, shadow — skip for now)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Robot Noise</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Random Start</td>
+              <td style="padding:4px 10px">✅ ON — randomly trim start of episode</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 10px 4px 30px">Initial Noise / Jitter</td>
+              <td style="padding:4px 10px">❌ OFF — don't add joint noise yet</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 2: Push Augmented Dataset to HF</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">After augmentation completes, push the new dataset to Hugging Face.</p>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Go to <strong>Datasets</strong> tab → select <strong>V1-4tasks-aug-spatial5x</strong> → click <strong>Push to HF</strong></p>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 3: Setup GPU Server Environment</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Run on GPU server. Skip if environment already exists.</p>
+        <div class="train-cmd" id="expCmd1"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd1')">Copy</button>conda create -n lerobot python=3.12 -y
+conda activate lerobot
+pip install lerobot[smolvla]</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 4: Download Dataset on GPU Server</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Download the augmented dataset from HF to the GPU server.</p>
+        <div class="train-cmd" id="expCmd2"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd2')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+huggingface-cli download phawitbinabik/V1-4tasks-aug-spatial5x \
+  --repo-type dataset \
+  --local-dir ./data/V1-4tasks-aug-spatial5x</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 5: Train SmolVLA (Round 1)</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Key changes from previous training: <strong>chunk_size=10</strong>, <strong>spatial augmented data 5x</strong></p>
+        <div class="train-cmd" id="expCmd3"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd3')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+lerobot-train \
+  --dataset.repo_id=phawitbinabik/V1-4tasks-aug-spatial5x \
+  --dataset.root=./data/V1-4tasks-aug-spatial5x \
+  --policy.type=smolvla \
+  --output_dir=outputs/smolvla_round1_spatial5x \
+  --batch_size=32 \
+  --steps=100000 \
+  --policy.chunk_size=10 \
+  --policy.n_action_steps=10 \
+  --save_freq=10000 \
+  --log_freq=100 \
+  --policy.optimizer_lr=0.0003 \
+  --policy.scheduler_warmup_steps=1000 \
+  --policy.scheduler_decay_steps=30000</div>
+        <div style="margin-top:8px;font-size:0.82rem;color:#555;background:#fff8e1;border-radius:6px;padding:10px 14px;border:1px solid #ffcc02">
+          <strong>Monitor:</strong>
+          <ul style="margin:4px 0 0 0;padding-left:18px">
+            <li>Loss should drop below <strong>0.010</strong> — if plateau above 0.012, data may still be insufficient</li>
+            <li>Loss should keep decreasing past step 50k (unlike previous training)</li>
+            <li>If loss diverges or spikes, reduce <code>optimizer_lr</code> to <code>0.0001</code></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 5 (alt): Train with W&B Logging</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Same as Step 5 but with Weights & Biases logging for monitoring.</p>
+        <div class="train-cmd" id="expCmd4"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd4')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+pip install wandb
+wandb login
+
+lerobot-train \
+  --dataset.repo_id=phawitbinabik/V1-4tasks-aug-spatial5x \
+  --dataset.root=./data/V1-4tasks-aug-spatial5x \
+  --policy.type=smolvla \
+  --output_dir=outputs/smolvla_round1_spatial5x \
+  --batch_size=32 \
+  --steps=100000 \
+  --policy.chunk_size=10 \
+  --policy.n_action_steps=10 \
+  --save_freq=10000 \
+  --log_freq=100 \
+  --policy.optimizer_lr=0.0003 \
+  --policy.scheduler_warmup_steps=1000 \
+  --policy.scheduler_decay_steps=30000 \
+  --wandb.enable=true \
+  --wandb.project=hybridge-vla \
+  --wandb.run_name=round1_spatial5x_chunk10</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 5 (resume): Resume Training if Interrupted</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">If training stops mid-way, resume from the last checkpoint.</p>
+        <div class="train-cmd" id="expCmd5"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd5')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+lerobot-train --resume outputs/smolvla_round1_spatial5x/checkpoints/last/pretrained_model</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 6: Download Model to Robot</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">After training completes, download the model to the robot machine.</p>
+        <div class="train-cmd" id="expCmd6"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd6')">Copy</button>cd /Users/phawit/Projects/Hybridge-VLA
+
+huggingface-cli download phawitbinabik/smolvla_round1_spatial5x \
+  --repo-type model \
+  --local-dir ./models/smolvla_round1_spatial5x</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 7: Run Inference</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Test the trained model on the robot. Note <code>chunk_size</code> must match training.</p>
+        <div class="train-cmd" id="expCmd7"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd7')">Copy</button>conda activate lerobot
+
+lerobot-rollout \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5B141122411 \
+  --robot.id=my_awesome_follower_arm \
+  --robot.cameras='{
+    top: {type: opencv, index_or_path: 0, width: 320, height: 240, fps: 30},
+    wrist: {type: opencv, index_or_path: 1, width: 320, height: 240, fps: 30}
+  }' \
+  --task="pick up the pink bow" \
+  --fps=30 \
+  --display_data=true \
+  --policy.path=./models/smolvla_round1_spatial5x</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 7 (alt): Run with Fake Camera Augmentation</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Test inference with augmented camera input. Save params from Fake Camera tab first.</p>
+        <div class="train-cmd" id="expCmd8"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expCmd8')">Copy</button>conda activate lerobot
+
+python fakecam_inject.py --params-file fakecam_params.json -- \
+  lerobot-rollout \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5B141122411 \
+  --robot.id=my_awesome_follower_arm \
+  --robot.cameras='{
+    top: {type: opencv, index_or_path: 0, width: 320, height: 240, fps: 30},
+    wrist: {type: opencv, index_or_path: 1, width: 320, height: 240, fps: 30}
+  }' \
+  --task="pick up the pink bow" \
+  --fps=30 \
+  --display_data=true \
+  --policy.path=./models/smolvla_round1_spatial5x</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#34a853">Evaluation Criteria</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead>
+              <tr style="border-bottom:2px solid #1a73e8;text-align:left">
+                <th style="padding:6px 10px">Metric</th>
+                <th style="padding:6px 10px">Previous (baseline)</th>
+                <th style="padding:6px 10px">Target (round 1)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Training loss</td>
+                <td style="padding:6px 10px">0.014 (plateau at 50k)</td>
+                <td style="padding:6px 10px">&lt; 0.010, no plateau before 80k</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Pick up success rate</td>
+                <td style="padding:6px 10px">~0% (misses target)</td>
+                <td style="padding:6px 10px">&gt; 50%</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Reach accuracy</td>
+                <td style="padding:6px 10px">Close but off by 1-3cm</td>
+                <td style="padding:6px 10px">Within 0.5cm of target</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 10px">Self-correction</td>
+                <td style="padding:6px 10px">None (50-step commit)</td>
+                <td style="padding:6px 10px">Adjusts every 10 steps</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="background:#f0f7ff;border-radius:6px;padding:12px 16px;font-size:0.82rem;color:#333;margin-bottom:16px">
+        <strong>If Round 1 still fails, next steps (Round 2):</strong>
+        <ul style="margin:4px 0 0 0;padding-left:18px;line-height:1.8">
+          <li>Collect more demonstration data — aim for 100+ episodes per task</li>
+          <li>Add robot noise augmentation (initial_noise, trajectory_jitter)</li>
+          <li>Enable LeRobot's built-in <code>image_transforms</code> during training for on-the-fly augmentation</li>
+          <li>Try <code>chunk_size=5</code> for even more frequent self-correction</li>
+          <li>Increase training to 200k-300k steps</li>
+          <li>Try single-task training first (just "pick up the pink bow") to isolate the problem</li>
+        </ul>
+      </div>
+
+    </div><!-- /inner-exp-round1 -->
+
+    <!-- ── Round 2 ── -->
+    <div class="inner-page" id="inner-exp-round2">
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#d93025">Round 1 Result Analysis</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <p>Evaluate Round 1 results and identify which scenario applies:</p>
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px">
+            <thead>
+              <tr style="border-bottom:2px solid #d93025;text-align:left">
+                <th style="padding:6px 10px">Scenario</th>
+                <th style="padding:6px 10px">Symptoms</th>
+                <th style="padding:6px 10px">Diagnosis</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600;color:#e8710a">A: Loss still plateau &gt; 0.012</td>
+                <td style="padding:6px 10px">Loss stuck, robot moves randomly or repeats same motion</td>
+                <td style="padding:6px 10px">Data still insufficient or too noisy. Multi-task is too hard for current data volume.</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600;color:#e8710a">B: Loss drops but still misses</td>
+                <td style="padding:6px 10px">Loss &lt; 0.010, robot reaches correct area but gripper misses by 1-2cm</td>
+                <td style="padding:6px 10px">Model learned general trajectory but lacks fine-grained precision. Need more data + smaller action steps.</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600;color:#e8710a">C: Picks up sometimes (~30-50%)</td>
+                <td style="padding:6px 10px">Succeeds on some objects/positions but fails on others</td>
+                <td style="padding:6px 10px">Model working but needs more data variety and training time.</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 10px;font-weight:600;color:#34a853">D: Works well (&gt; 60%)</td>
+                <td style="padding:6px 10px">Consistent grasping, minor occasional misses</td>
+                <td style="padding:6px 10px">Round 1 success! Fine-tune further or move to more tasks.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#1a73e8">Round 2 Strategy</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <p>Round 2 addresses scenarios A, B, and C with a <strong>3-pronged approach</strong>:</p>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px">
+            <div style="flex:1;min-width:200px;background:#e8f5e9;border-radius:8px;padding:12px;border:1px solid #a5d6a7">
+              <div style="font-weight:700;color:#2e7d32;margin-bottom:4px">1. Single-Task Focus</div>
+              <div style="font-size:0.82rem;color:#333">Train one task at a time to isolate problems. Start with "pick up the pink bow" only.</div>
+            </div>
+            <div style="flex:1;min-width:200px;background:#e3f2fd;border-radius:8px;padding:12px;border:1px solid #90caf9">
+              <div style="font-weight:700;color:#1565c0;margin-bottom:4px">2. More Data + Full Augmentation</div>
+              <div style="font-size:0.82rem;color:#333">Collect 50 more episodes + 10x augmentation with all techniques (spatial, light, robot noise, language).</div>
+            </div>
+            <div style="flex:1;min-width:200px;background:#fff3e0;border-radius:8px;padding:12px;border:1px solid #ffcc80">
+              <div style="font-weight:700;color:#e65100;margin-bottom:4px">3. Aggressive Training Config</div>
+              <div style="font-size:0.82rem;color:#333">chunk_size=5, 200k steps, on-the-fly image_transforms, lower lr.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#1a73e8">Round 2 Config Summary</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead>
+              <tr style="border-bottom:2px solid #1a73e8;text-align:left">
+                <th style="padding:6px 10px">Parameter</th>
+                <th style="padding:6px 10px">Round 1</th>
+                <th style="padding:6px 10px">Round 2</th>
+                <th style="padding:6px 10px">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Tasks</td>
+                <td style="padding:6px 10px">4 tasks</td>
+                <td style="padding:6px 10px"><strong>1 task</strong> (pick up the pink bow)</td>
+                <td style="padding:6px 10px">Isolate and prove single-task works first</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Source data</td>
+                <td style="padding:6px 10px">174 eps (4 tasks)</td>
+                <td style="padding:6px 10px"><strong>~41 + 50 new = ~91 eps</strong> (1 task)</td>
+                <td style="padding:6px 10px">More demonstrations per task</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Augmentation</td>
+                <td style="padding:6px 10px">5x spatial+light</td>
+                <td style="padding:6px 10px"><strong>10x all techniques</strong></td>
+                <td style="padding:6px 10px">Maximum data variety</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Total episodes</td>
+                <td style="padding:6px 10px">870</td>
+                <td style="padding:6px 10px"><strong>~910</strong> (91 × 10)</td>
+                <td style="padding:6px 10px">All focused on one task</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">chunk_size</td>
+                <td style="padding:6px 10px">10</td>
+                <td style="padding:6px 10px"><strong>5</strong></td>
+                <td style="padding:6px 10px">More frequent self-correction (every 5 steps)</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Training steps</td>
+                <td style="padding:6px 10px">100k</td>
+                <td style="padding:6px 10px"><strong>200k</strong></td>
+                <td style="padding:6px 10px">More data needs more training</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">Learning rate</td>
+                <td style="padding:6px 10px">0.0003</td>
+                <td style="padding:6px 10px"><strong>0.0002</strong></td>
+                <td style="padding:6px 10px">Lower lr for more stable fine-grained learning</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px;font-weight:600">decay_steps</td>
+                <td style="padding:6px 10px">30,000</td>
+                <td style="padding:6px 10px"><strong>60,000</strong></td>
+                <td style="padding:6px 10px">Match longer training schedule</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 10px;font-weight:600">image_transforms</td>
+                <td style="padding:6px 10px">OFF</td>
+                <td style="padding:6px 10px"><strong>ON</strong></td>
+                <td style="padding:6px 10px">Additional on-the-fly augmentation during training</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 1: Collect More Demonstration Data</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:8px">Record 50 new episodes of <strong>"pick up the pink bow"</strong>. Tips for high-quality data:</p>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333;background:#f8f9fa;border-radius:6px;padding:12px 16px;border:1px solid #e0e0e0">
+          <ul style="padding-left:20px;margin:0">
+            <li><strong>Vary object position</strong> — place the pink bow at different locations each episode</li>
+            <li><strong>Vary approach angle</strong> — don't always pick up from the same direction</li>
+            <li><strong>Keep camera fixed</strong> — do NOT move the camera between episodes</li>
+            <li><strong>Clean demonstrations</strong> — smooth movements, no hesitation, successful grasp every time</li>
+            <li><strong>Consistent gripper</strong> — close gripper firmly on the object, don't just barely touch it</li>
+            <li><strong>Short episodes</strong> — aim for 60-100 frames per episode (2-3 seconds at 30fps)</li>
+          </ul>
+        </div>
+        <p style="font-size:0.82rem;color:#777;margin-top:8px">Use <strong>Data Collection</strong> tab with these settings:</p>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333;background:#f8f9fa;border-radius:6px;padding:12px 16px;border:1px solid #e0e0e0;margin-top:4px">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600;width:160px">Dataset name</td>
+              <td style="padding:4px 10px"><code>V1-pickup-bow-extra</code></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Task</td>
+              <td style="padding:4px 10px"><code>pick up the pink bow</code></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Num episodes</td>
+              <td style="padding:4px 10px">50</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 10px;font-weight:600">Resolution</td>
+              <td style="padding:4px 10px">320 × 240 (must match training data)</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 2: Merge Datasets</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Combine existing "pick up the pink bow" episodes from V1-4tasks with the new extra data. Extract single-task episodes first.</p>
+        <div class="train-cmd" id="expR2Cmd1"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd1')">Copy</button># On robot machine — extract "pick up the pink bow" from V1-4tasks
+# Then merge with V1-pickup-bow-extra
+#
+# Option A: Use the Datasets tab in web UI
+#   1. Select V1_pick-up-the-pink-bow (if single-task split exists)
+#   2. Or manually merge using the steps below
+#
+# Option B: If you already have V1_pick-up-the-pink-bow dataset
+#   It should have ~41 episodes from the original V1-4tasks
+#   Plus 50 new episodes from V1-pickup-bow-extra
+#   Total: ~91 episodes of "pick up the pink bow"</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 3: Create Full Augmented Dataset (10x)</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:8px">Go to <strong>Datasets</strong> tab → select the merged single-task dataset → click <strong>Augment</strong>:</p>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333;background:#f8f9fa;border-radius:6px;padding:12px 16px;border:1px solid #e0e0e0">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600;width:180px">Dataset name</td>
+              <td style="padding:4px 10px"><code>V1-pickup-bow-aug10x</code></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Target episodes</td>
+              <td style="padding:4px 10px"><strong>910</strong> (~91 × 10)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px;font-weight:600">Intensity</td>
+              <td style="padding:4px 10px"><strong>3</strong> (Medium)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Camera Shift — ALL ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Rotation</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Affine</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Perspective</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Light Quality — ALL ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Brightness</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Contrast</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Saturation</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Color Jitter</td>
+              <td style="padding:4px 10px">✅ ON (new — adds hue variation)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Shadow</td>
+              <td style="padding:4px 10px">✅ ON (new — simulates directional lighting)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Noise</td>
+              <td style="padding:4px 10px">✅ ON (new — simulates camera sensor noise)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Robot Noise</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Random Start</td>
+              <td style="padding:4px 10px">✅ ON</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Initial Noise</td>
+              <td style="padding:4px 10px">✅ ON (new — small random joint offset at start)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Trajectory Jitter</td>
+              <td style="padding:4px 10px">✅ ON (new — small noise throughout trajectory)</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td colspan="2" style="padding:6px 10px;font-weight:600;color:#1a73e8">Language</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e0e0e0">
+              <td style="padding:4px 10px 4px 30px">Synonym</td>
+              <td style="padding:4px 10px">✅ ON (e.g. "grab the pink bow", "lift the pink bow")</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 10px 4px 30px">Typo</td>
+              <td style="padding:4px 10px">✅ ON (small typos for robustness)</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 4: Push to HF</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Push the augmented dataset: <strong>Datasets</strong> tab → select <code>V1-pickup-bow-aug10x</code> → <strong>Push to HF</strong></p>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 5: Download on GPU Server</h3>
+        <div class="train-cmd" id="expR2Cmd2"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd2')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+huggingface-cli download phawitbinabik/V1-pickup-bow-aug10x \
+  --repo-type dataset \
+  --local-dir ./data/V1-pickup-bow-aug10x</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 6: Train SmolVLA (Round 2 — Single Task)</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Key changes: <strong>single task</strong>, <strong>chunk_size=5</strong>, <strong>200k steps</strong>, <strong>image_transforms ON</strong>, <strong>lower lr</strong></p>
+        <div class="train-cmd" id="expR2Cmd3"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd3')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+lerobot-train \
+  --dataset.repo_id=phawitbinabik/V1-pickup-bow-aug10x \
+  --dataset.root=./data/V1-pickup-bow-aug10x \
+  --policy.type=smolvla \
+  --output_dir=outputs/smolvla_round2_pickup_bow \
+  --batch_size=32 \
+  --steps=200000 \
+  --policy.chunk_size=5 \
+  --policy.n_action_steps=5 \
+  --save_freq=10000 \
+  --log_freq=100 \
+  --policy.optimizer_lr=0.0002 \
+  --policy.scheduler_warmup_steps=1000 \
+  --policy.scheduler_decay_steps=60000 \
+  --dataset.image_transforms.enable=true</div>
+        <div style="margin-top:8px;font-size:0.82rem;color:#555;background:#fff8e1;border-radius:6px;padding:10px 14px;border:1px solid #ffcc02">
+          <strong>What changed vs Round 1:</strong>
+          <ul style="margin:4px 0 0 0;padding-left:18px">
+            <li><code>chunk_size=5</code> — model re-evaluates every 5 steps instead of 10</li>
+            <li><code>steps=200000</code> — double training time for more data</li>
+            <li><code>optimizer_lr=0.0002</code> — lower lr for more precise convergence</li>
+            <li><code>decay_steps=60000</code> — longer warmup + decay for 200k schedule</li>
+            <li><code>image_transforms.enable=true</code> — additional on-the-fly augmentation during training (ColorJitter, RandomAffine, SharpnessJitter built into LeRobot)</li>
+            <li>Single task — all 910 episodes focus on "pick up the pink bow"</li>
+          </ul>
+        </div>
+        <div style="margin-top:8px;font-size:0.82rem;color:#555;background:#fce4ec;border-radius:6px;padding:10px 14px;border:1px solid #ef9a9a">
+          <strong>Monitor during training:</strong>
+          <ul style="margin:4px 0 0 0;padding-left:18px">
+            <li>Loss should drop below <strong>0.008</strong> by step 100k</li>
+            <li>Loss should still be decreasing at step 150k (not plateau)</li>
+            <li>If loss spikes or diverges → reduce lr to <code>0.0001</code></li>
+            <li>If loss plateaus early at &gt; 0.010 → data quality issue, check demonstrations</li>
+            <li>Save checkpoints every 10k — test intermediate models to find the sweet spot</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 6 (alt): Train with W&B</h3>
+        <div class="train-cmd" id="expR2Cmd4"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd4')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+lerobot-train \
+  --dataset.repo_id=phawitbinabik/V1-pickup-bow-aug10x \
+  --dataset.root=./data/V1-pickup-bow-aug10x \
+  --policy.type=smolvla \
+  --output_dir=outputs/smolvla_round2_pickup_bow \
+  --batch_size=32 \
+  --steps=200000 \
+  --policy.chunk_size=5 \
+  --policy.n_action_steps=5 \
+  --save_freq=10000 \
+  --log_freq=100 \
+  --policy.optimizer_lr=0.0002 \
+  --policy.scheduler_warmup_steps=1000 \
+  --policy.scheduler_decay_steps=60000 \
+  --dataset.image_transforms.enable=true \
+  --wandb.enable=true \
+  --wandb.project=hybridge-vla \
+  --wandb.run_name=round2_pickup_bow_chunk5</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 6 (resume): Resume if Interrupted</h3>
+        <div class="train-cmd" id="expR2Cmd5"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd5')">Copy</button>cd /home/jupyter-phawit/so101-v2
+conda activate lerobot
+
+lerobot-train --resume outputs/smolvla_round2_pickup_bow/checkpoints/last/pretrained_model</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 7: Test Intermediate Checkpoints</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:6px">Don't wait for 200k steps. Test checkpoints at 50k, 100k, 150k to find the best model.</p>
+        <div class="train-cmd" id="expR2Cmd6"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd6')">Copy</button># Download a specific checkpoint (e.g. step 100000)
+huggingface-cli download phawitbinabik/smolvla_round2_pickup_bow \
+  --repo-type model \
+  --local-dir ./models/smolvla_round2_pickup_bow
+
+# Or copy checkpoint directly from GPU server
+# scp -r gpu-server:so101-v2/outputs/smolvla_round2_pickup_bow/checkpoints/100000/pretrained_model \
+#   ./models/smolvla_round2_100k/</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Step 8: Run Inference (Single Task)</h3>
+        <div class="train-cmd" id="expR2Cmd7"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('expR2Cmd7')">Copy</button>conda activate lerobot
+
+lerobot-rollout \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5B141122411 \
+  --robot.id=my_awesome_follower_arm \
+  --robot.cameras='{
+    top: {type: opencv, index_or_path: 0, width: 320, height: 240, fps: 30},
+    wrist: {type: opencv, index_or_path: 1, width: 320, height: 240, fps: 30}
+  }' \
+  --task="pick up the pink bow" \
+  --fps=30 \
+  --display_data=true \
+  --policy.path=./models/smolvla_round2_pickup_bow</div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0;color:#34a853">Evaluation Criteria</h3>
+        <div style="font-size:0.85rem;line-height:1.8;color:#333">
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+            <thead>
+              <tr style="border-bottom:2px solid #1a73e8;text-align:left">
+                <th style="padding:6px 10px">Metric</th>
+                <th style="padding:6px 10px">Baseline</th>
+                <th style="padding:6px 10px">Round 1 target</th>
+                <th style="padding:6px 10px">Round 2 target</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Training loss</td>
+                <td style="padding:6px 10px">0.014</td>
+                <td style="padding:6px 10px">&lt; 0.010</td>
+                <td style="padding:6px 10px"><strong>&lt; 0.006</strong></td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Pick up success</td>
+                <td style="padding:6px 10px">~0%</td>
+                <td style="padding:6px 10px">&gt; 50%</td>
+                <td style="padding:6px 10px"><strong>&gt; 80%</strong></td>
+              </tr>
+              <tr style="border-bottom:1px solid #e0e0e0">
+                <td style="padding:6px 10px">Reach accuracy</td>
+                <td style="padding:6px 10px">±3cm</td>
+                <td style="padding:6px 10px">±0.5cm</td>
+                <td style="padding:6px 10px"><strong>±0.3cm</strong></td>
+              </tr>
+              <tr>
+                <td style="padding:6px 10px">Self-correction</td>
+                <td style="padding:6px 10px">None (50-step)</td>
+                <td style="padding:6px 10px">Every 10 steps</td>
+                <td style="padding:6px 10px"><strong>Every 5 steps</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="background:#f0f7ff;border-radius:6px;padding:12px 16px;font-size:0.82rem;color:#333;margin-bottom:16px">
+        <strong>If Round 2 single-task succeeds (&gt; 80% pick up rate):</strong>
+        <ul style="margin:4px 0 0 0;padding-left:18px;line-height:1.8">
+          <li>Gradually add tasks back — Round 3: train "pick up" + "place" (2 tasks)</li>
+          <li>Use the same augmentation strategy but with more source data per task</li>
+          <li>Keep <code>chunk_size=5</code> as it proved effective</li>
+        </ul>
+      </div>
+
+      <div style="background:#fce4ec;border-radius:6px;padding:12px 16px;font-size:0.82rem;color:#333;margin-bottom:16px">
+        <strong>If Round 2 still fails:</strong>
+        <ul style="margin:4px 0 0 0;padding-left:18px;line-height:1.8">
+          <li><strong>Check data quality</strong> — replay episodes and verify every demonstration is a clean, successful grasp</li>
+          <li><strong>Check gripper calibration</strong> — gripper might not close enough mechanically</li>
+          <li><strong>Try PI0 model</strong> — different architecture may work better: <code>--policy.type=pi0</code></li>
+          <li><strong>Reduce to 1 camera</strong> — try training with only top camera to simplify the problem</li>
+          <li><strong>Lower FPS</strong> — try <code>fps=15</code> for data collection + inference to reduce redundant frames</li>
+          <li><strong>Check servo precision</strong> — the robot arm may have backlash or calibration drift</li>
+        </ul>
+      </div>
+
+    </div><!-- /inner-exp-round2 -->
+
+  </div><!-- /page-experiments -->
 
 </div><!-- /main-content -->
 
@@ -1568,8 +2853,12 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize';
+        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'experiments';
         rp.style.display = hidePanel ? 'none' : '';
+      }
+      // Auto-load models on first visit to inference tab
+      if (el.dataset.tab === 'inference' && !infModels.length) {
+        infLoadModels();
       }
     });
   });
@@ -2817,6 +4106,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     }
     infoSection.style.display = '';
     vizLoadEpisode();
+    vizLoadAugGrid(name);
   } catch(e) { console.error(e); }
 });
 
@@ -3049,6 +4339,348 @@ async function vizDoDeleteDataset() {
   btn.disabled = false;
 }
 
+// ── VLA Inference ──
+
+let infModels = [];
+let infSelectedModel = null;
+
+async function infLoadModels() {
+  const sel = document.getElementById('infModelSelect');
+  const st = document.getElementById('infModelStatus');
+  st.textContent = 'Loading models...';
+  st.style.color = '#888';
+  try {
+    const r = await fetch('/api/hf-models');
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = d.error || 'Error';
+      st.style.color = '#d93025';
+      return;
+    }
+    infModels = d.models;
+    // Clear and populate select
+    sel.innerHTML = '<option value="">-- Select model --</option>';
+    if (infModels.length === 0) {
+      st.textContent = 'No models found in ' + d.hf_user;
+      return;
+    }
+    infModels.forEach((m, i) => {
+      const o = document.createElement('option');
+      o.value = i;
+      o.textContent = m.name + (m.private ? ' (private)' : '');
+      sel.appendChild(o);
+    });
+    st.textContent = infModels.length + ' models found';
+    st.style.color = '#34a853';
+  } catch(e) {
+    st.textContent = e.message;
+    st.style.color = '#d93025';
+  }
+}
+
+document.getElementById('infModelSelect').addEventListener('change', async function() {
+  const idx = this.value;
+  const infoEl = document.getElementById('infModelInfo');
+  const cmdsEl = document.getElementById('infCommands');
+  if (idx === '') {
+    infoEl.style.display = 'none';
+    cmdsEl.style.display = 'none';
+    infSelectedModel = null;
+    return;
+  }
+  infSelectedModel = infModels[parseInt(idx)];
+  const m = infSelectedModel;
+  // Show model info
+  const modified = m.last_modified ? new Date(m.last_modified).toLocaleString() : 'unknown';
+  const tags = m.tags.length ? m.tags.join(', ') : 'none';
+  const dsMatch = m.matched_dataset ? `<br><span style="color:#1a73e8">Trained from:</span> <a href="https://huggingface.co/datasets/${m.matched_dataset}" target="_blank" style="color:#1a73e8;text-decoration:underline">${m.matched_dataset}</a>` : '<br><span style="color:#999">Trained from: unknown</span>';
+  infoEl.innerHTML = `<strong>${m.id}</strong> &middot; Last modified: ${modified} &middot; Tags: ${tags}${dsMatch}`;
+  infoEl.style.display = '';
+
+  // Fetch tasks from matched dataset
+  const taskSelectWrap = document.getElementById('infTaskSelectWrap');
+  const taskSelect = document.getElementById('infTaskSelect');
+  const taskInfo = document.getElementById('infTaskInfo');
+  const taskInput = document.getElementById('infTaskInput');
+  taskSelectWrap.style.display = 'none';
+  taskSelect.innerHTML = '';
+  taskInfo.textContent = '';
+
+  if (m.matched_dataset) {
+    // Fetch tasks from the matched dataset
+    try {
+      const tr = await fetch(`/api/dataset-tasks/${m.matched_dataset}`);
+      const td = await tr.json();
+      if (td.ok && td.tasks && td.tasks.length) {
+        // Deduplicate and filter out augmented variants (typos etc)
+        const uniqueTasks = [...new Set(td.tasks)];
+        taskSelect.innerHTML = uniqueTasks.map((t, i) => `<option value="${t.replace(/"/g, '&quot;')}">${t}</option>`).join('');
+        taskSelectWrap.style.display = '';
+        taskInfo.textContent = `${uniqueTasks.length} tasks found from ${m.matched_dataset} (${td.source})`;
+        // Auto-fill with first task
+        taskInput.value = uniqueTasks[0];
+      }
+    } catch(e) { console.error(e); }
+  }
+
+  if (!taskInput.value) {
+    taskInput.value = cfg.default_instruction || 'Pick up the object';
+  }
+
+  cmdsEl.style.display = '';
+  infUpdateCommands();
+});
+
+function infOnTaskSelect() {
+  const sel = document.getElementById('infTaskSelect');
+  document.getElementById('infTaskInput').value = sel.value;
+  infUpdateCommands();
+}
+
+function infUpdateCommands() {
+  if (!infSelectedModel) return;
+  const m = infSelectedModel;
+  const modelDir = `./models/${m.name}`;
+  const task = document.getElementById('infTaskInput').value || 'Pick up the object';
+  const fps = document.getElementById('infFps').value || '30';
+  const display = document.getElementById('infDisplay').value;
+
+  const robotPort = cfg.robot_port || '/dev/tty.usbmodem5B141122411';
+  const robotId = cfg.robot_id || 'my_awesome_follower_arm';
+  const camTop = cfg.camera_top_index ?? 0;
+  const camWrist = cfg.camera_wrist_index ?? 1;
+
+  // Step 1: Download
+  const cmd1 = [
+    `hf download ${m.id} \\`,
+    `  --repo-type model \\`,
+    `  --local-dir ${modelDir}`,
+  ].join('\n');
+
+  // Step 2: Basic rollout
+  const cmd2 = [
+    `lerobot-rollout \\`,
+    `  --robot.type=so101_follower \\`,
+    `  --robot.port=${robotPort} \\`,
+    `  --robot.id=${robotId} \\`,
+    `  --robot.cameras='{`,
+    `    top: {type: opencv, index_or_path: ${camTop}, width: 320, height: 240, fps: ${fps}},`,
+    `    wrist: {type: opencv, index_or_path: ${camWrist}, width: 320, height: 240, fps: ${fps}}`,
+    `  }' \\`,
+    `  --task="${task}" \\`,
+    `  --fps=${fps} \\`,
+    `  --display_data=true \\`,
+    `  --policy.path=${modelDir}`,
+  ].join('\n');
+
+  // Step 2 alt: Custom settings
+  const cmd3 = [
+    `lerobot-rollout \\`,
+    `  --robot.type=so101_follower \\`,
+    `  --robot.port=${robotPort} \\`,
+    `  --robot.id=${robotId} \\`,
+    `  --robot.cameras='{`,
+    `    top: {type: opencv, index_or_path: ${camTop}, width: 320, height: 240, fps: ${fps}},`,
+    `    wrist: {type: opencv, index_or_path: ${camWrist}, width: 320, height: 240, fps: ${fps}}`,
+    `  }' \\`,
+    `  --task="${task}" \\`,
+    `  --fps=${fps} \\`,
+    `  --display_data=${display} \\`,
+    `  --policy.path=${modelDir}`,
+  ].join('\n');
+
+  // Step 2 fakecam: Run with fakecam_inject
+  const cmd4 = [
+    `python fakecam_inject.py --params-file fakecam_params.json -- \\`,
+    `  lerobot-rollout \\`,
+    `  --robot.type=so101_follower \\`,
+    `  --robot.port=${robotPort} \\`,
+    `  --robot.id=${robotId} \\`,
+    `  --robot.cameras='{`,
+    `    top: {type: opencv, index_or_path: ${camTop}, width: 320, height: 240, fps: ${fps}},`,
+    `    wrist: {type: opencv, index_or_path: ${camWrist}, width: 320, height: 240, fps: ${fps}}`,
+    `  }' \\`,
+    `  --task="${task}" \\`,
+    `  --fps=${fps} \\`,
+    `  --display_data=true \\`,
+    `  --policy.path=${modelDir}`,
+  ].join('\n');
+
+  const cb = id => `<button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('${id}')">Copy</button>`;
+  document.getElementById('infCmd1').innerHTML = cb('infCmd1') + _escHtml(cmd1);
+  document.getElementById('infCmd2').innerHTML = cb('infCmd2') + _escHtml(cmd2);
+  document.getElementById('infCmd3').innerHTML = cb('infCmd3') + _escHtml(cmd3);
+  document.getElementById('infCmd4').innerHTML = cb('infCmd4') + _escHtml(cmd4);
+}
+
+// ── Augmentation Grid ──
+
+async function vizLoadAugGrid(name) {
+  const gridWrap = document.getElementById('vizAugGrid');
+  const gridContent = document.getElementById('vizAugGridContent');
+  const gridInfo = document.getElementById('vizAugGridInfo');
+  if (!vizAugInfo) {
+    gridWrap.style.display = 'none';
+    return;
+  }
+  gridWrap.style.display = '';
+  gridContent.innerHTML = '<div style="color:#888;font-size:0.85rem;padding:10px">Loading augmentation grid...</div>';
+
+  try {
+    const r = await fetch(`/api/datasets/${name}/aug-grid`);
+    const d = await r.json();
+    if (!d.ok || !d.groups || !d.groups.length) {
+      gridWrap.style.display = 'none';
+      return;
+    }
+
+    const srcDs = d.source_dataset;
+    const groups = d.groups;
+    // Show max copies count
+    const maxCopies = Math.max(...groups.map(g => g.augmented.length));
+    gridInfo.textContent = `${groups.length} source episodes, ${maxCopies} augmented copies each`;
+
+    // Build grid: each row = 1 source episode, col0 = original, col1..N = augmented
+    let html = '<div style="display:grid;grid-template-columns:repeat(' + (maxCopies + 1) + ',1fr);gap:4px;font-size:0.72rem">';
+
+    // Header row
+    html += '<div style="font-weight:700;color:#2e7d32;text-align:center;padding:4px">Original</div>';
+    for (let i = 0; i < maxCopies; i++) {
+      html += `<div style="font-weight:700;color:#1565c0;text-align:center;padding:4px">Aug ${i + 1}</div>`;
+    }
+
+    // Only render first 20 groups initially, with a "Load more" button
+    const BATCH = 20;
+    const renderGroups = groups.slice(0, BATCH);
+
+    renderGroups.forEach(g => {
+      const orig = g.original;
+      if (!orig || !orig.source_video) return;
+      const sv = orig.source_video.top || orig.source_video;
+      // Mid-point timestamp for thumbnail
+      const midT = ((sv.from_timestamp || 0) + (sv.to_timestamp || 0)) / 2;
+      // Original thumbnail from source dataset
+      const origUrl = `/api/datasets/${srcDs}/video-thumbnail?cam=observation.images.top&chunk=${sv.chunk_index || 0}&file=${sv.file_index || 0}&t=${midT.toFixed(2)}`;
+      html += `<div style="text-align:center;padding:2px">
+        <img src="${origUrl}" loading="lazy" style="width:100%;border-radius:4px;border:2px solid #c8e6c9;background:#111;aspect-ratio:4/3;object-fit:cover" title="Source ep ${g.source_episode}">
+        <div style="color:#888;margin-top:1px">ep ${g.source_episode}</div>
+      </div>`;
+
+      // Augmented copies
+      for (let i = 0; i < maxCopies; i++) {
+        const aug = g.augmented[i];
+        if (!aug) {
+          html += '<div></div>';
+          continue;
+        }
+        // Augmented video from current dataset
+        const epMeta = vizEpisodesData[aug.episode_index];
+        const aCk = epMeta ? (epMeta['videos/observation.images.top/chunk_index'] ?? 0) : 0;
+        const aFl = epMeta ? (epMeta['videos/observation.images.top/file_index'] ?? 0) : 0;
+        const aFrom = epMeta ? (epMeta['videos/observation.images.top/from_timestamp'] ?? 0) : 0;
+        const aTo = epMeta ? (epMeta['videos/observation.images.top/to_timestamp'] ?? 0) : 0;
+        const aMid = (aFrom + aTo) / 2;
+        const augUrl = `/api/datasets/${name}/video-thumbnail?cam=observation.images.top&chunk=${aCk}&file=${aFl}&t=${aMid.toFixed(2)}`;
+        // Brief param summary
+        let paramTip = '';
+        if (aug.params) {
+          const parts = [];
+          if (aug.params.camera && aug.params.camera.rotation) parts.push(`rot:${aug.params.camera.rotation.toFixed(1)}`);
+          if (aug.params.light && aug.params.light.brightness) parts.push(`bri:${aug.params.light.brightness.toFixed(2)}`);
+          if (aug.params.language && aug.params.language.augmented_task) parts.push('lang');
+          paramTip = parts.join(' ');
+        }
+        html += `<div style="text-align:center;padding:2px;cursor:pointer" onclick="vizSelectEpisode(${aug.episode_index})">
+          <img src="${augUrl}" loading="lazy" style="width:100%;border-radius:4px;border:2px solid #bbdefb;background:#111;aspect-ratio:4/3;object-fit:cover" title="Aug ep ${aug.episode_index}: ${paramTip}">
+          <div style="color:#999;margin-top:1px">${paramTip || 'ep ' + aug.episode_index}</div>
+        </div>`;
+      }
+    });
+
+    html += '</div>';
+
+    // Load more button if needed
+    if (groups.length > BATCH) {
+      html += `<div style="text-align:center;margin-top:8px">
+        <button class="btn btn-sm" onclick="vizLoadMoreAugGrid(this, '${name}')" data-offset="${BATCH}" style="background:#f0f0f0;color:#555">
+          Load more (${groups.length - BATCH} remaining)
+        </button>
+      </div>`;
+    }
+
+    gridContent.innerHTML = html;
+    // Store groups data for "load more"
+    gridContent._augGroups = groups;
+    gridContent._srcDs = srcDs;
+    gridContent._maxCopies = maxCopies;
+  } catch(e) {
+    console.error(e);
+    gridWrap.style.display = 'none';
+  }
+}
+
+function vizLoadMoreAugGrid(btn, name) {
+  const gridContent = document.getElementById('vizAugGridContent');
+  const groups = gridContent._augGroups;
+  const srcDs = gridContent._srcDs;
+  const maxCopies = gridContent._maxCopies;
+  const offset = parseInt(btn.dataset.offset);
+  const BATCH = 20;
+  const nextGroups = groups.slice(offset, offset + BATCH);
+
+  // Remove button container
+  btn.parentElement.remove();
+
+  // Get the grid element (first child)
+  const gridEl = gridContent.querySelector('div');
+
+  let html = '';
+  nextGroups.forEach(g => {
+    const orig = g.original;
+    if (!orig || !orig.source_video) return;
+    const sv = orig.source_video.top || orig.source_video;
+    const midT = ((sv.from_timestamp || 0) + (sv.to_timestamp || 0)) / 2;
+    const origUrl = `/api/datasets/${srcDs}/video-thumbnail?cam=observation.images.top&chunk=${sv.chunk_index || 0}&file=${sv.file_index || 0}&t=${midT.toFixed(2)}`;
+    html += `<div style="text-align:center;padding:2px">
+      <img src="${origUrl}" loading="lazy" style="width:100%;border-radius:4px;border:2px solid #c8e6c9;background:#111;aspect-ratio:4/3;object-fit:cover" title="Source ep ${g.source_episode}">
+      <div style="color:#888;margin-top:1px">ep ${g.source_episode}</div>
+    </div>`;
+    for (let i = 0; i < maxCopies; i++) {
+      const aug = g.augmented[i];
+      if (!aug) { html += '<div></div>'; continue; }
+      const epMeta = vizEpisodesData[aug.episode_index];
+      const aCk = epMeta ? (epMeta['videos/observation.images.top/chunk_index'] ?? 0) : 0;
+      const aFl = epMeta ? (epMeta['videos/observation.images.top/file_index'] ?? 0) : 0;
+      const aFrom = epMeta ? (epMeta['videos/observation.images.top/from_timestamp'] ?? 0) : 0;
+      const aTo = epMeta ? (epMeta['videos/observation.images.top/to_timestamp'] ?? 0) : 0;
+      const aMid = (aFrom + aTo) / 2;
+      const augUrl = `/api/datasets/${name}/video-thumbnail?cam=observation.images.top&chunk=${aCk}&file=${aFl}&t=${aMid.toFixed(2)}`;
+      let paramTip = '';
+      if (aug.params) {
+        const parts = [];
+        if (aug.params.camera && aug.params.camera.rotation) parts.push(`rot:${aug.params.camera.rotation.toFixed(1)}`);
+        if (aug.params.light && aug.params.light.brightness) parts.push(`bri:${aug.params.light.brightness.toFixed(2)}`);
+        if (aug.params.language && aug.params.language.augmented_task) parts.push('lang');
+        paramTip = parts.join(' ');
+      }
+      html += `<div style="text-align:center;padding:2px;cursor:pointer" onclick="vizSelectEpisode(${aug.episode_index})">
+        <img src="${augUrl}" loading="lazy" style="width:100%;border-radius:4px;border:2px solid #bbdefb;background:#111;aspect-ratio:4/3;object-fit:cover" title="Aug ep ${aug.episode_index}: ${paramTip}">
+        <div style="color:#999;margin-top:1px">${paramTip || 'ep ' + aug.episode_index}</div>
+      </div>`;
+    }
+  });
+  gridEl.insertAdjacentHTML('beforeend', html);
+
+  const remaining = groups.length - (offset + BATCH);
+  if (remaining > 0) {
+    gridContent.insertAdjacentHTML('beforeend', `<div style="text-align:center;margin-top:8px">
+      <button class="btn btn-sm" onclick="vizLoadMoreAugGrid(this, '${name}')" data-offset="${offset + BATCH}" style="background:#f0f0f0;color:#555">
+        Load more (${remaining} remaining)
+      </button>
+    </div>`);
+  }
+}
+
 // ── Push to Hugging Face ──
 
 let hfPushPollTimer = null;
@@ -3153,6 +4785,9 @@ function vizShowTrainGuide() {
   const copyBtnStyle = 'position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1';
 
   const cmd1 = [
+    `cd /home/jupyter-phawit/so101-v2`,
+    `conda activate lerobot`,
+    ``,
     `hf download ${repoId} \\`,
     `  --repo-type dataset \\`,
     `  --local-dir ${dataDir}`,
@@ -4074,6 +5709,141 @@ async function vizDrawChart(frames) {
       },
     },
   });
+}
+
+// ==================== Fake Camera ====================
+let fcWs = [null, null];
+let fcRunning = false;
+let fcDebounce = null;
+
+function fcToggle() {
+  if (fcRunning) fcStop(); else fcStart();
+}
+
+async function fcStart() {
+  const idx0 = parseInt(document.getElementById('fcInputIdx0').value) || 0;
+  const idx1 = parseInt(document.getElementById('fcInputIdx1').value) || 1;
+  const w = parseInt(document.getElementById('fcWidth').value) || 640;
+  const h = parseInt(document.getElementById('fcHeight').value) || 480;
+  const params = fcGetParams();
+  const btn = document.getElementById('fcStartBtn');
+  const st = document.getElementById('fcStatusMsg');
+  btn.disabled = true;
+  st.textContent = 'Starting...';
+  try {
+    const r = await fetch('/api/fakecam/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({input_idx_0: idx0, input_idx_1: idx1, params, width: w, height: h})
+    });
+    const d = await r.json();
+    if (!d.ok) { st.textContent = 'Error: ' + d.error; btn.disabled = false; return; }
+    fcRunning = true;
+    btn.textContent = 'Stop';
+    btn.style.background = '#d93025';
+    st.textContent = 'Running — cam1=' + idx0 + ' cam2=' + idx1 + ' (' + w + 'x' + h + ')';
+    document.getElementById('fcNoSignal0').style.display = 'none';
+    document.getElementById('fcNoSignal1').style.display = 'none';
+    fcConnectWs(0);
+    fcConnectWs(1);
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+  btn.disabled = false;
+}
+
+async function fcStop() {
+  const btn = document.getElementById('fcStartBtn');
+  const st = document.getElementById('fcStatusMsg');
+  btn.disabled = true;
+  try { await fetch('/api/fakecam/stop', {method: 'POST'}); } catch(e) {}
+  fcRunning = false;
+  for (let i = 0; i < 2; i++) {
+    if (fcWs[i]) { fcWs[i].close(); fcWs[i] = null; }
+    document.getElementById('fcPreview'+i).src = '';
+    document.getElementById('fcNoSignal'+i).style.display = 'flex';
+  }
+  btn.textContent = 'Start';
+  btn.style.background = '#34a853';
+  st.textContent = 'Stopped';
+  btn.disabled = false;
+}
+
+function fcConnectWs(camId) {
+  if (fcWs[camId]) fcWs[camId].close();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + '/ws/fakecam/' + camId);
+  ws.binaryType = 'arraybuffer';
+  fcWs[camId] = ws;
+  const img = document.getElementById('fcPreview' + camId);
+  ws.onmessage = (e) => {
+    const blob = new Blob([e.data], {type: 'image/jpeg'});
+    const url = URL.createObjectURL(blob);
+    const old = img.src;
+    img.src = url;
+    if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+  };
+  ws.onclose = () => {
+    if (fcRunning) setTimeout(() => fcConnectWs(camId), 1000);
+  };
+}
+
+function fcGetParams() {
+  return {
+    rotation: parseFloat(document.getElementById('fcRotation').value),
+    translate_x: parseFloat(document.getElementById('fcTranslateX').value),
+    translate_y: parseFloat(document.getElementById('fcTranslateY').value),
+    scale: parseFloat(document.getElementById('fcScale').value),
+    shear: parseFloat(document.getElementById('fcShear').value),
+    brightness: parseFloat(document.getElementById('fcBrightness').value),
+    contrast: parseFloat(document.getElementById('fcContrast').value),
+    saturation: parseFloat(document.getElementById('fcSaturation').value),
+    noise: parseFloat(document.getElementById('fcNoise').value),
+    blur: parseInt(document.getElementById('fcBlur').value),
+  };
+}
+
+function fcSlider(el, valId) {
+  document.getElementById(valId).textContent = el.value;
+  if (!fcRunning) return;
+  clearTimeout(fcDebounce);
+  fcDebounce = setTimeout(async () => {
+    await fetch('/api/fakecam/update-params', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params: fcGetParams()})
+    });
+  }, 100);
+}
+
+async function fcSaveParams() {
+  const st = document.getElementById('fcSaveStatus');
+  st.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/fakecam/save-params', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params: fcGetParams()})
+    });
+    const d = await r.json();
+    if (d.ok) st.textContent = 'Saved to fakecam_params.json';
+    else st.textContent = 'Error: ' + (d.error || 'unknown');
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+  setTimeout(() => st.textContent = '', 3000);
+}
+
+function fcReset() {
+  const defs = {fcRotation:0,fcTranslateX:0,fcTranslateY:0,fcScale:1.0,fcShear:0,fcBrightness:1.0,fcContrast:1.0,fcSaturation:1.0,fcNoise:0,fcBlur:0};
+  const valMap = {fcRotation:'fcRotVal',fcTranslateX:'fcTxVal',fcTranslateY:'fcTyVal',fcScale:'fcScaleVal',fcShear:'fcShearVal',fcBrightness:'fcBrightVal',fcContrast:'fcContrastVal',fcSaturation:'fcSatVal',fcNoise:'fcNoiseVal',fcBlur:'fcBlurVal'};
+  for (const [id, def] of Object.entries(defs)) {
+    document.getElementById(id).value = def;
+    document.getElementById(valMap[id]).textContent = def;
+  }
+  if (fcRunning) {
+    fetch('/api/fakecam/update-params', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params: fcGetParams()})
+    });
+  }
 }
 
 </script>
