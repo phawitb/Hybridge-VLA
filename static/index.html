@@ -339,6 +339,7 @@
   .viz-ep-item:hover { background:#f0f4ff }
   .viz-ep-item.active { background:#e8f0fe;color:#1a73e8;font-weight:600;border-left:3px solid #1a73e8 }
   .viz-ep-item .ep-meta { font-size:0.75rem;color:#999;margin-top:2px }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
@@ -355,6 +356,7 @@
     <div class="nav-item" data-tab="visualize">Datasets</div>
     <div class="nav-item" data-tab="inference">VLA Inference</div>
     <div class="nav-item" data-tab="fakecam">Fake Camera</div>
+    <div class="nav-item" data-tab="training">Training</div>
     <div class="nav-item" data-tab="experiments">Experiments</div>
   </div>
 </div>
@@ -434,6 +436,21 @@
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
           <button class="btn btn-sm" onclick="cfgSaveTokens()" style="background:#34a853">Save Tokens</button>
           <span id="cfgTokenStatus" style="font-size:0.82rem;color:#888"></span>
+        </div>
+      </div>
+
+      <div class="config-card">
+        <h3>Weights & Biases</h3>
+        <div class="form-group">
+          <label class="form-label">W&B API Key</label>
+          <div style="display:flex;gap:6px">
+            <input type="password" id="cfgWbKey" placeholder="Enter W&B API key (wandb_v1_...)" style="flex:1">
+            <button class="btn btn-sm" onclick="this.previousElementSibling.type = this.previousElementSibling.type === 'password' ? 'text' : 'password'" style="font-size:0.75rem;padding:4px 8px">Show</button>
+          </div>
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span id="cfgWbStatus" style="font-size:0.82rem;color:#888">Checking...</span>
+          <button class="btn btn-sm btn-outline" id="cfgWbLoginBtn" onclick="cfgWbLogin()">Login</button>
         </div>
       </div>
 
@@ -1189,7 +1206,9 @@ bump_height = min(overshoot + 2, 10) degrees
         <option value="">-- Select dataset --</option>
       </select>
       <button class="btn btn-sm" onclick="vizRefreshDatasets()">Refresh</button>
+      <button class="btn btn-sm" onclick="vizShowDownloadHf()" style="background:#00897b;color:#fff">Download from HF</button>
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
+      <button class="btn btn-sm" id="vizRenameDsBtn" onclick="vizRenameDataset()" style="display:none;background:#607d8b;color:#fff">Edit Name</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
@@ -1734,6 +1753,237 @@ place the white eraser             1
       </div>
     </div>
   </div><!-- /page-fakecam -->
+
+  <!-- ==================== Training ==================== -->
+  <div class="page" id="page-training">
+    <div class="page-title"><span>Remote</span> Training</div>
+
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <!-- Main area (tabs + content) -->
+      <div style="flex:1;min-width:0">
+        <div class="inner-tabs">
+          <button class="inner-tab active" data-inner="train-new">New Training</button>
+          <button class="inner-tab" data-inner="train-history">History</button>
+        </div>
+
+        <!-- Inner: New Training -->
+        <div class="inner-page active" id="inner-train-new">
+          <!-- Dataset selection -->
+          <div class="config-card" style="margin-bottom:14px">
+            <h3>1. Select Dataset</h3>
+            <div id="trainDsLoading" style="padding:10px;color:#888">Loading datasets...</div>
+            <div id="trainDsList" style="max-height:220px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;display:none"></div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+              <span style="font-size:0.82rem;color:#888">Selected:</span>
+              <strong id="trainSelectedDs" style="font-size:0.9rem;color:#1a73e8">None</strong>
+            </div>
+          </div>
+
+          <!-- Training config -->
+          <div class="config-card" style="margin-bottom:14px">
+            <h3>2. Training Config</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="form-group">
+                <label class="form-label">Policy Type</label>
+                <select id="trainPolicyType" class="form-input" onchange="trainPolicyChanged()">
+                  <option value="act">ACT</option>
+                  <option value="smolvla">SmolVLA</option>
+                  <option value="pi05">pi0.5</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Job Name (optional)</label>
+                <input type="text" id="trainJobName" class="form-input" placeholder="auto">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Steps</label>
+                <input type="number" id="trainSteps" class="form-input" value="100000">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Batch Size</label>
+                <input type="number" id="trainBatchSize" class="form-input" value="32">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Learning Rate</label>
+                <input type="number" id="trainLr" class="form-input" value="0.0003" step="0.0001">
+              </div>
+              <div class="form-group">
+                <label class="form-label">W&B Project</label>
+                <input type="text" id="trainWandbProject" class="form-input" value="SO101-Experiments">
+              </div>
+            </div>
+
+            <!-- SmolVLA-specific options -->
+            <div id="trainSmolvlaOpts" style="display:none;margin-top:10px;padding:10px 12px;background:#e8f5e9;border-radius:8px">
+              <div style="font-size:0.78rem;font-weight:600;color:#2e7d32;margin-bottom:8px">SmolVLA Options</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">VLM Model</label>
+                  <select id="trainVlmModel" class="form-input">
+                    <option value="HuggingFaceTB/SmolVLM2-500M-Video-Instruct">SmolVLM2-500M-Video-Instruct</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+                <label style="font-size:0.82rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainLoadVlm" checked> Load VLM Weights</label>
+                <label style="font-size:0.82rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainExpertOnly" checked> Train Expert Only</label>
+                <label style="font-size:0.82rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainFreezeVision" checked> Freeze Vision Encoder</label>
+              </div>
+            </div>
+
+            <!-- ACT-specific options -->
+            <div id="trainActOpts" style="margin-top:10px;padding:10px 12px;background:#e3f2fd;border-radius:8px">
+              <div style="font-size:0.78rem;font-weight:600;color:#1565c0;margin-bottom:8px">ACT Options</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">Vision Backbone</label>
+                  <select id="trainVisionBackbone" class="form-input">
+                    <option value="">Default</option>
+                    <option value="resnet18">ResNet18</option>
+                    <option value="resnet34">ResNet34</option>
+                    <option value="resnet50">ResNet50</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">Chunk Size</label>
+                  <input type="number" id="trainChunkSize" class="form-input" placeholder="default">
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+                <label style="font-size:0.82rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainUseVae"> Use VAE</label>
+              </div>
+            </div>
+
+            <!-- pi0.5-specific options -->
+            <div id="trainPi05Opts" style="display:none;margin-top:10px;padding:10px 12px;background:#fce4ec;border-radius:8px">
+              <div style="font-size:0.78rem;font-weight:600;color:#c62828;margin-bottom:8px">pi0.5 Options</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">PaliGemma Variant</label>
+                  <select id="trainPaligemma" class="form-input">
+                    <option value="">Default</option>
+                    <option value="paligemma2-3b-pt-224">paligemma2-3b-pt-224</option>
+                    <option value="paligemma2-3b-pt-448">paligemma2-3b-pt-448</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">Action Expert Variant</label>
+                  <select id="trainActionExpert" class="form-input">
+                    <option value="">Default</option>
+                    <option value="gemma-2-2b-it">gemma-2-2b-it</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">N Action Steps</label>
+                  <input type="number" id="trainNActionSteps" class="form-input" placeholder="default">
+                </div>
+              </div>
+            </div>
+
+            <!-- Common advanced options -->
+            <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainAmp" checked> Use AMP</label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainGradCkpt"> Gradient Checkpointing</label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainWandb" checked> W&B Logging</label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="trainResume"> Resume</label>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="config-card">
+            <h3>3. Start</h3>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button class="btn" id="trainDlBtn" onclick="trainDownloadDs()" style="background:#00897b;color:#fff">Download to Server</button>
+              <button class="btn" id="trainStartBtn" onclick="trainStart()" style="background:#e8710a;color:#fff">Start Training</button>
+              <span id="trainActionStatus" style="font-size:0.85rem;color:#888"></span>
+            </div>
+            <div id="trainActionLog" style="display:none;margin-top:10px;background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.72rem;line-height:1.5;padding:10px 12px;border-radius:6px;max-height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+          </div>
+        </div>
+
+        <!-- Inner: History -->
+        <div class="inner-page" id="inner-train-history">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <button class="btn btn-sm" onclick="trainLoadHistory()" style="background:#1a73e8">Refresh</button>
+            <span id="trainHistoryStatus" style="font-size:0.82rem;color:#888"></span>
+          </div>
+          <div id="trainHistoryContent"></div>
+        </div>
+      </div>
+
+      <!-- Column 3: Persistent sidebar (always visible) -->
+      <div style="width:320px;flex-shrink:0;position:sticky;top:16px">
+        <!-- Training Server -->
+        <div class="config-card" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <h3 style="margin:0;font-size:0.9rem">Server</h3>
+            <span id="trainServerStatus" style="font-size:0.78rem;color:#888">Checking...</span>
+            <div style="flex:1"></div>
+            <button class="btn btn-sm" onclick="trainCheckServer()" style="background:#1a73e8;font-size:0.68rem;padding:2px 8px">Check</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <input type="text" id="trainServerUrl" class="form-input" style="flex:1;font-size:0.78rem;padding:4px 8px" placeholder="http://100.87.242.52:8000">
+            <button class="btn btn-sm" onclick="trainSaveServer()" style="background:#34a853;font-size:0.68rem;padding:2px 8px">Save</button>
+          </div>
+          <div id="trainServerHint" style="display:none;margin-top:8px;padding:8px 10px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:0.75rem;color:#856404">
+            <strong>Offline.</strong> SSH and run:<br>
+            <code style="display:block;margin-top:4px;padding:6px 8px;background:#1e1e1e;color:#d4d4d4;border-radius:4px;font-size:0.7rem;line-height:1.6;white-space:pre">cd /home/jupyter-phawit/so101-v2
+conda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000</code>
+          </div>
+        </div>
+
+        <!-- Queue -->
+        <div class="config-card" id="trainQueueCard" style="margin-bottom:14px;display:none">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <h3 style="margin:0;font-size:0.9rem">Queue</h3>
+            <span id="trainQueueCount" style="font-size:0.72rem;padding:1px 8px;border-radius:10px;background:#e3f2fd;color:#1565c0;font-weight:600">0</span>
+          </div>
+          <div id="trainQueueList" style="font-size:0.78rem"></div>
+        </div>
+
+        <!-- Kill All button (visible when server is online and has running/queued jobs) -->
+        <div id="trainKillAllCard" style="margin-bottom:14px;display:none">
+          <button class="btn btn-danger" onclick="trainKillAll()" style="width:100%;font-size:0.78rem;padding:6px 12px">Kill All &amp; Clear Queue</button>
+        </div>
+
+        <!-- Running job live log -->
+        <div class="config-card" id="trainLiveCard" style="margin-bottom:14px;display:none">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <div style="width:8px;height:8px;border-radius:50%;background:#e8710a;animation:pulse 1.5s infinite;flex-shrink:0"></div>
+            <h3 style="margin:0;font-size:0.9rem" id="trainLiveTitle">Running</h3>
+            <div style="flex:1"></div>
+            <button class="btn btn-sm btn-danger" onclick="trainStopLiveJob()" style="font-size:0.68rem;padding:2px 8px">Stop</button>
+          </div>
+          <!-- Progress -->
+          <div id="trainLiveProgress" style="display:none;margin-bottom:8px">
+            <div style="height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden">
+              <div id="trainLiveBar" style="height:100%;width:0%;background:#e8710a;transition:width 0.3s"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:3px">
+              <span id="trainLiveStep" style="font-size:0.7rem;color:#888"></span>
+              <span id="trainLiveLoss" style="font-size:0.7rem;color:#888"></span>
+            </div>
+          </div>
+          <!-- Log -->
+          <div id="trainLiveLog" style="background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.68rem;line-height:1.4;padding:8px 10px;border-radius:6px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+        </div>
+
+        <!-- API ref -->
+        <div class="config-card" style="background:#f8f9fa">
+          <h3 style="font-size:0.85rem">API Reference</h3>
+          <div style="font-size:0.72rem;color:#555;line-height:1.8">
+            <div><code>POST /train</code> — Start / queue</div>
+            <div><code>GET /queue</code> — List queue</div>
+            <div><code>DELETE /queue/{id}</code> — Cancel</div>
+            <div><code>GET /jobs</code> — List jobs</div>
+            <div><code>GET /jobs/{id}/logs</code> — Logs</div>
+            <div><code>DELETE /jobs/{id}</code> — Stop</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /page-training -->
 
   <!-- ==================== Experiments ==================== -->
   <div class="page" id="page-experiments">
@@ -2609,6 +2859,7 @@ async function cfgScanCameras() {
   result.innerHTML = '';
   try {
     const r = await fetch('/api/cameras/scan');
+    if (!r.ok) { st.textContent = `Error: Server returned ${r.status}`; return; }
     const d = await r.json();
     if (!d.ok) { st.textContent = d.error; return; }
     st.textContent = `Found ${d.count} camera(s)`;
@@ -2620,7 +2871,7 @@ function cfgPopulate() {
   document.getElementById('cfgRobotPort').value = cfg.robot_port || '';
   document.getElementById('cfgRobotId').value = cfg.robot_id || '';
   document.getElementById('cfgCamTop').value = cfg.camera_top_index ?? 0;
-  document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 1;
+  document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 0;
   document.getElementById('cfgPrompt').value = cfg.prompt_template || '';
 
   // Model select for config
@@ -2652,8 +2903,59 @@ async function cfgLoadTokens() {
     if (d.ok) {
       document.getElementById('cfgGeminiKey').value = d.env.GEMINI_API_KEY || '';
       document.getElementById('cfgHfToken').value = d.env.HF_TOKEN || '';
+      document.getElementById('cfgWbKey').value = d.env.WB_API_KEY || '';
     }
   } catch(e) {}
+  cfgCheckWbStatus();
+}
+
+async function cfgCheckWbStatus() {
+  const st = document.getElementById('cfgWbStatus');
+  const btn = document.getElementById('cfgWbLoginBtn');
+  st.textContent = 'Checking...'; st.style.color = '#888';
+  try {
+    const r = await fetch('/api/wb/status');
+    const d = await r.json();
+    if (d.logged_in) {
+      st.innerHTML = '<span style="color:#34a853;font-weight:600">Logged in</span> as <strong>' + d.username + '</strong>';
+      btn.textContent = 'Relogin';
+    } else {
+      st.innerHTML = '<span style="color:#d93025;font-weight:600">Not logged in</span>' + (d.message ? ' — ' + d.message : '');
+      btn.textContent = 'Login';
+    }
+  } catch(e) {
+    st.innerHTML = '<span style="color:#d93025">Error checking status</span>';
+    btn.textContent = 'Login';
+  }
+}
+
+async function cfgWbLogin() {
+  const st = document.getElementById('cfgWbStatus');
+  const btn = document.getElementById('cfgWbLoginBtn');
+  btn.disabled = true;
+  st.textContent = 'Logging in...'; st.style.color = '#888';
+  try {
+    // Save the key first if changed
+    const keyEl = document.getElementById('cfgWbKey');
+    if (keyEl.value && !keyEl.value.includes('*')) {
+      await fetch('/api/env/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ WB_API_KEY: keyEl.value }),
+      });
+    }
+    const r = await fetch('/api/wb/login', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      st.innerHTML = '<span style="color:#34a853;font-weight:600">Login successful!</span>';
+      setTimeout(() => cfgCheckWbStatus(), 1000);
+    } else {
+      st.innerHTML = '<span style="color:#d93025">' + (d.error || 'Login failed') + '</span>';
+    }
+  } catch(e) {
+    st.innerHTML = '<span style="color:#d93025">' + e.message + '</span>';
+  }
+  btn.disabled = false;
 }
 
 async function cfgSaveTokens() {
@@ -2667,6 +2969,7 @@ async function cfgSaveTokens() {
       body: JSON.stringify({
         GEMINI_API_KEY: document.getElementById('cfgGeminiKey').value,
         HF_TOKEN: document.getElementById('cfgHfToken').value,
+        WB_API_KEY: document.getElementById('cfgWbKey').value,
       }),
     });
     const d1 = await r1.json();
@@ -2713,8 +3016,8 @@ async function cfgSave() {
       body: JSON.stringify({
         robot_port: document.getElementById('cfgRobotPort').value,
         robot_id: document.getElementById('cfgRobotId').value,
-        camera_top_index: parseInt(document.getElementById('cfgCamTop').value) || 0,
-        camera_wrist_index: parseInt(document.getElementById('cfgCamWrist').value) || 1,
+        camera_top_index: Number(document.getElementById('cfgCamTop').value),
+        camera_wrist_index: Number(document.getElementById('cfgCamWrist').value),
         default_model: document.getElementById('cfgModel').value,
         available_methods: cfgMethods,
         prompt_template: document.getElementById('cfgPrompt').value,
@@ -2853,12 +3156,16 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'experiments';
+        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'experiments';
         rp.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
       if (el.dataset.tab === 'inference' && !infModels.length) {
         infLoadModels();
+      }
+      // Auto-load on first visit to training tab
+      if (el.dataset.tab === 'training' && !trainInited) {
+        trainInit();
       }
     });
   });
@@ -2871,6 +3178,7 @@ function setupEvents() {
       el.classList.add('active');
       document.getElementById('inner-'+el.dataset.inner).classList.add('active');
       if (el.dataset.inner === 'cfg-history') loadResults();
+      if (el.dataset.inner === 'train-history') trainLoadHistory();
     });
   });
   // Image
@@ -4006,6 +4314,7 @@ async function vizRefreshDatasets() {
 document.getElementById('vizDatasetSelect').addEventListener('change', async function() {
   const name = this.value;
   const infoSection = document.getElementById('vizInfoSection');
+  document.getElementById('vizRenameDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
@@ -4025,7 +4334,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     vizAugInfo = d.augmentation || null;
     // Show split button if task has pick/place pattern
     const splitBtn = document.getElementById('vizSplitBtn');
-    const canSplit = /pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(task);
+    const canSplit = /pick\s+up\s+.+\s+(to\s+the|and\s+place|in\s+the|into\s+the|onto\s+the)\s+/i.test(task);
     splitBtn.style.display = canSplit ? '' : 'none';
 
     // Fetch episodes metadata (timestamps for video seeking)
@@ -4291,6 +4600,34 @@ async function vizDoCombine() {
   btn.disabled = false;
 }
 
+// ── Rename Dataset ──
+
+async function vizRenameDataset() {
+  const name = vizCurrentDataset;
+  if (!name) return;
+  const newName = prompt(`Rename dataset "${name}" to:`, name);
+  if (!newName || newName === name) return;
+  const st = document.getElementById('vizDatasetStatus');
+  st.textContent = 'Renaming...'; st.style.color = '#888';
+  try {
+    const r = await fetch(`/api/datasets/${name}/rename`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({new_name: newName}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = `Renamed to ${d.new_name}`; st.style.color = '#34a853';
+      vizCurrentDataset = d.new_name;
+      await vizRefreshDatasets();
+      document.getElementById('vizDatasetSelect').value = d.new_name;
+      document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    } else {
+      st.textContent = d.error || 'Rename failed'; st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+}
+
 // ── Delete Dataset ──
 
 function vizShowDeleteDataset() {
@@ -4328,6 +4665,7 @@ async function vizDoDeleteDataset() {
       closeModal();
       vizCurrentDataset = null;
       document.getElementById('vizInfoSection').style.display = 'none';
+      document.getElementById('vizRenameDsBtn').style.display = 'none';
       document.getElementById('vizDeleteDsBtn').style.display = 'none';
       document.getElementById('vizPushHfBtn').style.display = 'none';
       document.getElementById('vizTrainBtn').style.display = 'none';
@@ -4773,54 +5111,964 @@ async function hfPushPoll() {
   } catch(e) {}
 }
 
+// ── Download from Hugging Face ──
+
+let hfDownloadPollTimer = null;
+
+function vizShowDownloadHf() {
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:8px">Download Dataset from Hugging Face</h3>
+    <p style="margin-bottom:12px;font-size:0.9rem;color:#555">Select a dataset from your Hugging Face account to download to <code>data/</code>.</p>
+    <div id="hfDlListLoading" style="padding:20px;text-align:center;color:#888">Loading datasets from Hugging Face...</div>
+    <div id="hfDlListContainer" style="display:none">
+      <div id="hfDlList" style="max-height:320px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;margin-bottom:14px"></div>
+      <div id="hfDownloadWarning" style="display:none;margin-bottom:12px;padding:10px 14px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:0.85rem;color:#856404"></div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn" id="hfDownloadBtn" onclick="vizDoDownloadHf()" disabled style="background:#00897b;color:#fff;opacity:0.5">Download</button>
+        <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Cancel</button>
+        <span id="hfDownloadStatus" style="font-size:0.85rem;color:#888"></span>
+      </div>
+    </div>
+    <div id="hfDownloadProgress" style="display:none;margin-top:14px">
+      <div style="height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden">
+        <div id="hfDownloadBar" style="height:100%;width:0%;background:#00897b;transition:width 0.3s"></div>
+      </div>
+      <div id="hfDownloadDetail" style="font-size:0.78rem;color:#888;margin-top:4px"></div>
+      <div id="hfDownloadLog" style="margin-top:8px;background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.72rem;line-height:1.5;padding:10px 12px;border-radius:6px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+    </div>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+  hfDlLoadList();
+}
+
+let hfDlSelectedRepo = null;
+
+async function hfDlLoadList() {
+  try {
+    const r = await fetch('/api/hf-datasets');
+    const d = await r.json();
+    const loading = document.getElementById('hfDlListLoading');
+    const container = document.getElementById('hfDlListContainer');
+    if (!d.ok) {
+      if (loading) loading.innerHTML = `<span style="color:#d93025">${d.error}</span>`;
+      return;
+    }
+    if (loading) loading.style.display = 'none';
+    if (container) container.style.display = '';
+    const listEl = document.getElementById('hfDlList');
+    if (!d.datasets.length) {
+      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#888">No datasets found in your HF account.</div>';
+      return;
+    }
+    hfDlSelectedRepo = null;
+    listEl.innerHTML = d.datasets.map(ds => {
+      const localBadge = ds.local_exists
+        ? '<span style="font-size:0.72rem;background:#fff3cd;color:#856404;padding:1px 8px;border-radius:10px;margin-left:8px">exists locally</span>'
+        : '';
+      const modified = ds.last_modified ? new Date(ds.last_modified).toLocaleDateString() : '';
+      return `<div class="hf-dl-item" data-repo="${ds.id}" data-local="${ds.local_exists ? '1' : ''}"
+        onclick="hfDlSelect(this)"
+        style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;transition:background 0.15s">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:0.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ds.name}${localBadge}</div>
+          <div style="font-size:0.78rem;color:#888">${ds.id}${modified ? ' · ' + modified : ''}${ds.private ? ' · 🔒 private' : ''}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    const loading = document.getElementById('hfDlListLoading');
+    if (loading) loading.innerHTML = `<span style="color:#d93025">Error: ${e.message}</span>`;
+  }
+}
+
+function hfDlSelect(el) {
+  // Remove previous selection
+  document.querySelectorAll('.hf-dl-item').forEach(i => i.style.background = '');
+  el.style.background = '#e8f5e9';
+  const repoId = el.dataset.repo;
+  const localExists = el.dataset.local === '1';
+  hfDlSelectedRepo = repoId;
+  const btn = document.getElementById('hfDownloadBtn');
+  const warn = document.getElementById('hfDownloadWarning');
+  if (localExists) {
+    warn.style.display = '';
+    const localName = repoId.split('/').pop();
+    warn.innerHTML = `<strong>⚠ Dataset "${localName}" already exists locally.</strong><br>Please delete it first from the Datasets page before downloading.`;
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+  } else {
+    warn.style.display = 'none';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  }
+}
+
+async function vizDoDownloadHf() {
+  const repoId = hfDlSelectedRepo;
+  if (!repoId) {
+    document.getElementById('hfDownloadStatus').textContent = 'Select a dataset first';
+    return;
+  }
+  const btn = document.getElementById('hfDownloadBtn');
+  const st = document.getElementById('hfDownloadStatus');
+  btn.disabled = true;
+  st.textContent = 'Starting download...';
+  st.style.color = '#888';
+  try {
+    const r = await fetch('/api/datasets/download-hf', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({repo_id: repoId})
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = d.error || 'Error';
+      st.style.color = '#d93025';
+      btn.disabled = false;
+      return;
+    }
+    document.getElementById('hfDownloadProgress').style.display = '';
+    hfDownloadPollTimer = setInterval(hfDownloadPoll, 1000);
+  } catch(e) {
+    st.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+
+async function hfDownloadPoll() {
+  try {
+    const r = await fetch('/api/hf-download/status');
+    const d = await r.json();
+    const bar = document.getElementById('hfDownloadBar');
+    const detail = document.getElementById('hfDownloadDetail');
+    const st = document.getElementById('hfDownloadStatus');
+    const logEl = document.getElementById('hfDownloadLog');
+    if (bar) bar.style.width = d.progress + '%';
+    if (detail) detail.textContent = d.status || '';
+    if (logEl && d.logs && d.logs.length) {
+      logEl.textContent = d.logs.join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    if (d.error) {
+      st.textContent = d.error.substring(0, 200);
+      st.style.color = '#d93025';
+      clearInterval(hfDownloadPollTimer);
+      const btn = document.getElementById('hfDownloadBtn');
+      if (btn) btn.disabled = false;
+    } else if (!d.running && d.progress >= 100) {
+      st.textContent = 'Downloaded successfully!';
+      st.style.color = '#34a853';
+      clearInterval(hfDownloadPollTimer);
+      // Refresh dataset list
+      vizRefreshDatasets();
+    }
+  } catch(e) {}
+}
+
+// ── Remote Training ──
+
+let trainInited = false;
+let trainSelectedRepoId = null;
+let trainCurrentJobId = null;
+let trainAutoRefreshTimer = null;
+
+async function trainInit() {
+  trainInited = true;
+  document.getElementById('trainServerUrl').value = cfg.training_server || 'http://100.87.242.52:8000';
+  trainCheckServer();
+  trainLoadDatasets();
+}
+
+function trainPolicyChanged() {
+  const policy = document.getElementById('trainPolicyType').value;
+  // Adjust batch size defaults per policy
+  const batchEl = document.getElementById('trainBatchSize');
+  if (policy === 'pi05') batchEl.value = '16';
+  else batchEl.value = '32';
+  // Show/hide policy-specific option panels
+  document.getElementById('trainSmolvlaOpts').style.display = policy === 'smolvla' ? '' : 'none';
+  document.getElementById('trainActOpts').style.display = policy === 'act' ? '' : 'none';
+  document.getElementById('trainPi05Opts').style.display = policy === 'pi05' ? '' : 'none';
+}
+
+async function trainCheckServer() {
+  const st = document.getElementById('trainServerStatus');
+  st.textContent = 'Checking...';
+  st.style.color = '#888';
+  try {
+    const r = await fetch('/api/training/jobs');
+    const d = await r.json();
+    if (d.server_online) {
+      const allJobs = Object.entries(d.jobs || {}).filter(([id]) => !id.startsWith('download_'));
+      const running = allJobs.filter(([,j]) => j.status === 'running');
+      const queued = allJobs.filter(([,j]) => j.status === 'queued');
+      const failed = allJobs.filter(([,j]) => j.status === 'failed');
+      const completed = allJobs.filter(([,j]) => j.status === 'completed' || j.status === 'success');
+
+      let parts = ['<span style="color:#34a853">Online</span>'];
+      if (running.length) parts.push(`<span style="color:#e8710a;font-weight:600">${running.length} running</span>`);
+      if (queued.length) parts.push(`<span style="color:#1565c0;font-weight:600">${queued.length} queued</span>`);
+      if (completed.length) parts.push(`<span style="color:#34a853">${completed.length} completed</span>`);
+      if (failed.length) parts.push(`<span style="color:#d93025">${failed.length} failed</span>`);
+      st.innerHTML = parts.join(' · ');
+      document.getElementById('trainServerHint').style.display = 'none';
+
+      // Update queue card
+      _renderQueueFromJobs(queued);
+      // Update live running job card
+      _updateLiveJob(running);
+      // Show kill-all button when there are running or queued jobs
+      document.getElementById('trainKillAllCard').style.display = (running.length || queued.length) ? '' : 'none';
+    } else {
+      st.innerHTML = '<span style="color:#d93025">Offline</span>';
+      document.getElementById('trainServerHint').style.display = '';
+      document.getElementById('trainQueueCard').style.display = 'none';
+      document.getElementById('trainLiveCard').style.display = 'none';
+      document.getElementById('trainKillAllCard').style.display = 'none';
+    }
+  } catch(e) {
+    st.innerHTML = '<span style="color:#d93025">Error: ' + e.message + '</span>';
+    document.getElementById('trainServerHint').style.display = '';
+  }
+}
+
+let _liveJobId = null;
+let _liveTimer = null;
+
+async function _updateLiveJob(runningEntries) {
+  const card = document.getElementById('trainLiveCard');
+  if (!runningEntries.length) {
+    card.style.display = 'none';
+    if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+    _liveJobId = null;
+    return;
+  }
+  // Show the first running job
+  const [jid, job] = runningEntries[0];
+  const config = job.config || {};
+  const name = job.job_name || config.job_name || jid;
+  const policyType = config.policy_type || '';
+  const policyBadge = policyType === 'act' ? '<span style="background:#e3f2fd;color:#1565c0;padding:0 6px;border-radius:8px;font-size:0.65rem;font-weight:600;margin-left:4px">ACT</span>'
+    : policyType === 'smolvla' ? '<span style="background:#e8f5e9;color:#2e7d32;padding:0 6px;border-radius:8px;font-size:0.65rem;font-weight:600;margin-left:4px">SmolVLA</span>'
+    : (policyType === 'pi05' || policyType === 'pi0') ? '<span style="background:#fce4ec;color:#c62828;padding:0 6px;border-radius:8px;font-size:0.65rem;font-weight:600;margin-left:4px">pi0.5</span>' : '';
+
+  card.style.display = '';
+  document.getElementById('trainLiveTitle').innerHTML = name + policyBadge;
+  _liveJobId = jid;
+
+  // Fetch logs
+  _refreshLiveLog();
+  // Auto-refresh every 5s
+  if (!_liveTimer) {
+    _liveTimer = setInterval(_refreshLiveLog, 5000);
+  }
+}
+
+async function _refreshLiveLog() {
+  if (!_liveJobId) return;
+  try {
+    const r = await fetch(`/api/training/jobs/${_liveJobId}/logs?tail=30`);
+    const d = await r.json();
+    const logText = Array.isArray(d.lines) ? d.lines.join('\n') : (d.logs || d.log || '');
+    const logEl = document.getElementById('trainLiveLog');
+    logEl.textContent = logText || '(waiting for logs...)';
+    logEl.scrollTop = logEl.scrollHeight;
+
+    // Parse progress
+    let currentStep = 0, totalSteps = 0, lastLoss = '';
+    const stepMatch = logText.match(/(\d+)\/(\d+)\s*\[/g);
+    if (stepMatch) {
+      const last = stepMatch[stepMatch.length - 1];
+      const m = last.match(/(\d+)\/(\d+)/);
+      if (m) { currentStep = parseInt(m[1]); totalSteps = parseInt(m[2]); }
+    }
+    const lossMatch = logText.match(/loss:([\d.]+)/g);
+    if (lossMatch) {
+      const lastM = lossMatch[lossMatch.length - 1].match(/([\d.]+)/);
+      if (lastM) lastLoss = lastM[1];
+    }
+    const progDiv = document.getElementById('trainLiveProgress');
+    if (totalSteps > 0) {
+      progDiv.style.display = '';
+      const pct = Math.min(100, (currentStep / totalSteps * 100)).toFixed(1);
+      document.getElementById('trainLiveBar').style.width = pct + '%';
+      document.getElementById('trainLiveStep').textContent = `Step ${currentStep.toLocaleString()} / ${totalSteps.toLocaleString()} (${pct}%)`;
+      document.getElementById('trainLiveLoss').textContent = lastLoss ? `Loss: ${lastLoss}` : '';
+    } else {
+      progDiv.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+async function trainStopLiveJob() {
+  if (!_liveJobId || !confirm('Stop this training job?')) return;
+  try {
+    await fetch(`/api/training/jobs/${_liveJobId}`, {method: 'DELETE'});
+    if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+    setTimeout(() => trainCheckServer(), 1500);
+  } catch(e) {}
+}
+
+async function trainLoadQueue() {
+  trainCheckServer();
+}
+
+function _renderQueueFromJobs(queuedEntries) {
+  const card = document.getElementById('trainQueueCard');
+  const countEl = document.getElementById('trainQueueCount');
+  const listEl = document.getElementById('trainQueueList');
+  countEl.textContent = queuedEntries.length;
+  if (!queuedEntries.length) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  listEl.innerHTML = queuedEntries.map(([jid, job], i) => {
+    const config = job.config || {};
+    const name = job.job_name || config.job_name || jid;
+    const policy = config.policy_type || '?';
+    const ds = config.dataset_repo_id || job.dataset_repo_id || '';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #bbdefb;border-radius:6px;background:#e3f2fd;margin-bottom:4px">
+      <span style="font-size:0.72rem;font-weight:700;color:#1565c0;flex-shrink:0">#${i+1}</span>
+      <span style="font-size:0.82rem;font-weight:500">${name}</span>
+      <span style="font-size:0.7rem;color:#666">${policy}${ds ? ' · '+ds.split('/').pop() : ''}</span>
+      <div style="flex:1"></div>
+      <button onclick="trainCancelQueued('${jid}')" class="btn btn-sm btn-danger" style="font-size:0.68rem;padding:2px 8px">Cancel</button>
+    </div>`;
+  }).join('');
+}
+
+async function trainCancelQueued(jobId) {
+  if (!confirm('Cancel this queued job?')) return;
+  try {
+    await fetch(`/api/training/queue/${jobId}`, {method: 'DELETE'});
+    trainCheckServer();
+  } catch(e) {}
+}
+
+async function trainKillAll() {
+  if (!confirm('Kill all running jobs and clear the entire queue?')) return;
+  try {
+    const r = await fetch('/api/training/kill-all', {method: 'POST'});
+    const d = await r.json();
+    const msgs = [];
+    if (d.killed?.length) msgs.push(`Killed ${d.killed.length} job(s)`);
+    if (d.cancelled?.length) msgs.push(`Cancelled ${d.cancelled.length} queued`);
+    if (d.errors?.length) msgs.push(`Errors: ${d.errors.join(', ')}`);
+    alert(msgs.join('\n') || 'Done');
+    setTimeout(() => trainCheckServer(), 1000);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function trainSaveServer() {
+  const url = document.getElementById('trainServerUrl').value.trim();
+  await fetch('/api/config/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({training_server: url})});
+  cfg.training_server = url;
+  document.getElementById('trainServerStatus').innerHTML = '<span style="color:#34a853">Saved!</span>';
+  setTimeout(() => trainCheckServer(), 500);
+}
+
+async function trainLoadDatasets() {
+  const loading = document.getElementById('trainDsLoading');
+  const listEl = document.getElementById('trainDsList');
+  loading.style.display = '';
+  listEl.style.display = 'none';
+  try {
+    const r = await fetch('/api/hf-datasets');
+    const d = await r.json();
+    if (!d.ok) { loading.textContent = d.error; return; }
+    loading.style.display = 'none';
+    listEl.style.display = '';
+    if (!d.datasets.length) {
+      listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#888">No datasets found.</div>';
+      return;
+    }
+    trainSelectedRepoId = null;
+    document.getElementById('trainSelectedDs').textContent = 'None';
+    listEl.innerHTML = d.datasets.map(ds => {
+      const modified = ds.last_modified ? new Date(ds.last_modified).toLocaleDateString() : '';
+      return `<div class="train-ds-item" data-repo="${ds.id}" data-name="${ds.name}"
+        onclick="trainSelectDs(this)"
+        style="padding:8px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background 0.15s">
+        <div style="font-weight:600;font-size:0.88rem">${ds.name}</div>
+        <div style="font-size:0.75rem;color:#888">${ds.id}${modified ? ' · ' + modified : ''}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    loading.textContent = 'Error: ' + e.message;
+  }
+}
+
+function trainSelectDs(el) {
+  document.querySelectorAll('.train-ds-item').forEach(i => i.style.background = '');
+  el.style.background = '#e3f2fd';
+  trainSelectedRepoId = el.dataset.repo;
+  document.getElementById('trainSelectedDs').textContent = el.dataset.repo;
+  // Auto-fill job name
+  const jn = document.getElementById('trainJobName');
+  if (!jn.value) jn.value = el.dataset.name;
+}
+
+async function trainDownloadDs() {
+  if (!trainSelectedRepoId) { document.getElementById('trainActionStatus').textContent = 'Select a dataset first'; return; }
+  const st = document.getElementById('trainActionStatus');
+  const logEl = document.getElementById('trainActionLog');
+  const btn = document.getElementById('trainDlBtn');
+  btn.disabled = true;
+  st.textContent = 'Downloading dataset to training server...';
+  st.style.color = '#888';
+  logEl.style.display = '';
+  logEl.textContent = '';
+  try {
+    const r = await fetch('/api/training/download', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({repo_id: trainSelectedRepoId})
+    });
+    const d = await r.json();
+    logEl.textContent = JSON.stringify(d, null, 2);
+    if (d.error) {
+      st.textContent = 'Error: ' + (d.error || d.detail);
+      st.style.color = '#d93025';
+      btn.disabled = false;
+      return;
+    }
+    // Poll job status until done
+    const jobId = d.job_id;
+    if (!jobId) {
+      st.textContent = 'Download started (no job_id returned)';
+      st.style.color = '#34a853';
+      btn.disabled = false;
+      return;
+    }
+    st.textContent = `Downloading... (job: ${jobId})`;
+    const pollDl = setInterval(async () => {
+      try {
+        const [sr, lr] = await Promise.all([
+          fetch(`/api/training/jobs/${jobId}/status`),
+          fetch(`/api/training/jobs/${jobId}/logs?tail=30`)
+        ]);
+        const sd = await sr.json();
+        const ld = await lr.json();
+        const logs = Array.isArray(ld.lines) ? ld.lines.join('\n') : (ld.logs || ld.log || '');
+        if (logs) logEl.textContent = logs;
+        logEl.scrollTop = logEl.scrollHeight;
+        const status = sd.status || '';
+        if (status === 'success' || status === 'completed') {
+          clearInterval(pollDl);
+          st.innerHTML = '<span style="color:#34a853">Download completed!</span>';
+          btn.disabled = false;
+        } else if (status === 'failed' || status === 'error') {
+          clearInterval(pollDl);
+          st.innerHTML = `<span style="color:#d93025">Download failed (exit code: ${sd.returncode || '?'})</span>`;
+          btn.disabled = false;
+        } else {
+          st.textContent = `Downloading... (${status})`;
+        }
+      } catch(e) {
+        // network hiccup, keep polling
+      }
+    }, 2000);
+  } catch(e) {
+    st.textContent = e.message;
+    st.style.color = '#d93025';
+    btn.disabled = false;
+  }
+}
+
+async function trainStart() {
+  if (!trainSelectedRepoId) { document.getElementById('trainActionStatus').textContent = 'Select a dataset first'; return; }
+  const st = document.getElementById('trainActionStatus');
+  const logEl = document.getElementById('trainActionLog');
+  const btn = document.getElementById('trainStartBtn');
+  btn.disabled = true;
+  st.textContent = 'Starting training...';
+  st.style.color = '#888';
+  logEl.style.display = '';
+
+  const dsName = trainSelectedRepoId.split('/').pop();
+  const hfUser = cfg.hf_repo_name || 'phawitbinabik';
+  const policyType = document.getElementById('trainPolicyType').value;
+  const jobName = document.getElementById('trainJobName').value.trim() || `${policyType}_${dsName}`;
+
+  const body = {
+    policy_type: policyType,
+    dataset_repo_id: trainSelectedRepoId,
+    dataset_root: `./data/${dsName}`,
+    use_amp: document.getElementById('trainAmp').checked,
+    steps: parseInt(document.getElementById('trainSteps').value) || 100000,
+    batch_size: parseInt(document.getElementById('trainBatchSize').value) || 32,
+    optimizer_lr: parseFloat(document.getElementById('trainLr').value) || 0.0003,
+    wandb_enable: document.getElementById('trainWandb').checked,
+    wandb_project: document.getElementById('trainWandbProject').value.trim() || 'SO101-Experiments',
+    wandb_entity: 'phawitbinabik-turun-ammattikorkeakoulu',
+    resume: document.getElementById('trainResume').checked,
+    job_name: jobName,
+    policy_repo_id: `${hfUser}/${policyType}_${dsName}`,
+  };
+  // Gradient checkpointing
+  if (document.getElementById('trainGradCkpt').checked) body.gradient_checkpointing = true;
+  // Policy-specific fields
+  if (policyType === 'smolvla') {
+    body.vlm_model_name = document.getElementById('trainVlmModel').value;
+    body.load_vlm_weights = document.getElementById('trainLoadVlm').checked;
+    body.train_expert_only = document.getElementById('trainExpertOnly').checked;
+    body.freeze_vision_encoder = document.getElementById('trainFreezeVision').checked;
+  } else if (policyType === 'act') {
+    const vb = document.getElementById('trainVisionBackbone').value;
+    if (vb) body.vision_backbone = vb;
+    const cs = parseInt(document.getElementById('trainChunkSize').value);
+    if (cs > 0) body.chunk_size = cs;
+    if (document.getElementById('trainUseVae').checked) body.use_vae = true;
+  } else if (policyType === 'pi05') {
+    const pg = document.getElementById('trainPaligemma').value;
+    if (pg) body.paligemma_variant = pg;
+    const ae = document.getElementById('trainActionExpert').value;
+    if (ae) body.action_expert_variant = ae;
+    const nas = parseInt(document.getElementById('trainNActionSteps').value);
+    if (nas > 0) body.n_action_steps = nas;
+  }
+
+  try {
+    const r = await fetch('/api/training/train', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    logEl.textContent = JSON.stringify(d, null, 2);
+    if (d.error) {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#d93025';
+      btn.disabled = false;
+      return;
+    }
+    const jobId = d.job_id;
+    if (jobId) trainCurrentJobId = jobId;
+    const isQueued = d.status === 'queued';
+    let wbHtml = '';
+    if (body.wandb_enable) {
+      const wbEnt = body.wandb_entity || 'phawitbinabik-turun-ammattikorkeakoulu';
+      const wbProj = body.wandb_project || 'SO101-Experiments';
+      const wbUrl = d.wb_url || `https://wandb.ai/${wbEnt}/${wbProj}/runs/${jobId}`;
+      wbHtml = ` · <a href="${wbUrl}" target="_blank" style="color:#e8710a;font-weight:600;text-decoration:none">W&B ↗</a>`;
+    }
+    if (isQueued) {
+      st.innerHTML = `<span style="color:#1565c0">Queued!</span> Job: ${jobId || '?'} (waiting for current job to finish)${wbHtml}`;
+    } else {
+      st.innerHTML = `<span style="color:#34a853">Training started!</span> Job: ${jobId || '?'}${wbHtml}`;
+    }
+    // Refresh server status (updates queue card) and switch to History
+    trainCheckServer();
+    setTimeout(() => {
+      const histTab = document.querySelector('[data-inner="train-history"]');
+      if (histTab) histTab.click();
+    }, 1500);
+    btn.disabled = false;
+  } catch(e) {
+    st.textContent = e.message;
+    st.style.color = '#d93025';
+    logEl.textContent = e.stack || e.message;
+    btn.disabled = false;
+  }
+}
+
+// ── History Tab (merged Jobs + History) ──
+
+let _historyExpandedJob = null;
+
+async function trainLoadHistory() {
+  const st = document.getElementById('trainHistoryStatus');
+  const content = document.getElementById('trainHistoryContent');
+  st.textContent = 'Loading...';
+  content.innerHTML = '<div style="padding:20px;text-align:center;color:#888">Loading datasets, models and jobs...</div>';
+
+  try {
+    const [dsR, modR, jobR] = await Promise.all([
+      fetch('/api/hf-datasets'),
+      fetch('/api/hf-models'),
+      fetch('/api/training/jobs'),
+    ]);
+    const dsD = await dsR.json();
+    const modD = await modR.json();
+    const jobD = await jobR.json();
+
+    if (!dsD.ok) { st.textContent = dsD.error || 'Failed to load datasets'; content.innerHTML = ''; return; }
+
+    const datasets = dsD.datasets || [];
+    const models = modD.ok ? (modD.models || []) : [];
+    // Backend /api/training/jobs now includes queued jobs and corrects stale statuses
+    const jobs = Object.entries(jobD.jobs || {}).filter(([id]) => !id.startsWith('download_'));
+    const wbEntity = 'phawitbinabik-turun-ammattikorkeakoulu';
+    const hfUser = modD.hf_user || cfg.hf_repo_name || 'phawitbinabik';
+    const colors = {running:'#e8710a', queued:'#1565c0', completed:'#34a853', success:'#34a853', failed:'#d93025', stopped:'#888', cancelled:'#888'};
+    const queuedCount = jobs.filter(([,j]) => j.status === 'queued').length;
+    const runningCount = jobs.filter(([,j]) => j.status === 'running').length;
+
+    let statusParts = [`${datasets.length} dataset(s)`, `${models.length} model(s)`, `${jobs.length} job(s)`];
+    if (runningCount) statusParts.push(`${runningCount} running`);
+    if (queuedCount) statusParts.push(`${queuedCount} queued`);
+    st.textContent = statusParts.join(', ');
+
+    // Build a map: dataset name -> { models, jobs }
+    const dsMap = {};
+    datasets.forEach(ds => {
+      dsMap[ds.name] = { ds, models: [], jobs: [] };
+    });
+
+    // Match models to datasets
+    models.forEach(m => {
+      const matched = m.matched_dataset;
+      if (matched && dsMap[matched]) {
+        dsMap[matched].models.push(m);
+      } else {
+        for (const dsName of Object.keys(dsMap)) {
+          if (m.name.includes(dsName) || m.name.replace(/^(act|smolvla|pi05)_/, '') === dsName) {
+            dsMap[dsName].models.push(m);
+            break;
+          }
+        }
+      }
+    });
+
+    // Match jobs to datasets — create entry if dataset not in HF list
+    jobs.forEach(([id, job]) => {
+      const ds = job.config?.dataset_repo_id || job.config?.repo_id || job.dataset_repo_id || '';
+      const dsName = ds.includes('/') ? ds.split('/').pop() : ds;
+      if (!dsName) return; // skip jobs without dataset info
+      if (!dsMap[dsName]) {
+        dsMap[dsName] = { ds: { id: ds, name: dsName }, models: [], jobs: [] };
+      }
+      dsMap[dsName].jobs.push([id, job]);
+    });
+
+    const pushedModelNames = new Set(models.map(m => m.name));
+
+    const entries = Object.entries(dsMap).filter(([, v]) => v.models.length > 0 || v.jobs.length > 0);
+    if (!entries.length) {
+      content.innerHTML = '<div style="padding:20px;text-align:center;color:#888">No training history found. Train a model to see it here.</div>';
+      return;
+    }
+
+    const _policyBadge = (type) => {
+      if (type === 'act') return '<span style="background:#e3f2fd;color:#1565c0;padding:1px 8px;border-radius:10px;font-size:0.7rem;font-weight:600">ACT</span>';
+      if (type === 'smolvla') return '<span style="background:#e8f5e9;color:#2e7d32;padding:1px 8px;border-radius:10px;font-size:0.7rem;font-weight:600">SmolVLA</span>';
+      if (type === 'pi0' || type === 'pi05') return '<span style="background:#fce4ec;color:#c62828;padding:1px 8px;border-radius:10px;font-size:0.7rem;font-weight:600">pi0.5</span>';
+      return '';
+    };
+    const _policyFromName = (name) => {
+      if (name.startsWith('act_')) return 'act';
+      if (name.startsWith('smolvla_')) return 'smolvla';
+      if (name.startsWith('pi05_')) return 'pi05';
+      return '';
+    };
+
+    content.innerHTML = entries.map(([dsName, data]) => {
+      const dsId = data.ds.id;
+      const items = [];
+
+      // 1. Pushed models
+      data.models.forEach(m => {
+        const pType = _policyFromName(m.name);
+        const modified = m.last_modified ? new Date(m.last_modified).toLocaleDateString() : '';
+        items.push({ type: 'pushed', policyType: pType, name: m.name, hfId: m.id, date: modified });
+      });
+
+      // 2. Jobs
+      data.jobs.forEach(([id, job]) => {
+        const config = job.config || {};
+        const status = job.status || 'unknown';
+        const policyType = config.policy_type || '?';
+        const expectedModelName = `${policyType}_${dsName}`;
+        if (status !== 'running' && status !== 'queued' && pushedModelNames.has(expectedModelName)) return;
+        const updated = job.last_updated ? job.last_updated.substring(0,16) : '';
+        let wbLink = null;
+        if (config.wandb_enable) {
+          const wbProj = config.wandb_project || 'SO101-Experiments';
+          wbLink = job.wb_url || `https://wandb.ai/${wbEntity}/${wbProj}/runs/${id}`;
+        }
+        items.push({
+          type: 'job', jobId: id, policyType, name: job.job_name || config.job_name || id,
+          status, color: colors[status] || '#888', isRunning: status === 'running', isQueued: status === 'queued',
+          wbLink, steps: config.steps, batchSize: config.batch_size, lr: config.optimizer_lr, updated,
+        });
+      });
+
+      if (!items.length) return '';
+
+      const itemsHtml = items.map(it => {
+        if (it.type === 'pushed') {
+          return `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #c8e6c9;border-radius:8px;background:#f1f8e9">
+            <span style="color:#34a853;font-size:1.1rem;flex-shrink:0">✓</span>
+            ${_policyBadge(it.policyType)}
+            <a href="https://huggingface.co/${it.hfId}" target="_blank" style="color:#1a73e8;text-decoration:none;font-weight:600;font-size:0.86rem">${it.name}</a>
+            <span style="font-size:0.72rem;color:#999;margin-left:auto">Pushed · ${it.date}</span>
+          </div>`;
+        } else {
+          const statusLabel = it.isRunning
+            ? `<span style="font-size:0.75rem;font-weight:700;color:${it.color}">Training...</span>`
+            : it.isQueued
+            ? `<span style="font-size:0.75rem;font-weight:700;color:${it.color}">Queued</span>`
+            : `<span style="font-size:0.72rem;font-weight:600;color:${it.color};text-transform:uppercase">${it.status}</span>`;
+          const wbHtml = it.wbLink ? `<a href="${it.wbLink}" target="_blank" onclick="event.stopPropagation()" style="color:#e8710a;text-decoration:none;font-size:0.72rem;font-weight:600">W&B ↗</a>` : '';
+          const bg = it.isRunning ? '#fff3e0' : it.isQueued ? '#e3f2fd' : (it.status === 'failed' ? '#fef0ef' : '#fafafa');
+          const border = it.isRunning ? '#ffe0b2' : it.isQueued ? '#bbdefb' : (it.status === 'failed' ? '#ffcdd2' : '#e0e0e0');
+          const configInfo = [];
+          if (it.steps) configInfo.push(`${it.steps.toLocaleString()} steps`);
+          if (it.batchSize) configInfo.push(`bs=${it.batchSize}`);
+          if (it.lr) configInfo.push(`lr=${it.lr}`);
+          const configStr = configInfo.length ? configInfo.join(' · ') : '';
+          const expanded = _historyExpandedJob === it.jobId;
+          return `<div>
+            <div onclick="historyToggleJob('${it.jobId}')" style="display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid ${border};border-radius:${expanded?'8px 8px 0 0':'8px'};background:${bg};cursor:pointer;transition:background 0.15s" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
+              <div style="width:10px;height:10px;border-radius:50%;background:${it.color};flex-shrink:0;${it.isRunning?'animation:pulse 1.5s infinite':''}"></div>
+              ${_policyBadge(it.policyType)}
+              <span style="font-size:0.86rem;font-weight:500">${it.name}</span>
+              ${statusLabel}
+              ${wbHtml}
+              <span style="font-size:0.72rem;color:#999;margin-left:auto">${configStr}${it.updated ? ' · '+it.updated : ''}</span>
+              <span style="font-size:0.7rem;color:#aaa;transform:rotate(${expanded?'180':'0'}deg);transition:transform 0.2s">▼</span>
+            </div>
+            <div id="hist-detail-${it.jobId}" style="display:${expanded?'':'none'};border:1px solid ${border};border-top:none;border-radius:0 0 8px 8px;background:#fff;padding:12px"></div>
+          </div>`;
+        }
+      }).join('');
+
+      const totalModels = items.filter(i => i.type === 'pushed').length;
+      const activeJobs = items.filter(i => i.type === 'job' && i.isRunning).length;
+      const queuedJobs = items.filter(i => i.type === 'job' && i.isQueued).length;
+      const subtitle = [];
+      if (totalModels) subtitle.push(`${totalModels} model${totalModels>1?'s':''} pushed`);
+      if (activeJobs) subtitle.push(`${activeJobs} training`);
+      if (queuedJobs) subtitle.push(`${queuedJobs} queued`);
+
+      return `<div class="config-card" style="margin-bottom:16px;padding:16px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div>
+            <div style="font-weight:700;font-size:0.95rem">${dsName}</div>
+            <div style="font-size:0.75rem;color:#888">${dsId}${subtitle.length ? ' · ' + subtitle.join(', ') : ''}</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">${itemsHtml}</div>
+      </div>`;
+    }).join('');
+
+    // Datasets with no training
+    const untrained = Object.entries(dsMap).filter(([, v]) => v.models.length === 0 && v.jobs.length === 0);
+    if (untrained.length) {
+      content.innerHTML += `<div style="margin-top:16px"><div style="font-size:0.82rem;color:#999;font-weight:600;margin-bottom:8px">Datasets not yet trained (${untrained.length})</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">${untrained.map(([name]) => `<span style="padding:4px 12px;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;font-size:0.82rem;color:#666">${name}</span>`).join('')}</div>
+      </div>`;
+    }
+
+    // Auto-expand running jobs
+    if (_historyExpandedJob) {
+      historyLoadJobDetail(_historyExpandedJob);
+    }
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    content.innerHTML = '';
+  }
+}
+
+function historyToggleJob(jobId) {
+  const panel = document.getElementById('hist-detail-' + jobId);
+  if (!panel) return;
+  if (_historyExpandedJob === jobId) {
+    // Collapse
+    panel.style.display = 'none';
+    panel.previousElementSibling.style.borderRadius = '8px';
+    _historyExpandedJob = null;
+    clearInterval(trainAutoRefreshTimer);
+    trainAutoRefreshTimer = null;
+    trainCurrentJobId = null;
+    return;
+  }
+  // Collapse previous
+  if (_historyExpandedJob) {
+    const prev = document.getElementById('hist-detail-' + _historyExpandedJob);
+    if (prev) { prev.style.display = 'none'; prev.previousElementSibling.style.borderRadius = '8px'; }
+    clearInterval(trainAutoRefreshTimer);
+    trainAutoRefreshTimer = null;
+  }
+  _historyExpandedJob = jobId;
+  trainCurrentJobId = jobId;
+  panel.style.display = '';
+  panel.previousElementSibling.style.borderRadius = '8px 8px 0 0';
+  // Update arrow
+  document.querySelectorAll('[id^="hist-detail-"]').forEach(el => {
+    const arrow = el.previousElementSibling?.querySelector('span:last-child');
+    if (arrow) arrow.style.transform = el.style.display === 'none' ? 'rotate(0deg)' : 'rotate(180deg)';
+  });
+  historyLoadJobDetail(jobId);
+}
+
+async function historyLoadJobDetail(jobId) {
+  const panel = document.getElementById('hist-detail-' + jobId);
+  if (!panel || panel.style.display === 'none') return;
+  panel.innerHTML = '<div style="text-align:center;color:#888;font-size:0.82rem;padding:10px">Loading...</div>';
+
+  try {
+    const [statusR, logsR] = await Promise.all([
+      fetch(`/api/training/jobs/${jobId}/status`),
+      fetch(`/api/training/jobs/${jobId}/logs?tail=100`)
+    ]);
+    const statusD = await statusR.json();
+    const logsD = await logsR.json();
+    const status = statusD.status || 'unknown';
+    const statusColors = {running:'#e8710a', queued:'#1565c0', completed:'#34a853', success:'#34a853', failed:'#d93025', stopped:'#888', cancelled:'#888'};
+    const isActive = status === 'running' || status === 'downloading';
+    const isQueued = status === 'queued';
+
+    // Info line
+    const config = statusD.config || {};
+    const parts = [];
+    if (config.dataset_repo_id) parts.push(`Dataset: ${config.dataset_repo_id}`);
+    if (config.policy_type) parts.push(`Policy: ${config.policy_type}`);
+    if (config.steps) parts.push(`Steps: ${config.steps.toLocaleString()}`);
+    if (config.batch_size) parts.push(`Batch: ${config.batch_size}`);
+    if (config.optimizer_lr) parts.push(`LR: ${config.optimizer_lr}`);
+    if (config.wandb_enable) {
+      const wbProj = config.wandb_project || 'SO101-Experiments';
+      const wbEnt = config.wandb_entity || 'phawitbinabik-turun-ammattikorkeakoulu';
+      const wbUrl = statusD.wb_url || `https://wandb.ai/${wbEnt}/${wbProj}/runs/${jobId}`;
+      parts.push(`<a href="${wbUrl}" target="_blank" style="color:#e8710a;text-decoration:none;font-weight:600">W&B ↗</a>`);
+    }
+    if (statusD.started_at) parts.push(`Started: ${new Date(statusD.started_at).toLocaleString()}`);
+    if (statusD.finished_at) parts.push(`Finished: ${new Date(statusD.finished_at).toLocaleString()}`);
+    if (statusD.returncode !== undefined && statusD.returncode !== null) parts.push(`Exit: ${statusD.returncode}`);
+
+    // Config JSON (collapsible)
+    const configJson = Object.keys(config).length ? JSON.stringify(config, null, 2) : '';
+    const configHtml = configJson ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:0.75rem;color:#1a73e8;font-weight:600;user-select:none">Config Parameters</summary><pre style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:8px 12px;margin-top:6px;font-size:0.7rem;line-height:1.5;overflow-x:auto;max-height:300px;overflow-y:auto">${_escHtml(configJson)}</pre></details>` : '';
+
+    // Progress
+    let progressHtml = '';
+    const logText = Array.isArray(logsD.lines) ? logsD.lines.join('\n') : (logsD.logs || logsD.log || '');
+    let currentStep = 0, totalSteps = 0, lastLoss = '';
+    const stepMatch = logText.match(/(\d+)\/(\d+)\s*\[/g);
+    if (stepMatch) {
+      const last = stepMatch[stepMatch.length - 1];
+      const m = last.match(/(\d+)\/(\d+)/);
+      if (m) { currentStep = parseInt(m[1]); totalSteps = parseInt(m[2]); }
+    }
+    const lossMatch = logText.match(/loss:([\d.]+)/g);
+    if (lossMatch) {
+      const lastM = lossMatch[lossMatch.length - 1].match(/([\d.]+)/);
+      if (lastM) lastLoss = lastM[1];
+    }
+    if (totalSteps > 0) {
+      const pct = Math.min(100, (currentStep / totalSteps * 100)).toFixed(1);
+      progressHtml = `<div style="margin:8px 0">
+        <div style="height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${isActive?'#e8710a':'#34a853'};transition:width 0.3s"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px">
+          <span style="font-size:0.78rem;color:#888">Step ${currentStep.toLocaleString()} / ${totalSteps.toLocaleString()} (${pct}%)</span>
+          <span style="font-size:0.78rem;color:#888">${lastLoss ? 'Loss: '+lastLoss : ''}</span>
+        </div>
+      </div>`;
+    }
+
+    // Buttons
+    let actionBtn = '';
+    if (isQueued) {
+      actionBtn = `<button class="btn btn-sm btn-danger" onclick="historyCancelQueued('${jobId}')" style="font-size:0.72rem;padding:3px 10px">Cancel from Queue</button>`;
+    } else if (isActive) {
+      actionBtn = `<button class="btn btn-sm btn-danger" onclick="historyStopJob('${jobId}')" style="font-size:0.72rem;padding:3px 10px">Stop</button>`;
+    } else {
+      actionBtn = `<button class="btn btn-sm btn-danger" onclick="historyDeleteJob('${jobId}')" style="font-size:0.72rem;padding:3px 10px">Delete</button>`;
+    }
+    const buttonsHtml = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <span style="font-size:0.78rem;padding:2px 10px;border-radius:10px;background:${(statusColors[status]||'#888')}22;color:${statusColors[status]||'#888'};font-weight:600">${status.toUpperCase()}</span>
+      <div style="flex:1"></div>
+      ${actionBtn}
+      <button class="btn btn-sm" onclick="historyLoadJobDetail('${jobId}')" style="background:#1a73e8;font-size:0.72rem;padding:3px 10px">Refresh</button>
+      ${!isQueued ? `<label style="font-size:0.72rem;display:flex;align-items:center;gap:4px"><input type="checkbox" id="histAutoRefresh-${jobId}" onchange="historyToggleAutoRefresh('${jobId}')" ${trainAutoRefreshTimer?'checked':''}> Auto</label>` : ''}
+    </div>`;
+
+    panel.innerHTML = `${buttonsHtml}
+      <div style="font-size:0.8rem;color:#555;margin-bottom:6px">${parts.join(' · ')}</div>
+      ${progressHtml}
+      ${configHtml}
+      <div style="background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.72rem;line-height:1.5;padding:10px 12px;border-radius:6px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin-top:8px">${_escHtml(logText || '(no logs)')}</div>`;
+
+    // Scroll log to bottom
+    const logDiv = panel.querySelector('div[style*="1e1e1e"]');
+    if (logDiv) logDiv.scrollTop = logDiv.scrollHeight;
+
+  } catch(e) {
+    panel.innerHTML = `<div style="color:#d93025;font-size:0.82rem">Error: ${e.message}</div>`;
+  }
+}
+
+function _escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function historyStopJob(jobId) {
+  if (!confirm('Stop this training job?')) return;
+  try {
+    await fetch(`/api/training/jobs/${jobId}`, {method: 'DELETE'});
+    setTimeout(() => historyLoadJobDetail(jobId), 1000);
+  } catch(e) {}
+}
+
+async function historyCancelQueued(jobId) {
+  if (!confirm('Cancel this queued job?')) return;
+  try {
+    await fetch(`/api/training/queue/${jobId}`, {method: 'DELETE'});
+    _historyExpandedJob = null;
+    trainCurrentJobId = null;
+    trainLoadHistory();
+    trainLoadQueue();
+  } catch(e) {}
+}
+
+async function historyDeleteJob(jobId) {
+  if (!confirm('Delete this job history?')) return;
+  try {
+    await fetch(`/api/training/history/${jobId}`, {method: 'DELETE'});
+    _historyExpandedJob = null;
+    trainCurrentJobId = null;
+    trainLoadHistory();
+  } catch(e) {}
+}
+
+function historyToggleAutoRefresh(jobId) {
+  const cb = document.getElementById('histAutoRefresh-' + jobId);
+  if (cb && cb.checked) {
+    clearInterval(trainAutoRefreshTimer);
+    trainAutoRefreshTimer = setInterval(() => historyLoadJobDetail(jobId), 5000);
+  } else {
+    clearInterval(trainAutoRefreshTimer);
+    trainAutoRefreshTimer = null;
+  }
+}
+
+// Keep old function name as alias for any remaining references
+function trainLoadJobs() { trainLoadHistory(); }
+function trainToggleAutoRefresh() {
+  if (_historyExpandedJob) historyToggleAutoRefresh(_historyExpandedJob);
+}
+
 // ── Training Guide ──
 
 function vizShowTrainGuide() {
   const name = vizCurrentDataset;
   if (!name) return;
   const repoId = (cfg.hf_repo_name || 'phawitbinabik') + '/' + name;
-  const policyRepo = (cfg.hf_repo_name || 'phawitbinabik') + '/smolvla_' + name;
   const dataDir = `./data/${name}`;
 
+  // Store context for dynamic rebuild
+  window._tgCtx = { name, repoId, dataDir };
+  _tgBuildCmds(true);
+}
+
+function _tgBuildCmds(firstRender) {
+  const { name, repoId, dataDir } = window._tgCtx;
+  const wb = firstRender ? true : document.getElementById('tgWandbCheck').checked;
+  const policyRepo = (cfg.hf_repo_name || 'phawitbinabik') + '/smolvla_' + name;
   const copyBtnStyle = 'position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1';
 
-  const cmd1 = [
-    `cd /home/jupyter-phawit/so101-v2`,
-    `conda activate lerobot`,
-    ``,
-    `hf download ${repoId} \\`,
-    `  --repo-type dataset \\`,
-    `  --local-dir ${dataDir}`,
-  ].join('\n');
-
-  const trainArgs = [
-    `lerobot-train \\`,
-    `  --policy.type=smolvla \\`,
-    `  --dataset.repo_id=${repoId} \\`,
-    `  --dataset.root=${dataDir} \\`,
-    `  --policy.load_vlm_weights=true \\`,
-    `  --policy.vlm_model_name="HuggingFaceTB/SmolVLM2-500M-Video-Instruct" \\`,
-    `  --policy.train_expert_only=true \\`,
-    `  --policy.freeze_vision_encoder=true \\`,
-    `  --policy.use_amp=true \\`,
-    `  --steps=100000 \\`,
-    `  --batch_size=32 \\`,
-    `  --policy.optimizer_lr=0.0003 \\`,
-  ];
-
-  const cmd2 = [...trainArgs,
-    `  --wandb.enable=false \\`,
-    `  --output_dir=outputs/train/smolvla_${name} \\`,
-    `  --job_name=smolvla_${name} \\`,
-    `  --policy.repo_id=${policyRepo}`,
-  ].join('\n');
-
-  const cmd3 = [...trainArgs,
-    `  --wandb.enable=true \\`,
-    `  --output_dir=outputs/train/smolvla_${name} \\`,
-    `  --job_name=smolvla_${name} \\`,
-    `  --policy.repo_id=${policyRepo}`,
-  ].join('\n');
+  const wbLines = wb ? [`  --wandb.enable=true \\`, `  --wandb.project=SO101-Experiments \\`] : [`  --wandb.enable=false \\`];
 
   const cmd0a = [
     `conda create -n lerobot python=3.12 -y`,
@@ -4845,9 +6093,85 @@ function vizShowTrainGuide() {
     `pip install python-dateutil`,
   ].join('\n');
 
+  const cmd1 = [
+    `cd /home/jupyter-phawit/so101-v2`,
+    `conda activate lerobot`,
+    ``,
+    `hf download ${repoId} \\`,
+    `  --repo-type dataset \\`,
+    `  --local-dir ${dataDir}`,
+  ].join('\n');
+
+  // SmolVLA
+  const cmdSmolvla = [
+    `lerobot-train \\`,
+    `  --policy.type=smolvla \\`,
+    `  --dataset.repo_id=${repoId} \\`,
+    `  --dataset.root=${dataDir} \\`,
+    `  --policy.load_vlm_weights=true \\`,
+    `  --policy.vlm_model_name="HuggingFaceTB/SmolVLM2-500M-Video-Instruct" \\`,
+    `  --policy.train_expert_only=true \\`,
+    `  --policy.freeze_vision_encoder=true \\`,
+    `  --policy.use_amp=true \\`,
+    `  --steps=100000 \\`,
+    `  --batch_size=32 \\`,
+    `  --policy.optimizer_lr=0.0003 \\`,
+    ...wbLines,
+    `  --output_dir=outputs/train/smolvla_${name} \\`,
+    `  --job_name=smolvla_${name} \\`,
+    `  --policy.repo_id=${policyRepo}`,
+  ].join('\n');
+
+  // ACT
+  const actPolicyRepo = (cfg.hf_repo_name || 'phawitbinabik') + '/act_' + name;
+  const actOutDir = `outputs/train/act_${name}`;
+  const cmdACT = [
+    `lerobot-train \\`,
+    `  --policy.type=act \\`,
+    `  --dataset.repo_id=${repoId} \\`,
+    `  --dataset.root=${dataDir} \\`,
+    `  --steps=100000 \\`,
+    `  --batch_size=32 \\`,
+    ...wbLines,
+    `  --output_dir=${actOutDir} \\`,
+    `  --job_name=act_${name} \\`,
+    `  --policy.repo_id=${actPolicyRepo}`,
+  ].join('\n');
+
+  // pi0.5
+  const pi05PolicyRepo = (cfg.hf_repo_name || 'phawitbinabik') + '/pi05_' + name;
+  const pi05OutDir = `outputs/train/pi05_${name}`;
+  const cmdPi05 = [
+    `lerobot-train \\`,
+    `  --policy.type=pi0 \\`,
+    `  --policy.pretrained_path=lerobot/pi0.5 \\`,
+    `  --dataset.repo_id=${repoId} \\`,
+    `  --dataset.root=${dataDir} \\`,
+    `  --policy.use_amp=true \\`,
+    `  --steps=100000 \\`,
+    `  --batch_size=16 \\`,
+    ...wbLines,
+    `  --output_dir=${pi05OutDir} \\`,
+    `  --job_name=pi05_${name} \\`,
+    `  --policy.repo_id=${pi05PolicyRepo}`,
+  ].join('\n');
+
+  // Resume
   const outDir = `outputs/train/smolvla_${name}`;
-  const cmd4 = [...trainArgs,
-    `  --wandb.enable=false \\`,
+  const cmdResume = [
+    `lerobot-train \\`,
+    `  --policy.type=smolvla \\`,
+    `  --dataset.repo_id=${repoId} \\`,
+    `  --dataset.root=${dataDir} \\`,
+    `  --policy.load_vlm_weights=true \\`,
+    `  --policy.vlm_model_name="HuggingFaceTB/SmolVLM2-500M-Video-Instruct" \\`,
+    `  --policy.train_expert_only=true \\`,
+    `  --policy.freeze_vision_encoder=true \\`,
+    `  --policy.use_amp=true \\`,
+    `  --steps=100000 \\`,
+    `  --batch_size=32 \\`,
+    `  --policy.optimizer_lr=0.0003 \\`,
+    ...wbLines,
     `  --output_dir=${outDir} \\`,
     `  --job_name=smolvla_${name} \\`,
     `  --policy.repo_id=${policyRepo} \\`,
@@ -4855,79 +6179,133 @@ function vizShowTrainGuide() {
     `  --checkpoint_path=${outDir}/checkpoints/last`,
   ].join('\n');
 
+  // Remember active tab and selected model
+  if (firstRender) window._tgActiveTab = 'tg-setup';
+  const activeTab = window._tgActiveTab || 'tg-setup';
+  const selectedModel = firstRender ? 'act' : (document.querySelector('input[name="tgModel"]:checked')?.value || 'act');
+
+  // Pick the right command based on selected model
+  const modelCmds = { act: cmdACT, smolvla: cmdSmolvla, pi05: cmdPi05 };
+  const modelDescs = {
+    act: 'Action Chunking with Transformers. Lightweight policy, good for simple tasks.',
+    smolvla: 'SmolVLA training with recommended settings.',
+    pi05: 'Physical Intelligence pi0.5 VLA model. Requires more GPU memory (~24GB+).',
+  };
+  const trainCmd = modelCmds[selectedModel];
+  const trainDesc = modelDescs[selectedModel];
+
   const body = document.getElementById('modalBody');
   body.innerHTML = `
-    <h3 style="margin-top:0;margin-bottom:4px">Training Guide</h3>
-    <p style="margin-bottom:16px;font-size:0.88rem;color:#555">Commands for training <strong>${name}</strong> with SmolVLA on GPU server.</p>
+    <h3 style="margin:0 0 4px">Training Guide</h3>
+    <p style="margin-bottom:12px;font-size:0.88rem;color:#555">Commands for training <strong>${name}</strong> on GPU server.</p>
 
-    <div style="margin-bottom:16px">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 0: Create ENV and Install Packages</div>
-      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">One-time setup on the GPU server. Skip if already done.</div>
+    <div class="inner-tabs" style="margin-bottom:14px">
+      <button class="inner-tab ${activeTab==='tg-setup'?'active':''}" onclick="tgSwitchTab(this,'tg-setup')">Setup</button>
+      <button class="inner-tab ${activeTab==='tg-download'?'active':''}" onclick="tgSwitchTab(this,'tg-download')">Download</button>
+      <button class="inner-tab ${activeTab==='tg-train'?'active':''}" onclick="tgSwitchTab(this,'tg-train')">Training</button>
+      <button class="inner-tab ${activeTab==='tg-resume'?'active':''}" onclick="tgSwitchTab(this,'tg-resume')">Resume</button>
+      <button class="inner-tab ${activeTab==='tg-tips'?'active':''}" onclick="tgSwitchTab(this,'tg-tips')">Tips</button>
+    </div>
+
+    <div id="tg-setup" class="tg-panel" style="${activeTab==='tg-setup'?'':'display:none'}">
+      <div style="font-size:0.8rem;color:#777;margin-bottom:8px">One-time setup on the GPU server. Skip if already done.</div>
       <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Create conda environment</div>
       <div class="train-cmd" id="trainCmd0a"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0a')">Copy</button>${_escHtml(cmd0a)}</div>
-      <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Clone and install LeRobot</div>
+      <div style="font-size:0.78rem;color:#999;margin-bottom:2px;margin-top:10px">Clone and install LeRobot</div>
       <div class="train-cmd" id="trainCmd0b"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0b')">Copy</button>${_escHtml(cmd0b)}</div>
-      <div style="font-size:0.78rem;color:#999;margin-bottom:2px">Install additional dependencies</div>
+      <div style="font-size:0.78rem;color:#999;margin-bottom:2px;margin-top:10px">Install additional dependencies</div>
       <div class="train-cmd" id="trainCmd0c"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd0c')">Copy</button>${_escHtml(cmd0c)}</div>
     </div>
 
-    <div style="margin-bottom:16px">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 1: Download dataset from HF</div>
-      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Run on the GPU server to download the dataset locally.</div>
+    <div id="tg-download" class="tg-panel" style="${activeTab==='tg-download'?'':'display:none'}">
+      <div style="font-size:0.8rem;color:#777;margin-bottom:8px">Run on the GPU server to download the dataset locally.</div>
       <div class="train-cmd" id="trainCmd1"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd1')">Copy</button>${_escHtml(cmd1)}</div>
     </div>
 
-    <div style="margin-bottom:16px">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 2: Start training</div>
-      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">SmolVLA training with recommended settings. W&B logging disabled.</div>
-      <div class="train-cmd" id="trainCmd2"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd2')">Copy</button>${_escHtml(cmd2)}</div>
+    <div id="tg-train" class="tg-panel" style="${activeTab==='tg-train'?'':'display:none'}">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:12px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.84rem;cursor:pointer">
+            <input type="radio" name="tgModel" value="act" ${selectedModel==='act'?'checked':''} onchange="_tgBuildCmds(false)"> ACT
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.84rem;cursor:pointer">
+            <input type="radio" name="tgModel" value="smolvla" ${selectedModel==='smolvla'?'checked':''} onchange="_tgBuildCmds(false)"> SmolVLA
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.84rem;cursor:pointer">
+            <input type="radio" name="tgModel" value="pi05" ${selectedModel==='pi05'?'checked':''} onchange="_tgBuildCmds(false)"> pi0.5
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;cursor:pointer;margin-left:auto">
+          <input type="checkbox" id="tgWandbCheck" ${wb ? 'checked' : ''} onchange="_tgBuildCmds(false)">
+          <span style="font-weight:600">W&B Logging</span>
+        </label>
+      </div>
+      <div style="font-size:0.8rem;color:#777;margin-bottom:8px">${trainDesc}</div>
+      <div class="train-cmd" id="trainCmdMain"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmdMain')">Copy</button>${_escHtml(trainCmd)}</div>
     </div>
 
-    <div style="margin-bottom:16px">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Step 2 (alt): Training with W&B logging</div>
-      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Same as above but with Weights & Biases enabled for tracking.</div>
-      <div class="train-cmd" id="trainCmd3"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd3')">Copy</button>${_escHtml(cmd3)}</div>
+    <div id="tg-resume" class="tg-panel" style="${activeTab==='tg-resume'?'':'display:none'}">
+      <div style="font-size:0.8rem;color:#777;margin-bottom:8px">Resume from the last saved checkpoint if training was interrupted.</div>
+      <div class="train-cmd" id="trainCmdResume"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmdResume')">Copy</button>${_escHtml(cmdResume)}</div>
     </div>
 
-    <div style="margin-bottom:16px">
-      <div style="font-weight:600;font-size:0.9rem;margin-bottom:2px">Resume: Continue interrupted training</div>
-      <div style="font-size:0.8rem;color:#777;margin-bottom:4px">Resume from the last saved checkpoint if training was interrupted. Checkpoints are saved every 20,000 steps.</div>
-      <div class="train-cmd" id="trainCmd4"><button style="${copyBtnStyle}" onclick="vizCopyCmd('trainCmd4')">Copy</button>${_escHtml(cmd4)}</div>
-    </div>
-
-    <div style="background:#f0f7ff;border-radius:6px;padding:10px 14px;font-size:0.82rem;color:#333">
-      <strong>Tips:</strong>
-      <ul style="margin:4px 0 0 0;padding-left:18px">
-        <li>Adjust <code>--batch_size</code> based on GPU memory (32 for 24GB, 16 for 12GB)</li>
-        <li>Adjust <code>--steps</code> based on dataset size (~100-200 steps per episode)</li>
-        <li>Checkpoints are saved every <code>--save_freq</code> steps (default 20,000)</li>
-        <li>Output model will be saved to <code>${outDir}</code></li>
-        <li>Model will be pushed to HF as <code>${policyRepo}</code></li>
-      </ul>
+    <div id="tg-tips" class="tg-panel" style="${activeTab==='tg-tips'?'':'display:none'}">
+      <div style="background:#f0f7ff;border-radius:6px;padding:10px 14px;font-size:0.82rem;color:#333">
+        <strong>Tips:</strong>
+        <ul style="margin:4px 0 0 0;padding-left:18px">
+          <li>Adjust <code>--batch_size</code> based on GPU memory (32 for 24GB, 16 for 12GB)</li>
+          <li>Adjust <code>--steps</code> based on dataset size (~100-200 steps per episode)</li>
+          <li>Checkpoints are saved every <code>--save_freq</code> steps (default 20,000)</li>
+          <li>Output model will be saved to the <code>outputs/train/</code> directory</li>
+          <li>Model will be pushed to HF as <code>${policyRepo}</code></li>
+        </ul>
+      </div>
     </div>
 
     <div style="margin-top:14px;text-align:right">
       <button class="btn btn-sm" onclick="closeModal()" style="background:#f0f0f0;color:#555">Close</button>
     </div>
   `;
-  document.getElementById('modalOverlay').classList.add('visible');
+  if (firstRender) document.getElementById('modalOverlay').classList.add('visible');
+}
+
+function tgSwitchTab(btn, panelId) {
+  window._tgActiveTab = panelId;
+  btn.parentElement.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  btn.closest('#modalBody').querySelectorAll('.tg-panel').forEach(p => p.style.display = 'none');
+  document.getElementById(panelId).style.display = 'block';
 }
 
 function vizCopyCmd(elId) {
   const el = document.getElementById(elId);
   if (!el) return;
-  // Get text content excluding the copy button
   const clone = el.cloneNode(true);
   const btn = clone.querySelector('button');
   if (btn) btn.remove();
   const text = clone.textContent.trim();
-  navigator.clipboard.writeText(text).then(() => {
+  const onSuccess = () => {
     const origBtn = el.querySelector('button');
     if (origBtn) {
       origBtn.textContent = 'Copied!';
       setTimeout(() => { origBtn.textContent = 'Copy'; }, 1500);
     }
-  });
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(onSuccess).catch(() => vizCopyFallback(text, onSuccess));
+  } else {
+    vizCopyFallback(text, onSuccess);
+  }
+}
+function vizCopyFallback(text, cb) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  if (cb) cb();
 }
 
 function _escHtml(s) {
@@ -5394,8 +6772,10 @@ const VIZ_PHASE = {
 function vizParseObject(task) {
   let m = task.match(/pick\s+up\s+the\s+(.+?)\s+to\s+the\s+/i);
   if (m) return m[1];
+  m = task.match(/pick\s+up\s+the\s+(.+?)\s+and\s+place\s+/i);
+  if (m) return m[1];
   m = task.match(/pick\s+up\s+the\s+(.+)/i);
-  if (m) return m[1].trim();
+  if (m) return m[1].trim().replace(/\.$/, '');
   m = task.match(/(?:move|put|bring|grab)\s+the\s+(.+?)\s+(?:to|into|onto)\s+/i);
   if (m) return m[1];
   return 'object';
@@ -5671,7 +7051,7 @@ async function vizDrawChart(frames) {
     const saved = await vizLoadSegments(vizCurrentDataset, ep);
     if (saved) {
       vizSegments = saved;
-    } else if (/pick\s+up\s+the\s+.+\s+to\s+the\s+/i.test(vizCurrentTask || '')) {
+    } else if (/pick\s+up\s+.+\s+(to\s+the|and\s+place|in\s+the|into\s+the|onto\s+the)\s+/i.test(vizCurrentTask || '')) {
       vizSegments = vizDetectSegments(frames, vizCurrentTask);
     } else {
       vizSegments = [{start:0, end:frames.length-1, phase:'idle', label:'idle'}];

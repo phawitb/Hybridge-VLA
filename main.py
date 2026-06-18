@@ -169,7 +169,7 @@ async def save_env(request: Request):
     """Save env tokens to .env file."""
     data = await request.json()
     env = _read_env()
-    for key in ["GEMINI_API_KEY", "HF_TOKEN"]:
+    for key in ["GEMINI_API_KEY", "HF_TOKEN", "WB_API_KEY"]:
         if key in data:
             val = data[key].strip()
             # Skip masked values (don't overwrite with mask)
@@ -181,6 +181,85 @@ async def save_env(request: Request):
     # Reload env vars
     load_dotenv(ROOT / ".env", override=True)
     return {"ok": True}
+
+
+@app.get("/api/wb/status")
+async def wb_status():
+    """Check W&B login status."""
+    env = _read_env()
+    api_key = env.get("WB_API_KEY", "")
+    if not api_key:
+        return {"ok": True, "logged_in": False, "message": "No API key configured"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                "https://api.wandb.ai/graphql",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": "{viewer{username}}"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                username = data.get("data", {}).get("viewer", {}).get("username", "")
+                if username:
+                    return {"ok": True, "logged_in": True, "username": username}
+            return {"ok": True, "logged_in": False, "message": "Invalid API key"}
+    except Exception as e:
+        return {"ok": True, "logged_in": False, "message": str(e)}
+
+
+@app.post("/api/wb/login")
+async def wb_login(request: Request):
+    """Login to W&B by verifying API key via HTTP and writing to netrc."""
+    env = _read_env()
+    api_key = env.get("WB_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "error": "No WB_API_KEY in .env"}
+    try:
+        # Verify key via W&B API
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                "https://api.wandb.ai/graphql",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": "{viewer{username}}"},
+            )
+            if r.status_code != 200:
+                return {"ok": False, "error": f"API returned status {r.status_code}"}
+            data = r.json()
+            username = data.get("data", {}).get("viewer", {}).get("username", "")
+            if not username:
+                return {"ok": False, "error": "Invalid API key"}
+        # Write to netrc so wandb/training scripts can authenticate
+        import netrc as _netrc
+        netrc_path = Path.home() / ".netrc"
+        try:
+            nrc = _netrc.netrc(str(netrc_path)) if netrc_path.exists() else _netrc.netrc()
+        except Exception:
+            nrc = None
+        # Write/update the entry manually
+        lines = []
+        if netrc_path.exists():
+            lines = netrc_path.read_text().splitlines()
+        # Remove existing api.wandb.ai block
+        new_lines = []
+        skip = False
+        for line in lines:
+            if line.strip().startswith("machine") and "api.wandb.ai" in line:
+                skip = True
+                continue
+            if skip and line.strip().startswith(("login", "password")):
+                continue
+            skip = False
+            new_lines.append(line)
+        # Append new entry
+        new_lines.append("")
+        new_lines.append("machine api.wandb.ai")
+        new_lines.append(f"  login user")
+        new_lines.append(f"  password {api_key}")
+        netrc_path.write_text("\n".join(new_lines) + "\n")
+        netrc_path.chmod(0o600)
+        return {"ok": True, "message": f"Logged in as {username}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/config")
@@ -198,10 +277,11 @@ async def get_config():
         "robot_port": robot_cfg.get("port", ""),
         "robot_id": robot_cfg.get("id", ""),
         "camera_top_index": cams.get("top", {}).get("index", 0),
-        "camera_wrist_index": cams.get("wrist", {}).get("index", 1),
+        "camera_wrist_index": cams.get("wrist", {}).get("index", 0),
         "teleop": cfg.get("teleop", {}),
         "click_to_move": cfg.get("click_to_move", {"target_height": 0, "safety_height": 10}),
         "hf_repo_name": cfg.get("hf_repo_name", ""),
+        "training_server": cfg.get("training_server", "http://100.87.242.52:8000"),
         "data_collection": cfg.get("data_collection", {
             "repo_id": "phawitbinabik/so101-pick-place", "dataset_root": "./data/so101-pick-place",
             "task": "pick up the pink bow to the green bowl", "num_episodes": 50,
@@ -239,6 +319,8 @@ async def save_config(request: Request):
         cfg["default_instruction"] = data["default_instruction"]
     if "hf_repo_name" in data:
         cfg["hf_repo_name"] = data["hf_repo_name"]
+    if "training_server" in data:
+        cfg["training_server"] = data["training_server"]
     if "teleop" in data:
         tel = data["teleop"]
         cfg.setdefault("teleop", {})
@@ -1455,6 +1537,32 @@ async def delete_dataset(name: str):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/datasets/{name}/rename")
+async def rename_dataset(name: str, request: Request):
+    """Rename a dataset directory."""
+    data = await request.json()
+    new_name = data.get("new_name", "").strip()
+    if not new_name:
+        return {"ok": False, "error": "New name is required"}
+    if new_name == name:
+        return {"ok": False, "error": "New name is the same as current name"}
+    # Validate name (alphanumeric, dash, underscore)
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', new_name):
+        return {"ok": False, "error": "Invalid name. Use only letters, numbers, dash, underscore."}
+    dataset_dir = ROOT / "data" / name
+    new_dir = ROOT / "data" / new_name
+    if not dataset_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    if new_dir.exists():
+        return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
+    try:
+        dataset_dir.rename(new_dir)
+        print(f"[Dataset] Renamed: {name} -> {new_name}")
+        return {"ok": True, "new_name": new_name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Push to Hugging Face ──
 
 hf_push_state = {
@@ -1601,6 +1709,468 @@ async def push_to_hf(name: str, request: Request):
 async def hf_push_status():
     """Get HF push progress."""
     return dict(hf_push_state)
+
+
+# ── Download from Hugging Face ──
+
+hf_download_state = {
+    "running": False,
+    "progress": 0,
+    "status": "",
+    "error": None,
+    "logs": [],
+}
+
+
+def _run_hf_download(repo_id: str, local_name: str):
+    """Background thread: download dataset from Hugging Face Hub."""
+    state = hf_download_state
+    state["running"] = True
+    state["progress"] = 10
+    state["status"] = f"Downloading {repo_id}..."
+    state["error"] = None
+    state["logs"] = []
+
+    dataset_dir = ROOT / "data" / local_name
+
+    try:
+        script = f"""
+import sys, os
+from huggingface_hub import snapshot_download
+repo_id = {repr(repo_id)}
+local_dir = {repr(str(dataset_dir))}
+print(f"Downloading {{repo_id}} to {{local_dir}}", flush=True)
+snapshot_download(
+    repo_id=repo_id,
+    repo_type="dataset",
+    local_dir=local_dir,
+)
+print("DONE", flush=True)
+"""
+        lerobot_python = "/opt/miniconda3/envs/lerobot/bin/python"
+        if not Path(lerobot_python).exists():
+            lerobot_python = "python3"
+
+        sub_env = dict(os.environ)
+        hf_token = _read_env().get("HF_TOKEN", "")
+        if hf_token:
+            sub_env["HF_TOKEN"] = hf_token
+
+        proc = subprocess.Popen(
+            [lerobot_python, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=sub_env,
+        )
+
+        state["progress"] = 20
+        state["logs"].append(f"$ Downloading {repo_id} -> data/{local_name}")
+
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            state["logs"].append(line)
+            if len(state["logs"]) > 500:
+                state["logs"] = state["logs"][-300:]
+            if "Downloading" in line or "Fetching" in line:
+                state["status"] = line[:120]
+                state["progress"] = min(state["progress"] + 2, 85)
+            elif line == "DONE":
+                state["progress"] = 100
+                state["status"] = f"Downloaded {repo_id} to data/{local_name}"
+
+        proc.wait()
+        if proc.returncode != 0:
+            state["logs"].append(f"[EXIT CODE {proc.returncode}]")
+            state["error"] = f"Process exited with code {proc.returncode}"
+            state["status"] = f"Error: exit code {proc.returncode}"
+        else:
+            state["progress"] = 100
+            state["status"] = f"Done! Downloaded to data/{local_name}"
+            state["logs"].append(f"Successfully downloaded {repo_id}")
+            print(f"[HF Download] {repo_id} -> data/{local_name}")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        state["error"] = str(e)
+        state["status"] = f"Error: {e}"
+    finally:
+        state["running"] = False
+
+
+@app.post("/api/datasets/download-hf")
+async def download_from_hf(request: Request):
+    """Download a dataset from Hugging Face Hub."""
+    if hf_download_state["running"]:
+        return {"ok": False, "error": "Download already in progress"}
+    body = await request.json()
+    repo_id = body.get("repo_id", "").strip()
+    if not repo_id or "/" not in repo_id:
+        return {"ok": False, "error": "Invalid repo_id (format: username/dataset-name)"}
+
+    # Extract local name from repo_id (part after /)
+    local_name = repo_id.split("/", 1)[1]
+    local_name = local_name.replace(" ", "-")
+
+    # Check if dataset already exists locally
+    dataset_dir = ROOT / "data" / local_name
+    if dataset_dir.exists() and (dataset_dir / "meta" / "info.json").exists():
+        return {
+            "ok": False,
+            "error": f"Dataset '{local_name}' already exists locally. Please delete it first before downloading."
+        }
+
+    threading.Thread(target=_run_hf_download, args=(repo_id, local_name), daemon=True).start()
+    return {"ok": True, "message": f"Downloading {repo_id}...", "local_name": local_name}
+
+
+@app.get("/api/hf-download/status")
+async def hf_download_status():
+    """Get HF download progress."""
+    return dict(hf_download_state)
+
+
+# ── Training Server Proxy ──
+
+TRAIN_LOG_DIR = ROOT / "data" / "training_logs"
+TRAIN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _training_server_url() -> str:
+    cfg = load_config()
+    return cfg.get("training_server", "http://100.87.242.52:8000").rstrip("/")
+
+
+def _save_job_local(job_id: str, status_data: dict = None, log_lines: list = None):
+    """Save/update job data locally for history."""
+    job_path = TRAIN_LOG_DIR / f"{job_id}.json"
+    # Load existing or create new
+    if job_path.exists():
+        existing = json.loads(job_path.read_text())
+    else:
+        existing = {"job_id": job_id, "logs": []}
+    if status_data:
+        existing["status"] = status_data.get("status", existing.get("status"))
+        existing["returncode"] = status_data.get("returncode", existing.get("returncode"))
+        for k in ("cmd", "config", "job_name", "pid", "started_at", "finished_at", "log_file", "wb_url"):
+            if k in status_data:
+                existing[k] = status_data[k]
+    if log_lines and isinstance(log_lines, list):
+        # Append new lines (deduplicate by keeping the longer set)
+        if len(log_lines) > len(existing.get("logs", [])):
+            existing["logs"] = log_lines
+    existing["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    job_path.write_text(json.dumps(existing, ensure_ascii=False, indent=1))
+
+
+@app.post("/api/training/download")
+async def training_download(request: Request):
+    """Proxy: download dataset on training server."""
+    body = await request.json()
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            r = await client.post(f"{url}/download", json=body)
+            if not r.text.strip():
+                return {"ok": False, "error": f"Server returned empty response (HTTP {r.status_code})"}
+            data = r.json()
+            if data.get("job_id"):
+                _save_job_local(data["job_id"], {"status": "downloading", "cmd": data.get("cmd"), "config": body})
+            return data
+        except httpx.TimeoutException:
+            return {"ok": False, "error": "Training server timeout (120s)."}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/training/train")
+async def training_start(request: Request):
+    """Proxy: start training on remote server. Job may start immediately or be queued."""
+    try:
+        body = await request.json()
+    except Exception as e:
+        return {"ok": False, "error": f"Invalid request body: {e}"}
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            r = await client.post(f"{url}/train", json=body)
+            try:
+                data = r.json()
+            except Exception:
+                if r.status_code == 500:
+                    # Server may have started the job but crashed building the response.
+                    # Poll /jobs to find the newly started job.
+                    return await _recover_after_500(client, url, body)
+                return {"ok": False, "error": f"Server returned non-JSON (HTTP {r.status_code}): {r.text[:200]}"}
+            if data.get("job_id"):
+                status = data.get("status", "running")
+                save_data = {"status": status, "cmd": data.get("cmd"), "config": body, "job_name": body.get("job_name")}
+                if data.get("wb_url"):
+                    save_data["wb_url"] = data["wb_url"]
+                _save_job_local(data["job_id"], save_data)
+            return data
+        except httpx.TimeoutException:
+            return {"ok": False, "error": "Training server timeout (120s). Server may be busy — check queue."}
+        except Exception as e:
+            return {"ok": False, "error": f"Proxy error: {type(e).__name__}: {e}"}
+
+
+async def _recover_after_500(client, url, body):
+    """After a 500 from /train, check if the job actually started."""
+    import asyncio
+    await asyncio.sleep(1)
+    try:
+        r = await client.get(f"{url}/jobs")
+        jobs = r.json()
+        # Find the most recent running job
+        running = [(jid, j) for jid, j in jobs.items() if j.get("status") == "running"]
+        if running:
+            jid = running[-1][0]
+            _save_job_local(jid, {"status": "running", "config": body, "job_name": body.get("job_name")})
+            return {"job_id": jid, "status": "running",
+                    "note": "Server returned 500 but job started successfully."}
+        # Check queue
+        qr = await client.get(f"{url}/queue")
+        qjobs = qr.json().get("jobs", [])
+        if qjobs:
+            qj = qjobs[-1]
+            jid = qj.get("job_id", "")
+            _save_job_local(jid, {"status": "queued", "config": body, "job_name": body.get("job_name")})
+            return {"job_id": jid, "status": "queued",
+                    "note": "Server returned 500 but job was queued successfully."}
+    except Exception:
+        pass
+    return {"ok": False, "error": "Server returned 500. Job may have started — check server status."}
+
+
+@app.get("/api/training/queue")
+async def training_queue():
+    """Proxy: list queued jobs on training server."""
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(f"{url}/queue")
+            data = r.json()
+            # Enrich queued jobs with local config
+            enriched = []
+            for qj in data.get("jobs", []):
+                jid = qj.get("job_id") or qj.get("id", "")
+                if jid:
+                    job_path = TRAIN_LOG_DIR / f"{jid}.json"
+                    if job_path.exists():
+                        local = json.loads(job_path.read_text())
+                        qj["config"] = qj.get("config") or local.get("config") or {}
+                        qj["job_name"] = qj.get("job_name") or local.get("job_name")
+                enriched.append(qj)
+            return {"ok": True, "queue_length": data.get("queue_length", len(enriched)), "jobs": enriched}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "queue_length": 0, "jobs": []}
+
+
+@app.delete("/api/training/queue/{job_id}")
+async def training_cancel_queued(job_id: str):
+    """Proxy: cancel a queued job before it starts."""
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.delete(f"{url}/queue/{job_id}")
+            data = r.json()
+            _save_job_local(job_id, {"status": "cancelled"})
+            return data
+        except Exception as e:
+            return {"error": str(e)}
+
+
+@app.get("/api/training/jobs")
+async def training_jobs():
+    """Proxy: list training jobs + queue, merged with local history."""
+    url = _training_server_url()
+    server_jobs = {}
+    queued_ids: set = set()
+    server_online = False
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(f"{url}/jobs")
+            server_jobs = r.json()
+            server_online = True
+            # Save each to local (updates status from server)
+            for jid, jdata in server_jobs.items():
+                _save_job_local(jid, jdata)
+        except Exception:
+            pass
+        # Also fetch queue to include queued jobs
+        if server_online:
+            try:
+                qr = await client.get(f"{url}/queue")
+                qdata = qr.json()
+                for qj in qdata.get("jobs", []):
+                    qid = qj.get("job_id") or qj.get("id", "")
+                    if qid and qid not in server_jobs:
+                        queued_ids.add(qid)
+                        server_jobs[qid] = {"status": "queued", "returncode": None}
+                        _save_job_local(qid, {"status": "queued"})
+            except Exception:
+                pass
+
+    # Merge with local history — enrich server jobs with locally saved config
+    merged = dict(server_jobs)
+    for f in sorted(TRAIN_LOG_DIR.glob("*.json"), reverse=True):
+        try:
+            local = json.loads(f.read_text())
+            jid = local.get("job_id", f.stem)
+            config = local.get("config") or {}
+            if jid in merged:
+                # Server job exists but may lack config — enrich from local
+                if not merged[jid].get("config"):
+                    merged[jid]["config"] = config
+                if not merged[jid].get("job_name"):
+                    merged[jid]["job_name"] = local.get("job_name")
+                if not merged[jid].get("dataset_repo_id"):
+                    merged[jid]["dataset_repo_id"] = config.get("dataset_repo_id") or config.get("repo_id", "")
+            else:
+                local_status = local.get("status", "unknown")
+                # If server is online but doesn't list this job, it's no longer active
+                if server_online and local_status in ("running", "queued", "downloading"):
+                    local_status = "stopped"
+                    _save_job_local(jid, {"status": "stopped"})
+                merged[jid] = {
+                    "status": local_status,
+                    "returncode": local.get("returncode"),
+                    "job_name": local.get("job_name"),
+                    "config": config,
+                    "dataset_repo_id": config.get("dataset_repo_id") or config.get("repo_id", ""),
+                    "last_updated": local.get("last_updated"),
+                    "wb_url": local.get("wb_url"),
+                    "local_only": True,
+                }
+        except Exception:
+            pass
+    return {"server_online": server_online, "jobs": merged}
+
+
+@app.get("/api/training/jobs/{job_id}/status")
+async def training_job_status(job_id: str):
+    """Proxy: get training job status, enriched with local config."""
+    url = _training_server_url()
+    server_data = None
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(f"{url}/jobs/{job_id}/status")
+            data = r.json()
+            if "detail" not in data:
+                _save_job_local(job_id, data)
+                server_data = data
+        except Exception:
+            pass
+    # Always enrich with local data (config, job_name, etc.)
+    job_path = TRAIN_LOG_DIR / f"{job_id}.json"
+    if job_path.exists():
+        local = json.loads(job_path.read_text())
+        result = {
+            "job_id": job_id,
+            "status": (server_data or {}).get("status") or local.get("status", "unknown"),
+            "returncode": (server_data or {}).get("returncode", local.get("returncode")),
+            "config": local.get("config") or {},
+            "job_name": local.get("job_name"),
+            "cmd": local.get("cmd"),
+            "started_at": (server_data or {}).get("started_at") or local.get("started_at"),
+            "finished_at": (server_data or {}).get("finished_at") or local.get("finished_at"),
+            "wb_url": local.get("wb_url"),
+        }
+        if not server_data:
+            result["local_only"] = True
+        return result
+    if server_data:
+        return {"job_id": job_id, **server_data}
+    return {"error": "Job not found"}
+
+
+@app.get("/api/training/jobs/{job_id}/logs")
+async def training_job_logs(job_id: str, tail: int = 100):
+    """Proxy: get training job logs. Falls back to local."""
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(f"{url}/jobs/{job_id}/logs", params={"tail": tail})
+            data = r.json()
+            if "detail" not in data:
+                lines = data.get("lines", [])
+                _save_job_local(job_id, log_lines=lines)
+                return data
+        except Exception:
+            pass
+    # Fallback to local
+    job_path = TRAIN_LOG_DIR / f"{job_id}.json"
+    if job_path.exists():
+        local = json.loads(job_path.read_text())
+        lines = local.get("logs", [])
+        if tail:
+            lines = lines[-tail:]
+        return {"job_id": job_id, "lines": lines, "local_only": True}
+    return {"error": "Log not found"}
+
+
+@app.delete("/api/training/jobs/{job_id}")
+async def training_stop_job(job_id: str):
+    """Proxy: stop a training job."""
+    url = _training_server_url()
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.delete(f"{url}/jobs/{job_id}")
+            data = r.json()
+            _save_job_local(job_id, {"status": "stopped"})
+            return data
+        except Exception as e:
+            return {"error": str(e)}
+
+
+@app.post("/api/training/kill-all")
+async def training_kill_all():
+    """Kill all running jobs and clear the queue on the remote server."""
+    url = _training_server_url()
+    results = {"killed": [], "cancelled": [], "errors": []}
+    async with httpx.AsyncClient(timeout=15) as client:
+        # 1. Get running jobs and kill them
+        try:
+            r = await client.get(f"{url}/jobs")
+            for jid, jdata in r.json().items():
+                if jdata.get("status") == "running":
+                    try:
+                        await client.delete(f"{url}/jobs/{jid}")
+                        _save_job_local(jid, {"status": "stopped"})
+                        results["killed"].append(jid)
+                    except Exception as e:
+                        results["errors"].append(f"kill {jid}: {e}")
+        except Exception as e:
+            results["errors"].append(f"list jobs: {e}")
+        # 2. Get queued jobs and cancel them
+        try:
+            qr = await client.get(f"{url}/queue")
+            for qj in qr.json().get("jobs", []):
+                qid = qj.get("job_id") or qj.get("id", "")
+                if qid:
+                    try:
+                        await client.delete(f"{url}/queue/{qid}")
+                        _save_job_local(qid, {"status": "cancelled"})
+                        results["cancelled"].append(qid)
+                    except Exception as e:
+                        results["errors"].append(f"cancel {qid}: {e}")
+        except Exception as e:
+            results["errors"].append(f"list queue: {e}")
+    return {"ok": True, **results}
+
+
+@app.delete("/api/training/history/{job_id}")
+async def delete_job_history(job_id: str):
+    """Delete a local job history entry."""
+    job_path = TRAIN_LOG_DIR / f"{job_id}.json"
+    if job_path.exists():
+        job_path.unlink()
+        return {"ok": True}
+    return {"ok": False, "error": "Not found"}
 
 
 @app.get("/api/datasets/{name}/segments/{ep}")
@@ -1755,6 +2325,43 @@ async def list_hf_models():
                 "matched_dataset": matched_ds,
             })
         return {"ok": True, "models": result, "hf_user": hf_user}
+    except ImportError:
+        return {"ok": False, "error": "huggingface_hub not installed"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/hf-datasets")
+async def list_hf_datasets():
+    """List datasets from user's HF account."""
+    cfg = load_config()
+    hf_user = cfg.get("hf_repo_name", "")
+    if not hf_user:
+        return {"ok": False, "error": "HF repo name not set in config"}
+    try:
+        from huggingface_hub import HfApi
+        env = _read_env()
+        token = env.get("HF_TOKEN", None)
+        api = HfApi(token=token)
+        datasets = list(api.list_datasets(author=hf_user))
+        # Check which ones already exist locally
+        local_names = set()
+        data_dir = ROOT / "data"
+        if data_dir.exists():
+            for d in data_dir.iterdir():
+                if (d / "meta" / "info.json").exists():
+                    local_names.add(d.name)
+        result = []
+        for ds in datasets:
+            ds_name = ds.id.split("/")[-1] if "/" in ds.id else ds.id
+            result.append({
+                "id": ds.id,
+                "name": ds_name,
+                "last_modified": ds.lastModified.isoformat() if ds.lastModified else None,
+                "private": ds.private,
+                "local_exists": ds_name in local_names,
+            })
+        return {"ok": True, "datasets": result, "hf_user": hf_user}
     except ImportError:
         return {"ok": False, "error": "huggingface_hub not installed"}
     except Exception as e:
@@ -2112,12 +2719,18 @@ def _detect_segments(frames_action, fps):
 def _parse_object_from_task(task):
     """Extract object name from task description."""
     import re
+    # "pick up the pink bow to the green bowl"
     m = re.search(r"pick\s+up\s+the\s+(.+?)\s+to\s+the\s+", task, re.I)
     if m:
         return m.group(1)
+    # "Pick up the object and place it in the bin."
+    m = re.search(r"pick\s+up\s+the\s+(.+?)\s+and\s+place\s+", task, re.I)
+    if m:
+        return m.group(1)
+    # "pick up the pink bow"
     m = re.search(r"pick\s+up\s+the\s+(.+)", task, re.I)
     if m:
-        return m.group(1).strip()
+        return m.group(1).strip().rstrip(".")
     m = re.search(r"(?:move|put|bring|grab)\s+the\s+(.+?)\s+(?:to|into|onto)\s+", task, re.I)
     if m:
         return m.group(1)
@@ -3213,14 +3826,16 @@ async def datacollect_start():
         f"--dataset.fps={fps}",
         f"--dataset.encoder_threads={dc_cfg.get('encoder_threads', 4)}",
     ]
-    if dc_cfg.get("resume", False):
+    import shutil
+    dataset_root = Path(dc_cfg.get("dataset_root", "./data/dataset"))
+    if not dataset_root.is_absolute():
+        dataset_root = ROOT / dataset_root
+    dataset_exists = dataset_root.exists() and (dataset_root / "meta" / "info.json").exists()
+
+    if dc_cfg.get("resume", False) and dataset_exists:
         cmd.append("--resume=true")
-    else:
+    elif not dc_cfg.get("resume", False):
         # Remove existing dataset directory to avoid FileExistsError
-        import shutil
-        dataset_root = Path(dc_cfg.get("dataset_root", "./data/dataset"))
-        if not dataset_root.is_absolute():
-            dataset_root = ROOT / dataset_root
         if dataset_root.exists():
             shutil.rmtree(dataset_root)
             print(f"[DataCollect] Removed existing dataset dir: {dataset_root}")
