@@ -2022,11 +2022,12 @@ conda run -n lerobot uvicorn train_api:app \
             <span id="evalModelStatus" style="font-size:0.82rem;color:#888"></span>
           </div>
           <div id="evalModelDownloadSection" style="display:none;margin-top:8px;padding:10px 14px;background:#fff3e0;border-radius:8px;border:1px solid #ffe0b2">
-            <div style="display:flex;align-items:center;gap:10px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
               <span style="font-size:0.85rem;color:#e65100">Model not found locally.</span>
               <button class="btn btn-sm" id="evalDownloadBtn" onclick="evalDownloadModel()" style="background:#ff9800;font-size:0.78rem;padding:4px 14px">Download Model</button>
               <span id="evalDownloadStatus" style="font-size:0.82rem;color:#888"></span>
             </div>
+            <pre id="evalDownloadLog" style="display:none;font-family:'SF Mono','Menlo',monospace;font-size:0.72rem;background:#1e1e1e;color:#d4d4d4;border-radius:6px;padding:8px 10px;max-height:150px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;margin:0"></pre>
           </div>
         </div>
 
@@ -7249,8 +7250,11 @@ async function evalDownloadModel() {
   if (!evalSelectedModel) return;
   const btn = document.getElementById('evalDownloadBtn');
   const st = document.getElementById('evalDownloadStatus');
+  const logEl = document.getElementById('evalDownloadLog');
   btn.disabled = true;
   st.textContent = 'Starting download...';
+  logEl.style.display = '';
+  logEl.textContent = 'Starting download...\n';
   try {
     const r = await fetch('/api/model-download', {
       method: 'POST',
@@ -7264,22 +7268,29 @@ async function evalDownloadModel() {
         const sr = await fetch('/api/model-download/status');
         const sd = await sr.json();
         st.textContent = sd.status || 'Downloading...';
+        if (sd.log_lines && sd.log_lines.length) {
+          logEl.textContent = sd.log_lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
         if (!sd.running) {
           clearInterval(evalDownloadPollTimer);
           if (sd.error) {
-            st.textContent = 'Error: ' + sd.error;
+            st.innerHTML = `<span style="color:#d93025">Error: ${sd.error}</span>`;
             btn.disabled = false;
           } else {
-            st.textContent = 'Downloaded!';
-            evalSelectedModel.local_exists = true;
-            document.getElementById('evalModelDownloadSection').style.display = 'none';
-            document.getElementById('evalRunBtn').disabled = false;
-            document.getElementById('evalTestInferBtn').disabled = false;
-            document.getElementById('evalRunStatus').textContent = 'Ready';
-            // Update dropdown text
-            const sel = document.getElementById('evalModelSelect');
-            const opt = sel.options[sel.selectedIndex];
-            if (opt) opt.textContent = evalSelectedModel.name;
+            st.innerHTML = '<span style="color:#34a853;font-weight:600">Download complete!</span>';
+            logEl.textContent += '\nDownload complete!';
+            logEl.scrollTop = logEl.scrollHeight;
+            // Auto-refresh model list after 1.5s
+            setTimeout(async () => {
+              await evalLoadModels();
+              // Re-select the model
+              const idx = evalModels.findIndex(m => m.name === evalSelectedModel.name);
+              if (idx >= 0) {
+                document.getElementById('evalModelSelect').value = idx;
+                evalSelectModel();
+              }
+            }, 1500);
           }
         }
       } catch(e) {}

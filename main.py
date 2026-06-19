@@ -2556,6 +2556,7 @@ model_download_state = {
     "status": "",
     "error": None,
     "model_name": "",
+    "log_lines": [],
 }
 
 
@@ -2566,6 +2567,7 @@ def _run_model_download(repo_id: str, model_name: str):
     state["status"] = f"Downloading {repo_id}..."
     state["error"] = None
     state["model_name"] = model_name
+    state["log_lines"] = [f"Downloading {repo_id}..."]
 
     model_dir = ROOT / "models" / model_name
     try:
@@ -2600,6 +2602,7 @@ print("DONE", flush=True)
             line = line.rstrip()
             if line:
                 state["status"] = line
+                state["log_lines"].append(line)
         proc.wait()
         if proc.returncode != 0:
             state["error"] = f"Download failed (exit code {proc.returncode})"
