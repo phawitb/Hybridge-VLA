@@ -21,7 +21,7 @@
   }
   .nav-item:hover { background: #f0f4ff; color: #1a73e8; }
   .nav-item.active { background: #e8f0fe; color: #1a73e8; border-left-color: #1a73e8; font-weight: 600; }
-  .nav-section { padding: 16px 16px 6px; font-size: 0.7rem; text-transform: uppercase; color: #999; font-weight: 600; letter-spacing: 0.5px; }
+  .nav-section { padding: 18px 16px 8px; font-size: 0.75rem; text-transform: uppercase; color: #1a73e8; font-weight: 700; letter-spacing: 0.8px; border-bottom: 2px solid #e8f0fe; margin: 0 12px; padding-left: 4px; }
 
   .main { flex: 1; margin-left: 220px; display: flex; min-height: 100vh; }
   .main-content { flex: 1; padding: 24px 32px; overflow-y: auto; min-width: 0; }
@@ -348,16 +348,19 @@
 <div class="sidebar">
   <div class="sidebar-header">Hybridge VLA</div>
   <div class="sidebar-nav">
-    <div class="nav-section">Menu</div>
+    <div class="nav-section">Preparing</div>
+    <div class="nav-item" data-tab="data-collect">Data Collection</div>
+    <div class="nav-item" data-tab="visualize">Datasets</div>
+    <div class="nav-item" data-tab="training">Training</div>
+    <div class="nav-section">Run Model</div>
+    <div class="nav-item" data-tab="inference">VLA Inference</div>
+    <div class="nav-item" data-tab="evaluate">Evaluate</div>
+    <div class="nav-section">Hybridge-VLA</div>
     <div class="nav-item active" data-tab="config-test">Config & Test</div>
     <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
     <div class="nav-item" data-tab="run">Run</div>
-    <div class="nav-item" data-tab="data-collect">Data Collection</div>
-    <div class="nav-item" data-tab="visualize">Datasets</div>
-    <div class="nav-item" data-tab="inference">VLA Inference</div>
+    <div class="nav-section">Others</div>
     <div class="nav-item" data-tab="fakecam">Fake Camera</div>
-    <div class="nav-item" data-tab="training">Training</div>
-    <div class="nav-item" data-tab="evaluate">Evaluate</div>
   </div>
 </div>
 
