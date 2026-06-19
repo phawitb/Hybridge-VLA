@@ -6843,6 +6843,7 @@ let evalEpPollTimer = null;   // polls /api/eval/status during episode
 let evalCountdownTimer = null; // 1s countdown interval
 let evalCountdownSec = 0;
 let evalEpRunning = false;     // true while episode process is alive
+let evalEpAugData = null;     // per-episode augmentation data {params, cameras}
 
 function evalInit() {
   evalInited = true;
@@ -7299,9 +7300,35 @@ async function evalTestInference() {
   stopBtn.style.display = '';
   st.textContent = 'Starting...';
 
-  // Save fakecam params before starting (generates random if random mode)
+  // Save fakecam params + capture preview before starting
   if (document.getElementById('evalUseFakecam').checked) {
-    await _evalSaveFakecamParams();
+    const savedParams = await _evalSaveFakecamParams();
+    st.textContent = 'Capturing preview...';
+    try {
+      const pr = await fetch('/api/eval/fakecam-preview', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({params: savedParams}),
+      });
+      const pd = await pr.json();
+      if (pd.ok) {
+        const wrap = document.getElementById('evalFakecamPreview');
+        const container = document.getElementById('evalFakecamCams');
+        wrap.style.display = '';
+        container.innerHTML = '';
+        for (const cam of pd.cameras) {
+          if (cam.error) continue;
+          const div = document.createElement('div');
+          div.innerHTML = `
+            <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
+            <div style="display:flex;gap:6px">
+              <div style="flex:1;text-align:center"><div style="font-size:0.65rem;color:#999;margin-bottom:2px">Original</div><img src="data:image/jpeg;base64,${cam.original}" style="width:100%;border-radius:4px;border:1px solid #ddd"></div>
+              <div style="flex:1;text-align:center"><div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div><img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88"></div>
+            </div>`;
+          container.appendChild(div);
+        }
+      }
+    } catch(e) {}
+    st.textContent = 'Starting...';
   }
 
   try {
@@ -7318,7 +7345,6 @@ async function evalTestInference() {
       return;
     }
     st.innerHTML = '<span style="color:#34a853">Running...</span>';
-    if (document.getElementById('evalUseFakecam').checked) evalAugPreview();
     // Poll log into evalLog
     evalTestPollTimer = setInterval(async () => {
       try {
@@ -7441,9 +7467,43 @@ async function evalStartEpisode() {
   document.getElementById('evalStopBtn').style.display = '';
   document.getElementById('evalRecordSection').style.display = 'none';
 
-  // 0) Save fakecam params (generates random if random mode)
+  // 0) Save fakecam params + capture preview BEFORE starting (camera not locked yet)
+  evalEpAugData = null;
   if (document.getElementById('evalUseFakecam').checked) {
-    await _evalSaveFakecamParams();
+    const savedParams = await _evalSaveFakecamParams();
+    st.innerHTML = '<span style="color:#1a73e8">Capturing fakecam preview...</span>';
+    try {
+      const pr = await fetch('/api/eval/fakecam-preview', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({params: savedParams}),
+      });
+      const pd = await pr.json();
+      if (pd.ok) {
+        evalEpAugData = {params: savedParams, cameras: pd.cameras};
+        // Show preview in sidebar
+        const wrap = document.getElementById('evalFakecamPreview');
+        const container = document.getElementById('evalFakecamCams');
+        wrap.style.display = '';
+        container.innerHTML = '';
+        for (const cam of pd.cameras) {
+          if (cam.error) continue;
+          const div = document.createElement('div');
+          div.innerHTML = `
+            <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
+            <div style="display:flex;gap:6px">
+              <div style="flex:1;text-align:center">
+                <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Original</div>
+                <img src="data:image/jpeg;base64,${cam.original}" style="width:100%;border-radius:4px;border:1px solid #ddd">
+              </div>
+              <div style="flex:1;text-align:center">
+                <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div>
+                <img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88">
+              </div>
+            </div>`;
+          container.appendChild(div);
+        }
+      }
+    } catch(e) {}
   }
 
   // 1) Start the lerobot-rollout process
@@ -7468,8 +7528,6 @@ async function evalStartEpisode() {
     document.getElementById('evalStopBtn').style.display = 'none';
     return;
   }
-
-  _evalShowFakecamPreview();
   evalEpRunning = true;
   let countdownStarted = false;
   const initStart = Date.now();
@@ -7545,11 +7603,22 @@ async function evalStopEpisode() {
 
 async function evalRecordResult(result) {
   if (!evalSession) return;
-  evalSession.results.push({
+  const epResult = {
     run: evalSession.completed + 1,
     result: result,
     timestamp: new Date().toISOString(),
-  });
+  };
+  if (evalEpAugData) {
+    epResult.aug_params = evalEpAugData.params;
+    // Store preview image references (base64 per camera)
+    epResult.aug_preview = (evalEpAugData.cameras || []).map(c => ({
+      name: c.name,
+      original: c.original,
+      augmented: c.augmented,
+    }));
+  }
+  evalSession.results.push(epResult);
+  evalEpAugData = null;
   evalSession.completed++;
   if (result === 'success') evalSession.success++;
   else if (result === 'fail') evalSession.fail++;

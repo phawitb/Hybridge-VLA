@@ -4624,15 +4624,20 @@ async def eval_fakecam_preview(request: Request):
         if not ret or frame is None:
             result.append({"name": cam_name, "error": f"Cannot read from camera {idx}"})
             continue
+        # Resize for preview (keep small for storage in session JSON)
+        preview_w = 320
+        h, w = frame.shape[:2]
+        preview_h = int(h * preview_w / w)
+        small = cv2.resize(frame, (preview_w, preview_h))
         # Encode original
-        _, orig_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, orig_buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
         orig_b64 = base64.b64encode(orig_buf).decode()
         # Apply augmentation (if any params set)
         if cam_p or light_p:
-            aug = _aug_frame(frame, cam_p, light_p)
+            aug = _aug_frame(small, cam_p, light_p)
         else:
-            aug = frame
-        _, aug_buf = cv2.imencode(".jpg", aug, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            aug = small
+        _, aug_buf = cv2.imencode(".jpg", aug, [cv2.IMWRITE_JPEG_QUALITY, 70])
         aug_b64 = base64.b64encode(aug_buf).decode()
         result.append({"name": cam_name, "original": orig_b64, "augmented": aug_b64})
 
