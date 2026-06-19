@@ -2528,11 +2528,13 @@ async def list_hf_models():
         datasets = list(api.list_datasets(author=hf_user))
         ds_names = [d.id.split("/")[-1] for d in datasets]
 
+        models_dir = ROOT / "models"
         result = []
         for m in models:
             model_name = m.modelId.split("/")[-1] if "/" in m.modelId else m.modelId
             # Match model to dataset: strip common prefixes and find longest substring match
             matched_ds = _match_model_to_dataset(model_name, ds_names, hf_user)
+            local_exists = (models_dir / model_name).exists()
             result.append({
                 "id": m.modelId,
                 "name": model_name,
@@ -2540,12 +2542,95 @@ async def list_hf_models():
                 "tags": m.tags or [],
                 "private": m.private,
                 "matched_dataset": matched_ds,
+                "local_exists": local_exists,
             })
         return {"ok": True, "models": result, "hf_user": hf_user}
     except ImportError:
         return {"ok": False, "error": "huggingface_hub not installed"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+model_download_state = {
+    "running": False,
+    "status": "",
+    "error": None,
+    "model_name": "",
+}
+
+
+def _run_model_download(repo_id: str, model_name: str):
+    """Background thread: download model from Hugging Face Hub."""
+    state = model_download_state
+    state["running"] = True
+    state["status"] = f"Downloading {repo_id}..."
+    state["error"] = None
+    state["model_name"] = model_name
+
+    model_dir = ROOT / "models" / model_name
+    try:
+        script = f"""
+import sys, os
+from huggingface_hub import snapshot_download
+repo_id = {repr(repo_id)}
+local_dir = {repr(str(model_dir))}
+print(f"Downloading {{repo_id}} to {{local_dir}}", flush=True)
+snapshot_download(
+    repo_id=repo_id,
+    repo_type="model",
+    local_dir=local_dir,
+)
+print("DONE", flush=True)
+"""
+        lerobot_python = "/opt/miniconda3/envs/lerobot/bin/python"
+        if not Path(lerobot_python).exists():
+            lerobot_python = "python3"
+
+        sub_env = dict(os.environ)
+        hf_token = _read_env().get("HF_TOKEN", "")
+        if hf_token:
+            sub_env["HF_TOKEN"] = hf_token
+
+        proc = subprocess.Popen(
+            [lerobot_python, "-c", script],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=sub_env,
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                state["status"] = line
+        proc.wait()
+        if proc.returncode != 0:
+            state["error"] = f"Download failed (exit code {proc.returncode})"
+            state["status"] = "Failed"
+        else:
+            state["status"] = "Done"
+            state["error"] = None
+    except Exception as e:
+        state["error"] = str(e)
+        state["status"] = "Failed"
+    finally:
+        state["running"] = False
+
+
+@app.post("/api/model-download")
+async def model_download(request: Request):
+    """Download a model from HuggingFace to ./models/"""
+    if model_download_state["running"]:
+        return {"ok": False, "error": "Download already in progress"}
+    body = await request.json()
+    repo_id = body.get("repo_id", "")
+    model_name = body.get("model_name", "")
+    if not repo_id or not model_name:
+        return {"ok": False, "error": "Missing repo_id or model_name"}
+    threading.Thread(target=_run_model_download, args=(repo_id, model_name), daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/model-download/status")
+async def model_download_status():
+    return dict(model_download_state)
 
 
 @app.get("/api/hf-datasets")
@@ -4381,6 +4466,302 @@ async def calibrate_move_to(request: Request):
         "bump_height": round(bump_height, 2),
         "safety_height_cm": safety_cm,
     }
+
+
+# ── Evaluate ──
+
+EVAL_DIR = ROOT / "data" / "eval_sessions"
+EVAL_DIR.mkdir(parents=True, exist_ok=True)
+
+eval_state = {"running": False, "process": None, "log_lines": [], "session_id": None}
+
+EVAL_RESET_POS_FILE = EVAL_DIR / "reset_position.json"
+
+
+def _eval_load_reset_position():
+    """Load saved reset position or return None."""
+    if EVAL_RESET_POS_FILE.exists():
+        try:
+            return json.loads(EVAL_RESET_POS_FILE.read_text())
+        except Exception:
+            pass
+    return None
+
+
+def _eval_move_to_reset():
+    """Connect robot, move to saved reset position, disconnect. Returns (ok, error)."""
+    pos = _eval_load_reset_position()
+    if not pos:
+        return True, None  # No reset position saved, skip
+
+    try:
+        connect_robot()
+        # Move gradually to reset position
+        for _ in range(30):  # ~1 second at 30 iterations
+            robot_send_positions(pos)
+            time.sleep(0.033)
+        disconnect_robot()
+        return True, None
+    except Exception as e:
+        try:
+            disconnect_robot()
+        except Exception:
+            pass
+        return False, str(e)
+
+
+def _eval_reader(proc, state):
+    """Background thread to read eval subprocess output."""
+    for line in iter(proc.stdout.readline, b''):
+        text = line.decode("utf-8", errors="replace").rstrip()
+        state["log_lines"].append(text)
+        if len(state["log_lines"]) > 2000:
+            state["log_lines"] = state["log_lines"][-1500:]
+    proc.wait()
+    state["running"] = False
+
+
+@app.get("/api/eval/reset-position")
+async def eval_get_reset_position():
+    """Get saved reset position."""
+    pos = _eval_load_reset_position()
+    return {"ok": True, "position": pos}
+
+
+@app.post("/api/eval/reset-position")
+async def eval_save_reset_position(request: Request):
+    """Save current robot position as the eval reset position."""
+    body = await request.json()
+    pos = body.get("position")
+    if pos:
+        # Directly provided position
+        EVAL_RESET_POS_FILE.write_text(json.dumps(pos, indent=2))
+        return {"ok": True, "position": pos}
+    # Read from robot — auto-connect if needed
+    auto_connected = False
+    try:
+        if not robot_state["connected"]:
+            connect_robot()
+            auto_connected = True
+        pos = robot_get_positions()
+        EVAL_RESET_POS_FILE.write_text(json.dumps(pos, indent=2))
+        if auto_connected:
+            disconnect_robot()
+        return {"ok": True, "position": pos}
+    except Exception as e:
+        if auto_connected:
+            try:
+                disconnect_robot()
+            except Exception:
+                pass
+        return {"ok": False, "error": str(e)}
+
+
+@app.delete("/api/eval/reset-position")
+async def eval_delete_reset_position():
+    """Delete saved reset position."""
+    if EVAL_RESET_POS_FILE.exists():
+        EVAL_RESET_POS_FILE.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/eval/move-to-reset")
+async def eval_move_to_reset():
+    """Move robot to saved reset position."""
+    pos = _eval_load_reset_position()
+    if not pos:
+        return {"ok": False, "error": "No reset position saved"}
+    ok, err = _eval_move_to_reset()
+    if ok:
+        return {"ok": True}
+    return {"ok": False, "error": err}
+
+
+@app.post("/api/eval/start")
+async def eval_start(request: Request):
+    """Start lerobot-rollout process for evaluation."""
+    if eval_state["running"]:
+        return {"ok": False, "error": "Already running"}
+    body = await request.json()
+    model_id = body.get("model_id", "")
+    model_name = body.get("model_name", "")
+    task = body.get("task", "")
+    fps = int(body.get("fps", 30))
+    cam_width = int(body.get("width", 320))
+    cam_height = int(body.get("height", 240))
+    fourcc = body.get("fourcc", "MJPG")
+    use_fakecam = body.get("use_fakecam", False)
+
+    if not model_name:
+        return {"ok": False, "error": "No model selected"}
+
+    # Stop teleop/robot if running
+    if teleop_state["running"]:
+        await teleop_stop()
+    if robot_state["connected"]:
+        disconnect_robot()
+    time.sleep(0.3)
+
+    # Move robot to reset position before starting rollout
+    reset_pos = _eval_load_reset_position()
+    if reset_pos:
+        ok, err = _eval_move_to_reset()
+        if not ok:
+            return {"ok": False, "error": f"Failed to move to reset position: {err}"}
+        time.sleep(0.3)
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    cams = robot_cfg.get("cameras", {})
+
+    # Build cameras config string
+    cam_parts = []
+    for cam_name, cam_c in cams.items():
+        cam_parts.append(
+            f"{cam_name}: {{type: opencv, index_or_path: {cam_c.get('index', 0)}, "
+            f"width: {cam_width}, height: {cam_height}, fps: {fps}, fourcc: {fourcc}}}"
+        )
+    cameras_str = "{" + ", ".join(cam_parts) + "}"
+
+    model_dir = f"./models/{model_name}"
+
+    cmd = [
+        "/opt/miniconda3/envs/lerobot/bin/lerobot-rollout",
+        f"--robot.type=so101_follower",
+        f"--robot.port={robot_cfg.get('port', '')}",
+        f"--robot.id={robot_cfg.get('id', 'my_awesome_follower_arm')}",
+        f"--robot.cameras={cameras_str}",
+        f"--policy.path={model_dir}",
+        f"--fps={fps}",
+        f"--display_data=false",
+    ]
+    if task:
+        cmd.append(f"--task={task}")
+
+    if use_fakecam:
+        cmd = ["python", "fakecam_inject.py", "--params-file", "fakecam_params.json", "--"] + cmd
+
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        eval_state["process"] = p
+        eval_state["running"] = True
+        eval_state["log_lines"] = []
+        threading.Thread(target=_eval_reader, args=(p, eval_state), daemon=True).start()
+        return {"ok": True, "pid": p.pid, "cmd": " ".join(cmd)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/eval/stop")
+async def eval_stop(request: Request = None):
+    """Stop the running eval process and optionally move to reset position."""
+    reset_after = False
+    if request:
+        try:
+            body = await request.json()
+            reset_after = body.get("reset", False)
+        except Exception:
+            pass
+
+    if not eval_state["running"] and not eval_state["process"]:
+        if reset_after:
+            pos = _eval_load_reset_position()
+            if pos:
+                _eval_move_to_reset()
+        return {"ok": True, "message": "Not running"}
+
+    p = eval_state["process"]
+    if p:
+        import signal as sig
+        try:
+            os.killpg(os.getpgid(p.pid), sig.SIGINT)
+        except (ProcessLookupError, OSError):
+            try:
+                p.send_signal(sig.SIGINT)
+            except (ProcessLookupError, OSError):
+                pass
+        try:
+            p.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(p.pid), sig.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
+                    p.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+    eval_state["running"] = False
+
+    # Move robot back to reset position after process is fully stopped
+    if reset_after:
+        time.sleep(0.5)  # Wait for process to release robot
+        pos = _eval_load_reset_position()
+        if pos:
+            ok, err = _eval_move_to_reset()
+            return {"ok": True, "reset_ok": ok, "reset_error": err}
+
+    return {"ok": True}
+
+
+@app.get("/api/eval/status")
+async def eval_status():
+    """Get eval process status and logs."""
+    return {
+        "running": eval_state["running"],
+        "lines": eval_state["log_lines"][-100:],
+    }
+
+
+@app.post("/api/eval/sessions")
+async def eval_save_session(request: Request):
+    """Save an evaluation session."""
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"ok": False, "error": "No session_id"}
+    path = EVAL_DIR / f"{session_id}.json"
+    path.write_text(json.dumps(body, ensure_ascii=False, indent=2))
+    return {"ok": True}
+
+
+@app.get("/api/eval/sessions")
+async def eval_list_sessions():
+    """List saved eval sessions."""
+    sessions = []
+    for f in sorted(EVAL_DIR.glob("*.json"), reverse=True):
+        try:
+            d = json.loads(f.read_text())
+            sessions.append({
+                "id": d.get("session_id", f.stem),
+                "model": d.get("model_name", ""),
+                "task": d.get("task", ""),
+                "target": d.get("target_runs", 0),
+                "completed": d.get("completed", 0),
+                "success": d.get("success", 0),
+                "fail": d.get("fail", 0),
+                "created": d.get("created", ""),
+            })
+        except Exception:
+            pass
+    return {"ok": True, "sessions": sessions}
+
+
+@app.get("/api/eval/sessions/{session_id}")
+async def eval_get_session(session_id: str):
+    """Get a specific eval session."""
+    path = EVAL_DIR / f"{session_id}.json"
+    if not path.exists():
+        return {"ok": False, "error": "Session not found"}
+    return {"ok": True, **json.loads(path.read_text())}
+
+
+@app.delete("/api/eval/sessions/{session_id}")
+async def eval_delete_session(session_id: str):
+    """Delete an eval session."""
+    path = EVAL_DIR / f"{session_id}.json"
+    if path.exists():
+        path.unlink()
+    return {"ok": True}
 
 
 # ── Calibrate JSON API (receive JSON body) ──

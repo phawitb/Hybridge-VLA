@@ -358,6 +358,7 @@
     <div class="nav-item" data-tab="fakecam">Fake Camera</div>
     <div class="nav-item" data-tab="training">Training</div>
     <div class="nav-item" data-tab="experiments">Experiments</div>
+    <div class="nav-item" data-tab="evaluate">Evaluate</div>
   </div>
 </div>
 
@@ -1769,7 +1770,7 @@ place the white eraser             1
   </div><!-- /page-fakecam -->
 
   <!-- ==================== Training ==================== -->
-  <div class="page" id="page-training">
+  <div class="page" id="page-training" style="max-width:none">
     <div class="page-title"><span>Remote</span> Training</div>
 
     <div style="display:flex;gap:16px;align-items:flex-start">
@@ -1939,15 +1940,31 @@ place the white eraser             1
             <input type="text" id="trainServerUrl" class="form-input" style="flex:1;font-size:0.78rem;padding:4px 8px" placeholder="http://100.87.242.52:8000">
             <button class="btn btn-sm" onclick="trainSaveServer()" style="background:#34a853;font-size:0.68rem;padding:2px 8px">Save</button>
           </div>
-          <div id="trainServerHint" style="display:none;margin-top:8px;padding:8px 10px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:0.75rem;color:#856404">
-            <strong>Offline.</strong> SSH and run:<br>
-            <code style="display:block;margin-top:4px;padding:6px 8px;background:#1e1e1e;color:#d4d4d4;border-radius:4px;font-size:0.7rem;line-height:1.6;white-space:pre">cd /home/jupyter-phawit/so101-v2
-conda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000</code>
+          <div id="trainServerHint" style="display:none;margin-top:8px;padding:10px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:0.75rem;color:#856404">
+            <strong>Offline.</strong> SSH to server and run these commands:
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <div style="flex:1;min-width:0;position:relative">
+                <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:4px">1. Start tmux session</div>
+                <div style="position:relative">
+                  <button onclick="trainCopyHint(this,'tmux')" style="position:absolute;top:4px;right:4px;background:#444;color:#ccc;border:none;border-radius:3px;font-size:0.6rem;padding:2px 6px;cursor:pointer;z-index:1">Copy</button>
+                  <pre style="margin:0;padding:8px 10px;background:#1e1e1e;color:#d4d4d4;border-radius:4px;font-size:0.7rem;line-height:1.6;overflow-x:auto;white-space:pre;word-break:normal">tmux</pre>
+                </div>
+              </div>
+              <div style="flex:2;min-width:0;position:relative">
+                <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:4px">2. Start training server</div>
+                <div style="position:relative">
+                  <button onclick="trainCopyHint(this,'cd /home/jupyter-phawit/so101-v2\nconda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000 --reload')" style="position:absolute;top:4px;right:4px;background:#444;color:#ccc;border:none;border-radius:3px;font-size:0.6rem;padding:2px 6px;cursor:pointer;z-index:1">Copy</button>
+                  <pre style="margin:0;padding:8px 10px;background:#1e1e1e;color:#d4d4d4;border-radius:4px;font-size:0.7rem;line-height:1.6;overflow-x:auto;white-space:pre;word-break:normal">cd /home/jupyter-phawit/so101-v2
+conda run -n lerobot uvicorn train_api:app \
+  --host 0.0.0.0 --port 8000 --reload</pre>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Queue -->
-        <div class="config-card" id="trainQueueCard" style="margin-bottom:14px;display:none">
+        <div class="config-card" id="trainQueueCard" style="margin-bottom:14px;display:none;overflow:hidden">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <h3 style="margin:0;font-size:0.9rem">Queue</h3>
             <span id="trainQueueCount" style="font-size:0.72rem;padding:1px 8px;border-radius:10px;background:#e3f2fd;color:#1565c0;font-weight:600">0</span>
@@ -1955,7 +1972,7 @@ conda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000</code>
           <div id="trainQueueList" style="font-size:0.78rem"></div>
         </div>
 
-        <!-- Kill All button (visible when server is online and has running/queued jobs) -->
+        <!-- Kill All button -->
         <div id="trainKillAllCard" style="margin-bottom:14px;display:none">
           <button class="btn btn-danger" onclick="trainKillAll()" style="width:100%;font-size:0.78rem;padding:6px 12px">Kill All &amp; Clear Queue</button>
         </div>
@@ -1968,7 +1985,6 @@ conda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000</code>
             <div style="flex:1"></div>
             <button class="btn btn-sm btn-danger" onclick="trainStopLiveJob()" style="font-size:0.68rem;padding:2px 8px">Stop</button>
           </div>
-          <!-- Progress -->
           <div id="trainLiveProgress" style="display:none;margin-bottom:8px">
             <div style="height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden">
               <div id="trainLiveBar" style="height:100%;width:0%;background:#e8710a;transition:width 0.3s"></div>
@@ -1978,21 +1994,7 @@ conda run -n lerobot uvicorn train_api:app --host 0.0.0.0 --port 8000</code>
               <span id="trainLiveLoss" style="font-size:0.7rem;color:#888"></span>
             </div>
           </div>
-          <!-- Log -->
           <div id="trainLiveLog" style="background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.68rem;line-height:1.4;padding:8px 10px;border-radius:6px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
-        </div>
-
-        <!-- API ref -->
-        <div class="config-card" style="background:#f8f9fa">
-          <h3 style="font-size:0.85rem">API Reference</h3>
-          <div style="font-size:0.72rem;color:#555;line-height:1.8">
-            <div><code>POST /train</code> — Start / queue</div>
-            <div><code>GET /queue</code> — List queue</div>
-            <div><code>DELETE /queue/{id}</code> — Cancel</div>
-            <div><code>GET /jobs</code> — List jobs</div>
-            <div><code>GET /jobs/{id}/logs</code> — Logs</div>
-            <div><code>DELETE /jobs/{id}</code> — Stop</div>
-          </div>
         </div>
       </div>
     </div>
@@ -2795,6 +2797,184 @@ lerobot-rollout \
 
   </div><!-- /page-experiments -->
 
+  <!-- ==================== Evaluate ==================== -->
+  <div class="page" id="page-evaluate" style="max-width:none">
+    <div class="page-title"><span>Evaluate</span></div>
+
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <!-- Main area -->
+      <div style="flex:1;min-width:0">
+
+        <!-- Model selection -->
+        <div class="config-card" style="margin-bottom:14px">
+          <h3>1. Select Model</h3>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <select id="evalModelSelect" class="form-input" style="flex:1" onchange="evalSelectModel()">
+              <option value="">-- Select model --</option>
+            </select>
+            <button class="btn btn-sm" onclick="evalLoadModels()" style="background:#1a73e8">Refresh</button>
+            <span id="evalModelStatus" style="font-size:0.82rem;color:#888"></span>
+          </div>
+          <div id="evalModelDownloadSection" style="display:none;margin-top:8px;padding:10px 14px;background:#fff3e0;border-radius:8px;border:1px solid #ffe0b2">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:0.85rem;color:#e65100">Model not found locally.</span>
+              <button class="btn btn-sm" id="evalDownloadBtn" onclick="evalDownloadModel()" style="background:#ff9800;font-size:0.78rem;padding:4px 14px">Download Model</button>
+              <span id="evalDownloadStatus" style="font-size:0.82rem;color:#888"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Eval config -->
+        <div class="config-card" style="margin-bottom:14px">
+          <h3>2. Evaluation Config</h3>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px">
+            <div class="form-group">
+              <label class="form-label">Task Description</label>
+              <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Target Runs</label>
+              <input type="number" id="evalTargetRuns" class="form-input" value="10" min="1" max="999">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Run Duration (sec)</label>
+              <input type="number" id="evalDuration" class="form-input" value="10" min="5" max="300">
+            </div>
+            <div class="form-group">
+              <label class="form-label">FPS</label>
+              <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Width</label>
+              <input type="number" id="evalWidth" class="form-input" value="320" min="160" max="1920">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Height</label>
+              <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080">
+            </div>
+            <div class="form-group">
+              <label class="form-label">FourCC</label>
+              <input type="text" id="evalFourcc" class="form-input" value="MJPG" maxlength="4" style="text-transform:uppercase">
+            </div>
+          </div>
+          <div style="margin-top:8px">
+            <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="evalUseFakecam"> Use Fake Camera (fakecam_inject.py)
+            </label>
+          </div>
+
+          <!-- Reset Position -->
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e0e0e0">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <span style="font-size:0.85rem;font-weight:600;color:#333">Reset Position</span>
+              <button class="btn btn-sm" onclick="evalCaptureResetPos()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px">Capture Current</button>
+              <button class="btn btn-sm" onclick="evalMoveToReset()" style="background:#ff9800;font-size:0.72rem;padding:2px 10px">Move To Reset</button>
+              <button class="btn btn-sm btn-danger" onclick="evalClearResetPos()" style="font-size:0.72rem;padding:2px 10px">Clear</button>
+            </div>
+            <div id="evalResetPosDisplay" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;color:#888;background:#f8f8f8;border-radius:6px;padding:8px 10px;min-height:24px">
+              No reset position saved. Robot will start from current position.
+            </div>
+          </div>
+        </div>
+
+        <!-- Command preview -->
+        <div class="config-card" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h3 style="margin:0">Command</h3>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn btn-sm" id="evalTestInferBtn" onclick="evalTestInference()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px" disabled>Test Inference</button>
+              <button class="btn btn-sm btn-danger" id="evalTestStopBtn" onclick="evalTestStop()" style="font-size:0.72rem;padding:2px 10px;display:none">Stop</button>
+              <span id="evalTestStatus" style="font-size:0.78rem;color:#888"></span>
+              <button class="btn btn-sm" onclick="evalCopyCmd()" style="font-size:0.72rem;padding:2px 10px">Copy</button>
+            </div>
+          </div>
+          <pre id="evalCmdPreview" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;white-space:pre-wrap;word-break:break-all;line-height:1.6;margin:0;max-height:160px;overflow-y:auto">Select a model to preview command.</pre>
+        </div>
+
+        <!-- Run controls -->
+        <div class="config-card" style="margin-bottom:14px">
+          <h3>3. Run Evaluation</h3>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+            <button class="btn" id="evalRunBtn" onclick="evalStartEpisode()" style="background:#34a853" disabled>Start Episode</button>
+            <button class="btn btn-danger" id="evalStopBtn" onclick="evalStopEpisode()" style="display:none">Stop</button>
+            <span id="evalRunStatus" style="font-size:0.85rem;color:#888">Select a model first</span>
+            <span id="evalCountdown" style="font-size:1.1rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#1a73e8;display:none"></span>
+          </div>
+
+          <!-- Progress -->
+          <div id="evalProgressSection" style="display:none">
+            <div style="display:flex;gap:24px;margin-bottom:14px;flex-wrap:wrap">
+              <div>
+                <span style="font-size:0.8rem;color:#888;display:block">Progress</span>
+                <span id="evalProgressText" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace">0 / 10</span>
+              </div>
+              <div>
+                <span style="font-size:0.8rem;color:#888;display:block">Success Rate</span>
+                <span id="evalSuccessRate" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#34a853">-</span>
+              </div>
+              <div>
+                <span style="font-size:0.8rem;color:#34a853;display:block">Success</span>
+                <span id="evalSuccessCount" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#34a853">0</span>
+              </div>
+              <div>
+                <span style="font-size:0.8rem;color:#d93025;display:block">Fail</span>
+                <span id="evalFailCount" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#d93025">0</span>
+              </div>
+            </div>
+            <div style="height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden;margin-bottom:14px">
+              <div id="evalProgressBar" style="height:100%;width:0%;background:#34a853;transition:width 0.3s"></div>
+            </div>
+          </div>
+
+          <!-- Record buttons -->
+          <div id="evalRecordSection" style="display:none">
+            <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+              <span style="font-size:0.85rem;font-weight:600;color:#555">Episode #<span id="evalCurrentRunNum">1</span> result:</span>
+              <button class="btn" onclick="evalRecordResult('success')" style="background:#34a853;font-size:0.85rem;padding:6px 20px">Success</button>
+              <button class="btn btn-danger" onclick="evalRecordResult('fail')" style="font-size:0.85rem;padding:6px 20px">Fail</button>
+              <button class="btn" onclick="evalRecordResult('skip')" style="background:#888;font-size:0.85rem;padding:6px 20px">Skip</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results log -->
+        <div class="config-card" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h3 style="margin:0">Results</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm" onclick="evalClearAllResults()" style="font-size:0.72rem;padding:2px 10px;background:#ff9800">Clear All</button>
+              <button class="btn btn-sm" onclick="evalExportResults()" style="font-size:0.72rem;padding:2px 10px;background:#607d8b">Export JSON</button>
+              <button class="btn btn-sm btn-danger" onclick="evalResetSession()" style="font-size:0.72rem;padding:2px 10px">Reset</button>
+            </div>
+          </div>
+          <div id="evalResultsList" style="max-height:300px;overflow-y:auto">
+            <div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>
+          </div>
+        </div>
+
+        <!-- Log -->
+        <div class="config-card">
+          <h3>Log</h3>
+          <div id="evalLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start...</div>
+        </div>
+
+      </div>
+
+      <!-- Sidebar: Session history -->
+      <div style="width:300px;flex-shrink:0;position:sticky;top:16px">
+        <div class="config-card">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <h3 style="margin:0;font-size:0.9rem">Sessions</h3>
+            <button class="btn btn-sm" onclick="evalLoadSessions()" style="background:#1a73e8;font-size:0.68rem;padding:2px 8px">Refresh</button>
+          </div>
+          <div id="evalSessionsList" style="max-height:calc(100vh - 200px);overflow-y:auto;font-size:0.82rem">
+            <div style="color:#888;padding:8px 0">No saved sessions.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /page-evaluate -->
+
 </div><!-- /main-content -->
 
 <!-- Right panel: Camera & Teleop (always visible) -->
@@ -3170,7 +3350,7 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'experiments';
+        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'experiments' || el.dataset.tab === 'evaluate';
         rp.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
@@ -3180,6 +3360,9 @@ function setupEvents() {
       // Auto-load on first visit to training tab
       if (el.dataset.tab === 'training' && !trainInited) {
         trainInit();
+      }
+      if (el.dataset.tab === 'evaluate' && !evalInited) {
+        evalInit();
       }
     });
   });
@@ -5403,10 +5586,12 @@ async function trainInit() {
 
 function trainPolicyChanged() {
   const policy = document.getElementById('trainPolicyType').value;
-  // Adjust batch size defaults per policy
+  // Adjust batch size and LR defaults per policy
   const batchEl = document.getElementById('trainBatchSize');
-  if (policy === 'pi05') batchEl.value = '16';
-  else batchEl.value = '32';
+  const lrEl = document.getElementById('trainLr');
+  if (policy === 'act') { batchEl.value = '32'; lrEl.value = '0.00001'; }
+  else if (policy === 'pi05') { batchEl.value = '16'; lrEl.value = '0.0003'; }
+  else { batchEl.value = '32'; lrEl.value = '0.0003'; }
   // Show/hide policy-specific option panels
   document.getElementById('trainSmolvlaOpts').style.display = policy === 'smolvla' ? '' : 'none';
   document.getElementById('trainActOpts').style.display = policy === 'act' ? '' : 'none';
@@ -5549,13 +5734,16 @@ function _renderQueueFromJobs(queuedEntries) {
     const config = job.config || {};
     const name = job.job_name || config.job_name || jid;
     const policy = config.policy_type || '?';
-    const ds = config.dataset_repo_id || job.dataset_repo_id || '';
-    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #bbdefb;border-radius:6px;background:#e3f2fd;margin-bottom:4px">
-      <span style="font-size:0.72rem;font-weight:700;color:#1565c0;flex-shrink:0">#${i+1}</span>
-      <span style="font-size:0.82rem;font-weight:500">${name}</span>
-      <span style="font-size:0.7rem;color:#666">${policy}${ds ? ' · '+ds.split('/').pop() : ''}</span>
-      <div style="flex:1"></div>
-      <button onclick="trainCancelQueued('${jid}')" class="btn btn-sm btn-danger" style="font-size:0.68rem;padding:2px 8px">Cancel</button>
+    const configJson = Object.keys(config).length ? JSON.stringify(config, null, 2) : '{}';
+    return `<div style="margin-bottom:4px">
+      <div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'" style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #bbdefb;border-radius:6px;background:#e3f2fd;min-width:0;cursor:pointer" onmouseenter="this.style.opacity='0.85'" onmouseleave="this.style.opacity='1'">
+        <span style="font-size:0.72rem;font-weight:700;color:#1565c0;flex-shrink:0">#${i+1}</span>
+        <span style="font-size:0.78rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${name}</span>
+        <span style="font-size:0.68rem;color:#666;flex-shrink:0">${policy}</span>
+        <div style="flex:1"></div>
+        <button onclick="event.stopPropagation();trainCancelQueued('${jid}')" class="btn btn-sm btn-danger" style="font-size:0.68rem;padding:2px 8px;flex-shrink:0">Cancel</button>
+      </div>
+      <pre style="display:none;margin:0;padding:8px 10px;background:#1e1e1e;color:#d4d4d4;border:1px solid #bbdefb;border-top:none;border-radius:0 0 6px 6px;font-size:0.68rem;line-height:1.5;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all">${_escHtml(configJson)}</pre>
     </div>`;
   }).join('');
 }
@@ -5580,6 +5768,18 @@ async function trainKillAll() {
     alert(msgs.join('\n') || 'Done');
     setTimeout(() => trainCheckServer(), 1000);
   } catch(e) { alert('Error: ' + e.message); }
+}
+
+function trainCopyHint(btn, text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy', 2000);
 }
 
 async function trainSaveServer() {
@@ -5887,20 +6087,15 @@ async function trainLoadHistory() {
       const dsId = data.ds.id;
       const items = [];
 
-      // 1. Pushed models
-      data.models.forEach(m => {
-        const pType = _policyFromName(m.name);
-        const modified = m.last_modified ? new Date(m.last_modified).toLocaleDateString() : '';
-        items.push({ type: 'pushed', policyType: pType, name: m.name, hfId: m.id, date: modified });
-      });
-
-      // 2. Jobs
+      // 1. Jobs first (so we can track which models have a matching job)
+      const jobPushedModels = new Set();
       data.jobs.forEach(([id, job]) => {
         const config = job.config || {};
         const status = job.status || 'unknown';
         const policyType = config.policy_type || '?';
         const expectedModelName = `${policyType}_${dsName}`;
-        if (status !== 'running' && status !== 'queued' && pushedModelNames.has(expectedModelName)) return;
+        const isPushed = pushedModelNames.has(expectedModelName);
+        if (isPushed) jobPushedModels.add(expectedModelName);
         const updated = job.last_updated ? job.last_updated.substring(0,16) : '';
         let wbLink = null;
         if (config.wandb_enable) {
@@ -5910,8 +6105,17 @@ async function trainLoadHistory() {
         items.push({
           type: 'job', jobId: id, policyType, name: job.job_name || config.job_name || id,
           status, color: colors[status] || '#888', isRunning: status === 'running', isQueued: status === 'queued',
+          isPushed, hfModelId: isPushed ? `${hfUser}/${expectedModelName}` : null,
           wbLink, steps: config.steps, batchSize: config.batch_size, lr: config.optimizer_lr, updated,
         });
+      });
+
+      // 2. Pushed models without matching job (orphan models)
+      data.models.forEach(m => {
+        if (jobPushedModels.has(m.name)) return; // already shown via job entry
+        const pType = _policyFromName(m.name);
+        const modified = m.last_modified ? new Date(m.last_modified).toLocaleDateString() : '';
+        items.push({ type: 'pushed', policyType: pType, name: m.name, hfId: m.id, date: modified });
       });
 
       if (!items.length) return '';
@@ -5925,14 +6129,15 @@ async function trainLoadHistory() {
             <span style="font-size:0.72rem;color:#999;margin-left:auto">Pushed · ${it.date}</span>
           </div>`;
         } else {
+          const pushedBadge = it.isPushed ? `<span style="font-size:0.68rem;font-weight:600;color:#34a853;background:#e8f5e9;padding:1px 7px;border-radius:8px">Pushed</span>` : '';
           const statusLabel = it.isRunning
             ? `<span style="font-size:0.75rem;font-weight:700;color:${it.color}">Training...</span>`
             : it.isQueued
             ? `<span style="font-size:0.75rem;font-weight:700;color:${it.color}">Queued</span>`
             : `<span style="font-size:0.72rem;font-weight:600;color:${it.color};text-transform:uppercase">${it.status}</span>`;
           const wbHtml = it.wbLink ? `<a href="${it.wbLink}" target="_blank" onclick="event.stopPropagation()" style="color:#e8710a;text-decoration:none;font-size:0.72rem;font-weight:600">W&B ↗</a>` : '';
-          const bg = it.isRunning ? '#fff3e0' : it.isQueued ? '#e3f2fd' : (it.status === 'failed' ? '#fef0ef' : '#fafafa');
-          const border = it.isRunning ? '#ffe0b2' : it.isQueued ? '#bbdefb' : (it.status === 'failed' ? '#ffcdd2' : '#e0e0e0');
+          const bg = it.isPushed ? '#f1f8e9' : it.isRunning ? '#fff3e0' : it.isQueued ? '#e3f2fd' : (it.status === 'failed' ? '#fef0ef' : '#fafafa');
+          const border = it.isPushed ? '#c8e6c9' : it.isRunning ? '#ffe0b2' : it.isQueued ? '#bbdefb' : (it.status === 'failed' ? '#ffcdd2' : '#e0e0e0');
           const configInfo = [];
           if (it.steps) configInfo.push(`${it.steps.toLocaleString()} steps`);
           if (it.batchSize) configInfo.push(`bs=${it.batchSize}`);
@@ -5945,6 +6150,8 @@ async function trainLoadHistory() {
               ${_policyBadge(it.policyType)}
               <span style="font-size:0.86rem;font-weight:500">${it.name}</span>
               ${statusLabel}
+              ${pushedBadge}
+              ${it.hfModelId ? `<a href="https://huggingface.co/${it.hfModelId}" target="_blank" onclick="event.stopPropagation()" style="color:#1a73e8;text-decoration:none;font-size:0.72rem;font-weight:600">HF ↗</a>` : ''}
               ${wbHtml}
               <span style="font-size:0.72rem;color:#999;margin-left:auto">${configStr}${it.updated ? ' · '+it.updated : ''}</span>
               <span style="font-size:0.7rem;color:#aaa;transform:rotate(${expanded?'180':'0'}deg);transition:transform 0.2s">▼</span>
@@ -7345,6 +7552,661 @@ function fcReset() {
       body: JSON.stringify({params: fcGetParams()})
     });
   }
+}
+
+// ── Evaluate ──
+
+let evalInited = false;
+let evalModels = [];
+let evalSelectedModel = null;
+let evalSession = null;
+let evalEpPollTimer = null;   // polls /api/eval/status during episode
+let evalCountdownTimer = null; // 1s countdown interval
+let evalCountdownSec = 0;
+let evalEpRunning = false;     // true while episode process is alive
+
+function evalInit() {
+  evalInited = true;
+  evalLoadModels();
+  evalLoadSessions();
+  evalLoadResetPos();
+  document.getElementById('evalTask').value = cfg.default_instruction || '';
+}
+
+async function evalLoadResetPos() {
+  try {
+    const r = await fetch('/api/eval/reset-position');
+    const d = await r.json();
+    const el = document.getElementById('evalResetPosDisplay');
+    if (d.ok && d.position) {
+      const parts = Object.entries(d.position).map(([k,v]) => `${k}: ${v}`);
+      el.innerHTML = `<span style="color:#333">${parts.join(' &nbsp;|&nbsp; ')}</span>`;
+    } else {
+      el.textContent = 'No reset position saved. Robot will start from current position.';
+    }
+  } catch(e) {}
+}
+
+async function evalCaptureResetPos() {
+  const el = document.getElementById('evalResetPosDisplay');
+  el.textContent = 'Capturing...';
+  try {
+    const r = await fetch('/api/eval/reset-position', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const parts = Object.entries(d.position).map(([k,v]) => `${k}: ${v}`);
+      el.innerHTML = `<span style="color:#333">${parts.join(' &nbsp;|&nbsp; ')}</span>`;
+    } else {
+      el.innerHTML = `<span style="color:#d93025">${d.error}</span>`;
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:#d93025">Error: ${e.message}</span>`;
+  }
+}
+
+async function evalMoveToReset() {
+  const el = document.getElementById('evalResetPosDisplay');
+  const prev = el.innerHTML;
+  el.innerHTML = '<span style="color:#ff9800">Moving to reset position...</span>';
+  try {
+    const r = await fetch('/api/eval/move-to-reset', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = prev;
+    } else {
+      el.innerHTML = `<span style="color:#d93025">${d.error}</span>`;
+      setTimeout(() => { el.innerHTML = prev; }, 3000);
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:#d93025">Error: ${e.message}</span>`;
+    setTimeout(() => { el.innerHTML = prev; }, 3000);
+  }
+}
+
+async function evalClearResetPos() {
+  try {
+    await fetch('/api/eval/reset-position', {method: 'DELETE'});
+    document.getElementById('evalResetPosDisplay').textContent = 'No reset position saved. Robot will start from current position.';
+  } catch(e) {}
+}
+
+async function evalLoadModels() {
+  const sel = document.getElementById('evalModelSelect');
+  const st = document.getElementById('evalModelStatus');
+  st.textContent = 'Loading...';
+  try {
+    const r = await fetch('/api/hf-models');
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Error'; return; }
+    evalModels = d.models || [];
+    sel.innerHTML = '<option value="">-- Select model --</option>';
+    evalModels.forEach((m, i) => {
+      const o = document.createElement('option');
+      o.value = i;
+      o.textContent = m.local_exists ? `${m.name}` : `${m.name} (remote)`;
+      sel.appendChild(o);
+    });
+    st.textContent = evalModels.length + ' models';
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+}
+
+function evalSelectModel() {
+  const idx = document.getElementById('evalModelSelect').value;
+  const dlSection = document.getElementById('evalModelDownloadSection');
+  if (idx === '') {
+    evalSelectedModel = null;
+    evalUpdateCmd();
+    dlSection.style.display = 'none';
+    document.getElementById('evalRunBtn').disabled = true;
+    document.getElementById('evalTestInferBtn').disabled = true;
+    document.getElementById('evalRunStatus').textContent = 'Select a model first';
+    return;
+  }
+  evalSelectedModel = evalModels[parseInt(idx)];
+  evalUpdateCmd();
+
+  if (evalSelectedModel.local_exists) {
+    dlSection.style.display = 'none';
+    document.getElementById('evalRunBtn').disabled = false;
+    document.getElementById('evalTestInferBtn').disabled = false;
+    document.getElementById('evalRunStatus').textContent = 'Ready';
+  } else {
+    dlSection.style.display = '';
+    document.getElementById('evalRunBtn').disabled = true;
+    document.getElementById('evalTestInferBtn').disabled = true;
+    document.getElementById('evalRunStatus').textContent = 'Download model first';
+  }
+}
+
+function evalUpdateCmd() {
+  const pre = document.getElementById('evalCmdPreview');
+  if (!evalSelectedModel) { pre.textContent = 'Select a model to preview command.'; return; }
+  const m = evalSelectedModel;
+  const task = document.getElementById('evalTask').value || 'pick up the object';
+  const fps = document.getElementById('evalFps').value || '30';
+  const width = document.getElementById('evalWidth').value || '320';
+  const height = document.getElementById('evalHeight').value || '240';
+  const fourcc = document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG';
+  const useFakecam = document.getElementById('evalUseFakecam').checked;
+  const robotPort = cfg.robot_port || '';
+  const robotId = cfg.robot_id || '';
+  const camTop = cfg.camera_top_index ?? 0;
+  const camWrist = cfg.camera_wrist_index ?? 0;
+
+  let cmd = useFakecam ? 'python fakecam_inject.py --params-file fakecam_params.json -- \\\n  ' : '';
+  cmd += `lerobot-rollout \\\n`;
+  cmd += `  --robot.type=so101_follower \\\n`;
+  cmd += `  --robot.port=${robotPort} \\\n`;
+  cmd += `  --robot.id=${robotId} \\\n`;
+  cmd += `  --robot.cameras='{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}, fourcc: ${fourcc}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}, fourcc: ${fourcc}}}' \\\n`;
+  cmd += `  --policy.path=./models/${m.name} \\\n`;
+  cmd += `  --task='${task}' \\\n`;
+  cmd += `  --fps=${fps} \\\n`;
+  cmd += `  --display_data=false`;
+  pre.textContent = cmd;
+}
+
+function evalCopyCmd() {
+  const text = document.getElementById('evalCmdPreview').textContent;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
+
+// ── Download Model ──
+let evalDownloadPollTimer = null;
+
+async function evalDownloadModel() {
+  if (!evalSelectedModel) return;
+  const btn = document.getElementById('evalDownloadBtn');
+  const st = document.getElementById('evalDownloadStatus');
+  btn.disabled = true;
+  st.textContent = 'Starting download...';
+  try {
+    const r = await fetch('/api/model-download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({repo_id: evalSelectedModel.id, model_name: evalSelectedModel.name}),
+    });
+    const d = await r.json();
+    if (!d.ok) { st.textContent = 'Error: ' + d.error; btn.disabled = false; return; }
+    evalDownloadPollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch('/api/model-download/status');
+        const sd = await sr.json();
+        st.textContent = sd.status || 'Downloading...';
+        if (!sd.running) {
+          clearInterval(evalDownloadPollTimer);
+          if (sd.error) {
+            st.textContent = 'Error: ' + sd.error;
+            btn.disabled = false;
+          } else {
+            st.textContent = 'Downloaded!';
+            evalSelectedModel.local_exists = true;
+            document.getElementById('evalModelDownloadSection').style.display = 'none';
+            document.getElementById('evalRunBtn').disabled = false;
+            document.getElementById('evalTestInferBtn').disabled = false;
+            document.getElementById('evalRunStatus').textContent = 'Ready';
+            // Update dropdown text
+            const sel = document.getElementById('evalModelSelect');
+            const opt = sel.options[sel.selectedIndex];
+            if (opt) opt.textContent = evalSelectedModel.name;
+          }
+        }
+      } catch(e) {}
+    }, 1500);
+  } catch(e) { st.textContent = 'Error: ' + e.message; btn.disabled = false; }
+}
+
+// ── Test Inference (from Command section) ──
+let evalTestPollTimer = null;
+
+async function evalTestInference() {
+  if (!evalSelectedModel) return;
+  const st = document.getElementById('evalTestStatus');
+  const startBtn = document.getElementById('evalTestInferBtn');
+  const stopBtn = document.getElementById('evalTestStopBtn');
+
+  startBtn.disabled = true;
+  stopBtn.style.display = '';
+  st.textContent = 'Starting...';
+
+  try {
+    const r = await fetch('/api/eval/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model_id: evalSelectedModel.id,
+        model_name: evalSelectedModel.name,
+        task: document.getElementById('evalTask').value,
+        fps: parseInt(document.getElementById('evalFps').value) || 30,
+        width: parseInt(document.getElementById('evalWidth').value) || 320,
+        height: parseInt(document.getElementById('evalHeight').value) || 240,
+        fourcc: document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG',
+        use_fakecam: document.getElementById('evalUseFakecam').checked,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + d.error;
+      startBtn.disabled = false;
+      stopBtn.style.display = 'none';
+      return;
+    }
+    st.innerHTML = '<span style="color:#34a853">Running...</span>';
+    // Poll log into evalLog
+    evalTestPollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch('/api/eval/status');
+        const sd = await sr.json();
+        const logEl = document.getElementById('evalLog');
+        if (sd.lines && sd.lines.length) {
+          logEl.textContent = sd.lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (!sd.running) {
+          clearInterval(evalTestPollTimer);
+          st.textContent = 'Stopped';
+          startBtn.disabled = false;
+          stopBtn.style.display = 'none';
+        }
+      } catch(e) {}
+    }, 1000);
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    startBtn.disabled = false;
+    stopBtn.style.display = 'none';
+  }
+}
+
+async function evalTestStop() {
+  const st = document.getElementById('evalTestStatus');
+  st.textContent = 'Stopping...';
+  if (evalTestPollTimer) { clearInterval(evalTestPollTimer); evalTestPollTimer = null; }
+  try {
+    await fetch('/api/eval/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reset: false}),
+    });
+  } catch(e) {}
+  st.textContent = 'Stopped';
+  document.getElementById('evalTestInferBtn').disabled = false;
+  document.getElementById('evalTestStopBtn').style.display = 'none';
+}
+
+function _evalNewSession() {
+  const target = parseInt(document.getElementById('evalTargetRuns').value) || 10;
+  evalSession = {
+    session_id: `eval_${Date.now()}`,
+    model_id: evalSelectedModel.id,
+    model_name: evalSelectedModel.name,
+    task: document.getElementById('evalTask').value,
+    fps: parseInt(document.getElementById('evalFps').value) || 30,
+    use_fakecam: document.getElementById('evalUseFakecam').checked,
+    target_runs: target,
+    completed: 0, success: 0, fail: 0, skip: 0,
+    results: [],
+    created: new Date().toISOString(),
+  };
+  evalUpdateProgress();
+  document.getElementById('evalProgressSection').style.display = '';
+}
+
+function evalUpdateProgress() {
+  if (!evalSession) return;
+  const s = evalSession;
+  document.getElementById('evalProgressText').textContent = `${s.completed} / ${s.target_runs}`;
+  document.getElementById('evalSuccessCount').textContent = s.success;
+  document.getElementById('evalFailCount').textContent = s.fail;
+  const pct = s.target_runs > 0 ? (s.completed / s.target_runs * 100).toFixed(1) : 0;
+  document.getElementById('evalProgressBar').style.width = pct + '%';
+  const total = s.success + s.fail;
+  document.getElementById('evalSuccessRate').textContent = total > 0 ? (s.success / total * 100).toFixed(0) + '%' : '-';
+  document.getElementById('evalCurrentRunNum').textContent = s.completed + 1;
+  evalRenderResults();
+}
+
+/* ── helpers ── */
+function _evalCleanupTimers() {
+  if (evalEpPollTimer) { clearInterval(evalEpPollTimer); evalEpPollTimer = null; }
+  if (evalCountdownTimer) { clearInterval(evalCountdownTimer); evalCountdownTimer = null; }
+}
+
+function _evalBuildBody() {
+  return {
+    model_id: evalSelectedModel.id,
+    model_name: evalSelectedModel.name,
+    task: document.getElementById('evalTask').value,
+    fps: parseInt(document.getElementById('evalFps').value) || 30,
+    width: parseInt(document.getElementById('evalWidth').value) || 320,
+    height: parseInt(document.getElementById('evalHeight').value) || 240,
+    fourcc: document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG',
+    use_fakecam: document.getElementById('evalUseFakecam').checked,
+  };
+}
+
+async function _evalStopProcess() {
+  try {
+    await fetch('/api/eval/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reset: true}),
+    });
+  } catch(e) {}
+}
+
+function _evalShowRecordButtons() {
+  document.getElementById('evalRecordSection').style.display = '';
+  document.getElementById('evalStopBtn').style.display = 'none';
+  document.getElementById('evalCountdown').style.display = 'none';
+}
+
+/* ── Start Episode ──
+   Flow: start process → poll until "control loop started" → begin countdown
+   → countdown hits 0 → stop process → reset robot → show result buttons */
+
+async function evalStartEpisode() {
+  if (!evalSelectedModel) return;
+  if (!evalSession) _evalNewSession();
+  if (evalSession.completed >= evalSession.target_runs) {
+    alert('Target runs reached. Reset or increase target.');
+    return;
+  }
+
+  const st = document.getElementById('evalRunStatus');
+  const cdEl = document.getElementById('evalCountdown');
+  document.getElementById('evalRunBtn').disabled = true;
+  document.getElementById('evalStopBtn').style.display = '';
+  document.getElementById('evalRecordSection').style.display = 'none';
+  cdEl.style.display = 'none';
+
+  // 1) Start the lerobot-rollout process
+  st.innerHTML = '<span style="color:#1a73e8">Starting rollout (reset + load model)...</span>';
+  try {
+    const r = await fetch('/api/eval/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_evalBuildBody()),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + d.error;
+      document.getElementById('evalRunBtn').disabled = false;
+      document.getElementById('evalStopBtn').style.display = 'none';
+      return;
+    }
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    document.getElementById('evalRunBtn').disabled = false;
+    document.getElementById('evalStopBtn').style.display = 'none';
+    return;
+  }
+
+  evalEpRunning = true;
+  let countdownStarted = false;
+
+  // 2) Poll log — wait for "control loop started" then begin countdown
+  evalEpPollTimer = setInterval(async () => {
+    if (!evalEpRunning) return;
+    try {
+      const sr = await fetch('/api/eval/status');
+      const sd = await sr.json();
+
+      // Update log display
+      const logEl = document.getElementById('evalLog');
+      if (sd.lines && sd.lines.length) {
+        logEl.textContent = sd.lines.join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Detect "control loop started" → begin countdown
+      if (!countdownStarted && sd.lines) {
+        const joined = sd.lines.join('\n');
+        if (joined.includes('control loop started') || joined.includes('Rollout setup complete')) {
+          countdownStarted = true;
+          _evalBeginCountdown();
+        }
+      }
+
+      // Process died unexpectedly
+      if (!sd.running && evalEpRunning) {
+        evalEpRunning = false;
+        _evalCleanupTimers();
+        st.innerHTML = '<span style="color:#ff9800">Process ended. Resetting robot...</span>';
+        try { await fetch('/api/eval/move-to-reset', {method: 'POST'}); } catch(e) {}
+        st.textContent = 'Process ended. Record result:';
+        _evalShowRecordButtons();
+      }
+    } catch(e) {}
+  }, 800);
+}
+
+function _evalBeginCountdown() {
+  const st = document.getElementById('evalRunStatus');
+  const cdEl = document.getElementById('evalCountdown');
+  evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+  cdEl.style.display = '';
+  cdEl.textContent = evalCountdownSec + 's';
+  st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
+
+  evalCountdownTimer = setInterval(async () => {
+    evalCountdownSec--;
+    if (evalCountdownSec <= 0) {
+      // Time's up → stop process & reset
+      _evalCleanupTimers();
+      evalEpRunning = false;
+      const cdE = document.getElementById('evalCountdown');
+      cdE.textContent = '0s';
+      const stE = document.getElementById('evalRunStatus');
+      stE.innerHTML = '<span style="color:#ff9800">Stopping & resetting robot...</span>';
+      await _evalStopProcess();
+      stE.textContent = 'Episode done. Record result:';
+      _evalShowRecordButtons();
+    } else {
+      document.getElementById('evalCountdown').textContent = evalCountdownSec + 's';
+    }
+  }, 1000);
+}
+
+async function evalStopEpisode() {
+  _evalCleanupTimers();
+  evalEpRunning = false;
+  const st = document.getElementById('evalRunStatus');
+  st.innerHTML = '<span style="color:#ff9800">Stopping & resetting robot...</span>';
+  document.getElementById('evalStopBtn').style.display = 'none';
+  document.getElementById('evalCountdown').style.display = 'none';
+  await _evalStopProcess();
+  st.textContent = 'Stopped. Record result:';
+  _evalShowRecordButtons();
+}
+
+async function evalRecordResult(result) {
+  if (!evalSession) return;
+  evalSession.results.push({
+    run: evalSession.completed + 1,
+    result: result,
+    timestamp: new Date().toISOString(),
+  });
+  evalSession.completed++;
+  if (result === 'success') evalSession.success++;
+  else if (result === 'fail') evalSession.fail++;
+  else evalSession.skip++;
+
+  document.getElementById('evalRecordSection').style.display = 'none';
+  evalUpdateProgress();
+
+  // Auto-save session
+  try {
+    await fetch('/api/eval/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(evalSession),
+    });
+  } catch(e) {}
+
+  if (evalSession.completed >= evalSession.target_runs) {
+    document.getElementById('evalRunStatus').innerHTML = '<span style="color:#34a853;font-weight:600">Evaluation complete!</span>';
+    document.getElementById('evalRunBtn').disabled = true;
+    document.getElementById('evalCountdown').style.display = 'none';
+    evalLoadSessions();
+  } else {
+    document.getElementById('evalRunStatus').textContent = `Ready for episode #${evalSession.completed + 1}`;
+    document.getElementById('evalRunBtn').disabled = false;
+  }
+}
+
+function evalRenderResults() {
+  const el = document.getElementById('evalResultsList');
+  if (!evalSession || !evalSession.results.length) {
+    el.innerHTML = '<div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>';
+    return;
+  }
+  el.innerHTML = evalSession.results.map((r, i) => {
+    const color = r.result === 'success' ? '#34a853' : r.result === 'fail' ? '#d93025' : '#888';
+    const icon = r.result === 'success' ? '&#10003;' : r.result === 'fail' ? '&#10007;' : '&#8211;';
+    const time = new Date(r.timestamp).toLocaleTimeString();
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #f0f0f0">
+      <span style="font-size:0.78rem;color:#888;width:40px">Run ${r.run}</span>
+      <span style="color:${color};font-weight:700;font-size:1rem;width:24px;text-align:center">${icon}</span>
+      <span style="font-size:0.82rem;font-weight:500;color:${color};text-transform:uppercase;flex:1">${r.result}</span>
+      <span style="font-size:0.72rem;color:#999">${time}</span>
+      <button onclick="evalEditResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.72rem;color:#1a73e8;padding:2px 4px" title="Edit">Edit</button>
+      <button onclick="evalDeleteResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.72rem;color:#d93025;padding:2px 4px" title="Delete">&times;</button>
+    </div>`;
+  }).reverse().join('');
+}
+
+function evalEditResult(idx) {
+  if (!evalSession || !evalSession.results[idx]) return;
+  const current = evalSession.results[idx].result;
+  const options = ['success', 'fail', 'skip'].filter(o => o !== current);
+  const choice = prompt(`Run ${evalSession.results[idx].run}: currently "${current}"\nChange to: ${options.join(' / ')}`);
+  if (!choice || !['success', 'fail', 'skip'].includes(choice.toLowerCase().trim())) return;
+  const newResult = choice.toLowerCase().trim();
+  if (newResult === current) return;
+  evalSession.results[idx].result = newResult;
+  _evalRecalcSession();
+}
+
+function evalDeleteResult(idx) {
+  if (!evalSession || !evalSession.results[idx]) return;
+  if (!confirm(`Delete Run ${evalSession.results[idx].run} result?`)) return;
+  evalSession.results.splice(idx, 1);
+  // Re-number runs
+  evalSession.results.forEach((r, i) => r.run = i + 1);
+  _evalRecalcSession();
+}
+
+function evalClearAllResults() {
+  if (!evalSession || !evalSession.results.length) return;
+  if (!confirm('Clear ALL results in this session?')) return;
+  evalSession.results = [];
+  _evalRecalcSession();
+}
+
+function _evalRecalcSession() {
+  if (!evalSession) return;
+  evalSession.completed = evalSession.results.length;
+  evalSession.success = evalSession.results.filter(r => r.result === 'success').length;
+  evalSession.fail = evalSession.results.filter(r => r.result === 'fail').length;
+  evalSession.skip = evalSession.results.filter(r => r.result === 'skip').length;
+  evalUpdateProgress();
+  evalRenderResults();
+  // Auto-save
+  fetch('/api/eval/sessions', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(evalSession),
+  }).catch(() => {});
+}
+
+function evalExportResults() {
+  if (!evalSession) { alert('No session to export.'); return; }
+  const blob = new Blob([JSON.stringify(evalSession, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${evalSession.session_id}.json`;
+  a.click();
+}
+
+async function evalResetSession() {
+  if (evalSession && evalSession.completed > 0 && !confirm('Reset current session? Results are already saved.')) return;
+  if (evalEpRunning) {
+    _evalCleanupTimers();
+    evalEpRunning = false;
+    try { await fetch('/api/eval/stop', {method: 'POST'}); } catch(e) {}
+  }
+  evalSession = null;
+  document.getElementById('evalProgressSection').style.display = 'none';
+  document.getElementById('evalRecordSection').style.display = 'none';
+  document.getElementById('evalStopBtn').style.display = 'none';
+  document.getElementById('evalCountdown').style.display = 'none';
+  document.getElementById('evalResultsList').innerHTML = '<div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>';
+  document.getElementById('evalRunStatus').textContent = 'Ready';
+  document.getElementById('evalRunBtn').disabled = !(evalSelectedModel && evalSelectedModel.local_exists);
+  document.getElementById('evalLog').textContent = 'Waiting to start...';
+}
+
+async function evalLoadSessions() {
+  const el = document.getElementById('evalSessionsList');
+  try {
+    const r = await fetch('/api/eval/sessions');
+    const d = await r.json();
+    if (!d.ok || !d.sessions.length) {
+      el.innerHTML = '<div style="color:#888;padding:8px 0">No saved sessions.</div>';
+      return;
+    }
+    el.innerHTML = d.sessions.map(s => {
+      const total = s.success + s.fail;
+      const rate = total > 0 ? (s.success / total * 100).toFixed(0) + '%' : '-';
+      const date = s.created ? new Date(s.created).toLocaleDateString() : '';
+      const color = total > 0 ? (s.success / total > 0.7 ? '#34a853' : s.success / total > 0.4 ? '#e8710a' : '#d93025') : '#888';
+      return `<div onclick="evalLoadSession('${s.id}')" style="padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:4px;cursor:pointer;transition:background 0.15s" onmouseenter="this.style.background='#f5f5f5'" onmouseleave="this.style.background=''">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:0.82rem;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${s.model}</span>
+          <span style="font-size:1rem;font-weight:700;color:${color};flex-shrink:0">${rate}</span>
+        </div>
+        <div style="font-size:0.7rem;color:#999;margin-top:2px">${s.completed}/${s.target} runs · ${s.success}S ${s.fail}F · ${date}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { el.innerHTML = '<div style="color:#d93025">Error loading sessions</div>'; }
+}
+
+async function evalLoadSession(sessionId) {
+  try {
+    const r = await fetch(`/api/eval/sessions/${sessionId}`);
+    const d = await r.json();
+    if (!d.ok) return;
+    evalSession = d;
+    document.getElementById('evalProgressSection').style.display = '';
+    evalUpdateProgress();
+    // Select matching model if available
+    const modelIdx = evalModels.findIndex(m => m.name === d.model_name);
+    if (modelIdx >= 0) {
+      document.getElementById('evalModelSelect').value = modelIdx;
+      evalSelectedModel = evalModels[modelIdx];
+      evalUpdateCmd();
+      document.getElementById('evalRunBtn').disabled = false;
+    }
+    document.getElementById('evalTask').value = d.task || '';
+    document.getElementById('evalTargetRuns').value = d.target_runs || 10;
+    document.getElementById('evalFps').value = d.fps || 30;
+    document.getElementById('evalUseFakecam').checked = d.use_fakecam || false;
+    if (d.completed >= d.target_runs) {
+      document.getElementById('evalRunStatus').innerHTML = '<span style="color:#34a853;font-weight:600">Evaluation complete!</span>';
+    } else {
+      document.getElementById('evalRunStatus').textContent = `Ready for run #${d.completed + 1}`;
+    }
+  } catch(e) {}
 }
 
 </script>
