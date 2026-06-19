@@ -7848,6 +7848,12 @@ let evalTestPollTimer = null;
 
 async function evalTestInference() {
   if (!evalSelectedModel) return;
+  // Kill eval process if running
+  if (evalEpRunning) {
+    _evalCleanupTimers();
+    evalEpRunning = false;
+    await _evalStopProcess();
+  }
   const st = document.getElementById('evalTestStatus');
   const startBtn = document.getElementById('evalTestInferBtn');
   const stopBtn = document.getElementById('evalTestStopBtn');
@@ -7870,7 +7876,6 @@ async function evalTestInference() {
       return;
     }
     st.innerHTML = '<span style="color:#34a853">Running...</span>';
-    // Poll log into evalLog
     evalTestPollTimer = setInterval(async () => {
       try {
         const sr = await fetch('/api/eval/status');
@@ -7899,13 +7904,7 @@ async function evalTestStop() {
   const st = document.getElementById('evalTestStatus');
   st.textContent = 'Stopping...';
   if (evalTestPollTimer) { clearInterval(evalTestPollTimer); evalTestPollTimer = null; }
-  try {
-    await fetch('/api/eval/stop', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({reset: false}),
-    });
-  } catch(e) {}
+  await _evalStopProcess();
   st.textContent = 'Stopped';
   document.getElementById('evalTestInferBtn').disabled = false;
   document.getElementById('evalTestStopBtn').style.display = 'none';
@@ -7973,7 +7972,10 @@ function _evalShowRecordButtons() {
 }
 
 /* ── Start Episode ──
-   Flow: start process → countdown immediately → stop process → record result */
+   Flow:
+   - Episode 1: start process → wait for ready → countdown → show result buttons (process stays alive)
+   - Episode 2+: just start countdown (process already running, no model reload)
+   - Stop/Complete: kill process */
 
 async function evalStartEpisode() {
   if (!evalSelectedModel) return;
@@ -7989,9 +7991,17 @@ async function evalStartEpisode() {
   document.getElementById('evalStopBtn').style.display = '';
   document.getElementById('evalRecordSection').style.display = 'none';
 
-  // 1) Start the lerobot-rollout process
-  st.innerHTML = '<span style="color:#1a73e8">Starting rollout...</span>';
-  cdEl.style.display = 'none';
+  // If process is already running but paused (episode 2+), resume and go straight to countdown
+  if (evalEpRunning) {
+    try { await fetch('/api/eval/resume', {method: 'POST'}); } catch(e) {}
+    _evalStartCountdown();
+    return;
+  }
+
+  // Episode 1: start the lerobot-rollout process
+  st.innerHTML = '<span style="color:#1a73e8">Starting rollout (first episode — loading model)...</span>';
+  cdEl.style.display = '';
+  cdEl.textContent = 'init...';
   try {
     const r = await fetch('/api/eval/start', {
       method: 'POST',
@@ -8003,12 +8013,14 @@ async function evalStartEpisode() {
       st.textContent = 'Error: ' + d.error;
       document.getElementById('evalRunBtn').disabled = false;
       document.getElementById('evalStopBtn').style.display = 'none';
+      cdEl.style.display = 'none';
       return;
     }
   } catch(e) {
     st.textContent = 'Error: ' + e.message;
     document.getElementById('evalRunBtn').disabled = false;
     document.getElementById('evalStopBtn').style.display = 'none';
+    cdEl.style.display = 'none';
     return;
   }
 
@@ -8016,25 +8028,18 @@ async function evalStartEpisode() {
   let countdownStarted = false;
   const initStart = Date.now();
 
-  // 2) Poll log — wait for robot ready, then start countdown
-  st.innerHTML = '<span style="color:#1a73e8">Initializing (loading model, connecting cameras)...</span>';
-  cdEl.style.display = '';
-  cdEl.textContent = 'init...';
-
+  // Poll log — wait for robot ready, then start countdown
   evalEpPollTimer = setInterval(async () => {
     if (!evalEpRunning) return;
     try {
       const sr = await fetch('/api/eval/status');
       const sd = await sr.json();
-
-      // Update log display
       const logEl = document.getElementById('evalLog');
       if (sd.lines && sd.lines.length) {
         logEl.textContent = sd.lines.join('\n');
         logEl.scrollTop = logEl.scrollHeight;
       }
-
-      // Process died
+      // Process died during init
       if (!sd.running && evalEpRunning) {
         evalEpRunning = false;
         _evalCleanupTimers();
@@ -8042,45 +8047,79 @@ async function evalStartEpisode() {
         _evalShowRecordButtons();
         return;
       }
-
       // Detect robot ready → start countdown
       if (!countdownStarted && sd.lines && sd.lines.length) {
         const last20 = sd.lines.slice(-20).join('\n');
         const ready = last20.includes('control loop started') || last20.includes('Rollout setup complete') || last20.includes('action_dict sent to robot');
-        const timeout = (Date.now() - initStart) > 30000; // 30s fallback
+        const timeout = (Date.now() - initStart) > 30000;
         if (ready || timeout) {
           countdownStarted = true;
-          evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
-          cdEl.textContent = evalCountdownSec + 's';
-          st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
-          evalCountdownTimer = setInterval(async () => {
-            evalCountdownSec--;
-            if (evalCountdownSec <= 0) {
-              _evalCleanupTimers();
-              evalEpRunning = false;
-              cdEl.textContent = '0s';
-              st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
-              await _evalStopProcess();
-              st.textContent = 'Episode done. Record result:';
-              _evalShowRecordButtons();
-            } else {
-              cdEl.textContent = evalCountdownSec + 's';
-            }
-          }, 1000);
+          _evalStartCountdown();
         }
       }
     } catch(e) {}
   }, 500);
 }
 
+function _evalStartCountdown() {
+  const st = document.getElementById('evalRunStatus');
+  const cdEl = document.getElementById('evalCountdown');
+  // Clear init poll (keep process alive)
+  if (evalEpPollTimer) { clearInterval(evalEpPollTimer); evalEpPollTimer = null; }
+  if (evalCountdownTimer) { clearInterval(evalCountdownTimer); evalCountdownTimer = null; }
+
+  evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+  cdEl.style.display = '';
+  cdEl.textContent = evalCountdownSec + 's';
+  st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
+
+  // Start a background poll just for log + process death detection
+  evalEpPollTimer = setInterval(async () => {
+    try {
+      const sr = await fetch('/api/eval/status');
+      const sd = await sr.json();
+      const logEl = document.getElementById('evalLog');
+      if (sd.lines && sd.lines.length) {
+        logEl.textContent = sd.lines.join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      if (!sd.running && evalEpRunning) {
+        evalEpRunning = false;
+        _evalCleanupTimers();
+        st.textContent = 'Process ended. Record result:';
+        _evalShowRecordButtons();
+      }
+    } catch(e) {}
+  }, 1000);
+
+  evalCountdownTimer = setInterval(async () => {
+    evalCountdownSec--;
+    if (evalCountdownSec <= 0) {
+      // Countdown done — pause process (robot stops), keep model loaded
+      if (evalCountdownTimer) { clearInterval(evalCountdownTimer); evalCountdownTimer = null; }
+      cdEl.textContent = '0s';
+      st.innerHTML = '<span style="color:#ff9800">Pausing robot...</span>';
+      try { await fetch('/api/eval/pause', {method: 'POST'}); } catch(e) {}
+      st.textContent = 'Episode done (robot paused). Record result:';
+      _evalShowRecordButtons();
+      // Keep evalEpRunning = true, keep evalEpPollTimer running
+    } else {
+      cdEl.textContent = evalCountdownSec + 's';
+    }
+  }, 1000);
+}
+
 async function evalStopEpisode() {
   _evalCleanupTimers();
+  const wasRunning = evalEpRunning;
   evalEpRunning = false;
   const st = document.getElementById('evalRunStatus');
-  st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
   document.getElementById('evalStopBtn').style.display = 'none';
   document.getElementById('evalCountdown').style.display = 'none';
-  await _evalStopProcess();
+  if (wasRunning) {
+    st.innerHTML = '<span style="color:#ff9800">Stopping process...</span>';
+    await _evalStopProcess();
+  }
   st.textContent = 'Stopped. Record result:';
   _evalShowRecordButtons();
 }
@@ -8113,9 +8152,16 @@ async function evalRecordResult(result) {
     document.getElementById('evalRunStatus').innerHTML = '<span style="color:#34a853;font-weight:600">Evaluation complete!</span>';
     document.getElementById('evalRunBtn').disabled = true;
     document.getElementById('evalCountdown').style.display = 'none';
+    // Kill process when evaluation is complete
+    if (evalEpRunning) {
+      evalEpRunning = false;
+      _evalCleanupTimers();
+      await _evalStopProcess();
+    }
     evalLoadSessions();
   } else {
-    document.getElementById('evalRunStatus').textContent = `Ready for episode #${evalSession.completed + 1}`;
+    const msg = evalEpRunning ? `Ready for episode #${evalSession.completed + 1} (robot paused — press Start to resume)` : `Ready for episode #${evalSession.completed + 1}`;
+    document.getElementById('evalRunStatus').textContent = msg;
     document.getElementById('evalRunBtn').disabled = false;
   }
 }
