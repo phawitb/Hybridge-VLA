@@ -7895,13 +7895,7 @@ function _evalBuildBody() {
 }
 
 async function _evalStopProcess() {
-  try {
-    await fetch('/api/eval/stop', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({reset: true}),
-    });
-  } catch(e) {}
+  try { await fetch('/api/eval/stop', {method: 'POST'}); } catch(e) {}
 }
 
 function _evalShowRecordButtons() {
@@ -7911,8 +7905,7 @@ function _evalShowRecordButtons() {
 }
 
 /* ── Start Episode ──
-   Flow: start process → poll until "control loop started" → begin countdown
-   → countdown hits 0 → stop process → reset robot → show result buttons */
+   Flow: start process → countdown immediately → stop process → record result */
 
 async function evalStartEpisode() {
   if (!evalSelectedModel) return;
@@ -7927,10 +7920,10 @@ async function evalStartEpisode() {
   document.getElementById('evalRunBtn').disabled = true;
   document.getElementById('evalStopBtn').style.display = '';
   document.getElementById('evalRecordSection').style.display = 'none';
-  cdEl.style.display = 'none';
 
   // 1) Start the lerobot-rollout process
-  st.innerHTML = '<span style="color:#1a73e8">Starting rollout (reset + load model)...</span>';
+  st.innerHTML = '<span style="color:#1a73e8">Starting rollout...</span>';
+  cdEl.style.display = 'none';
   try {
     const r = await fetch('/api/eval/start', {
       method: 'POST',
@@ -7952,68 +7945,46 @@ async function evalStartEpisode() {
   }
 
   evalEpRunning = true;
-  let countdownStarted = false;
 
-  // 2) Poll log — wait for "control loop started" then begin countdown
+  // 2) Start countdown + poll log immediately
+  evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+  cdEl.style.display = '';
+  cdEl.textContent = evalCountdownSec + 's';
+  st.innerHTML = '<span style="color:#34a853">Running...</span>';
+
+  evalCountdownTimer = setInterval(async () => {
+    evalCountdownSec--;
+    if (evalCountdownSec <= 0) {
+      _evalCleanupTimers();
+      evalEpRunning = false;
+      cdEl.textContent = '0s';
+      st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
+      await _evalStopProcess();
+      st.textContent = 'Episode done. Record result:';
+      _evalShowRecordButtons();
+    } else {
+      cdEl.textContent = evalCountdownSec + 's';
+    }
+  }, 1000);
+
+  // Poll log display
   evalEpPollTimer = setInterval(async () => {
-    if (!evalEpRunning) return;
     try {
       const sr = await fetch('/api/eval/status');
       const sd = await sr.json();
-
-      // Update log display
       const logEl = document.getElementById('evalLog');
       if (sd.lines && sd.lines.length) {
         logEl.textContent = sd.lines.join('\n');
         logEl.scrollTop = logEl.scrollHeight;
       }
-
-      // Detect "control loop started" → begin countdown
-      if (!countdownStarted && sd.lines) {
-        const joined = sd.lines.join('\n');
-        if (joined.includes('control loop started') || joined.includes('Rollout setup complete')) {
-          countdownStarted = true;
-          _evalBeginCountdown();
-        }
-      }
-
-      // Process died unexpectedly
+      // Process died before countdown finished
       if (!sd.running && evalEpRunning) {
         evalEpRunning = false;
         _evalCleanupTimers();
-        st.innerHTML = '<span style="color:#ff9800">Process ended. Resetting robot...</span>';
-        try { await fetch('/api/eval/move-to-reset', {method: 'POST'}); } catch(e) {}
         st.textContent = 'Process ended. Record result:';
         _evalShowRecordButtons();
       }
     } catch(e) {}
-  }, 800);
-}
-
-function _evalBeginCountdown() {
-  const st = document.getElementById('evalRunStatus');
-  const cdEl = document.getElementById('evalCountdown');
-  evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
-  cdEl.style.display = '';
-  cdEl.textContent = evalCountdownSec + 's';
-  st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
-
-  evalCountdownTimer = setInterval(async () => {
-    evalCountdownSec--;
-    if (evalCountdownSec <= 0) {
-      // Time's up → stop process & reset
-      _evalCleanupTimers();
-      evalEpRunning = false;
-      const cdE = document.getElementById('evalCountdown');
-      cdE.textContent = '0s';
-      const stE = document.getElementById('evalRunStatus');
-      stE.innerHTML = '<span style="color:#ff9800">Stopping & resetting robot...</span>';
-      await _evalStopProcess();
-      stE.textContent = 'Episode done. Record result:';
-      _evalShowRecordButtons();
-    } else {
-      document.getElementById('evalCountdown').textContent = evalCountdownSec + 's';
-    }
   }, 1000);
 }
 
@@ -8021,7 +7992,7 @@ async function evalStopEpisode() {
   _evalCleanupTimers();
   evalEpRunning = false;
   const st = document.getElementById('evalRunStatus');
-  st.innerHTML = '<span style="color:#ff9800">Stopping & resetting robot...</span>';
+  st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
   document.getElementById('evalStopBtn').style.display = 'none';
   document.getElementById('evalCountdown').style.display = 'none';
   await _evalStopProcess();

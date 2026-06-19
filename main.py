@@ -4600,7 +4600,7 @@ async def eval_start(request: Request):
         await teleop_stop()
     if robot_state["connected"]:
         disconnect_robot()
-    time.sleep(0.3)
+        time.sleep(0.2)
 
     # Move robot to reset position before starting rollout
     reset_pos = _eval_load_reset_position()
@@ -4608,7 +4608,6 @@ async def eval_start(request: Request):
         ok, err = _eval_move_to_reset()
         if not ok:
             return {"ok": False, "error": f"Failed to move to reset position: {err}"}
-        time.sleep(0.3)
 
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
@@ -4653,21 +4652,9 @@ async def eval_start(request: Request):
 
 
 @app.post("/api/eval/stop")
-async def eval_stop(request: Request = None):
-    """Stop the running eval process and optionally move to reset position."""
-    reset_after = False
-    if request:
-        try:
-            body = await request.json()
-            reset_after = body.get("reset", False)
-        except Exception:
-            pass
-
+async def eval_stop():
+    """Stop the running eval process. lerobot returns robot to initial position on its own."""
     if not eval_state["running"] and not eval_state["process"]:
-        if reset_after:
-            pos = _eval_load_reset_position()
-            if pos:
-                _eval_move_to_reset()
         return {"ok": True, "message": "Not running"}
 
     p = eval_state["process"]
@@ -4681,7 +4668,7 @@ async def eval_stop(request: Request = None):
             except (ProcessLookupError, OSError):
                 pass
         try:
-            p.wait(timeout=8)
+            p.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(p.pid), sig.SIGKILL)
@@ -4691,15 +4678,6 @@ async def eval_stop(request: Request = None):
                 except (ProcessLookupError, OSError):
                     pass
     eval_state["running"] = False
-
-    # Move robot back to reset position after process is fully stopped
-    if reset_after:
-        time.sleep(0.5)  # Wait for process to release robot
-        pos = _eval_load_reset_position()
-        if pos:
-            ok, err = _eval_move_to_reset()
-            return {"ok": True, "reset_ok": ok, "reset_error": err}
-
     return {"ok": True}
 
 
