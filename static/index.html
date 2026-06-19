@@ -2959,25 +2959,24 @@ lerobot-rollout \
           </div>
         </div>
 
-        <!-- Log -->
-        <div class="config-card">
-          <h3>Log</h3>
-          <div id="evalLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start...</div>
-        </div>
         </div><!-- /evalCardsSection -->
 
       </div>
 
-      <!-- Sidebar: Session history -->
-      <div style="width:300px;flex-shrink:0;position:sticky;top:16px">
+      <!-- Sidebar: Session history + Log -->
+      <div style="width:350px;flex-shrink:0;position:sticky;top:16px;display:flex;flex-direction:column;gap:14px">
         <div class="config-card">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <h3 style="margin:0;font-size:0.9rem">Sessions</h3>
             <button class="btn btn-sm" onclick="evalLoadSessions()" style="background:#1a73e8;font-size:0.68rem;padding:2px 8px">Refresh</button>
           </div>
-          <div id="evalSessionsList" style="max-height:calc(100vh - 200px);overflow-y:auto;font-size:0.82rem">
+          <div id="evalSessionsList" style="max-height:calc(100vh - 500px);overflow-y:auto;font-size:0.82rem">
             <div style="color:#888;padding:8px 0">No saved sessions.</div>
           </div>
+        </div>
+        <div class="config-card">
+          <h3>Log</h3>
+          <div id="evalLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start...</div>
         </div>
       </div>
     </div>
