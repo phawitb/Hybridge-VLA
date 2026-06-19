@@ -2070,12 +2070,6 @@ conda run -n lerobot uvicorn train_api:app \
               <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
             </div>
           </div>
-          <div style="margin-top:8px">
-            <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="evalUseFakecam" onchange="evalUpdateCmd()"> Use Fake Camera (fakecam_inject.py)
-            </label>
-          </div>
-
           <!-- Reset Position -->
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e0e0e0">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -2086,6 +2080,74 @@ conda run -n lerobot uvicorn train_api:app \
             </div>
             <div id="evalResetPosDisplay" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;color:#888;background:#f8f8f8;border-radius:6px;padding:8px 10px;min-height:24px">
               No reset position saved. Robot will start from current position.
+            </div>
+          </div>
+        </div>
+
+        <!-- Fake Camera Augmentation -->
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin:0">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.95rem">
+              <input type="checkbox" id="evalUseFakecam" onchange="evalFakecamToggle()"> Fake Camera Augmentation
+            </label>
+          </h3>
+          <div id="evalFakecamSettings" style="display:none;margin-top:12px">
+            <!-- Mode selector -->
+            <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="radio" name="evalAugMode" value="fix" checked onchange="evalAugModeChanged()"> Fix
+              </label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="radio" name="evalAugMode" value="random" onchange="evalAugModeChanged()"> Random
+              </label>
+            </div>
+
+            <!-- Fix mode panel -->
+            <div id="evalAugFixPanel">
+              <div style="font-size:0.78rem;font-weight:600;color:#555;margin-bottom:6px">Camera Transform</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:10px">
+                <div><label style="font-size:0.72rem;color:#888">Rotation (deg) <span id="eaRotVal">0</span></label><input type="range" id="eaRotation" min="-30" max="30" value="0" step="0.5" style="width:100%" oninput="evalAugSlider(this,'eaRotVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Translate X (%) <span id="eaTxVal">0</span></label><input type="range" id="eaTranslateX" min="-30" max="30" value="0" step="0.5" style="width:100%" oninput="evalAugSlider(this,'eaTxVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Translate Y (%) <span id="eaTyVal">0</span></label><input type="range" id="eaTranslateY" min="-30" max="30" value="0" step="0.5" style="width:100%" oninput="evalAugSlider(this,'eaTyVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Scale <span id="eaScaleVal">1</span></label><input type="range" id="eaScale" min="0.5" max="2.0" value="1.0" step="0.05" style="width:100%" oninput="evalAugSlider(this,'eaScaleVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Shear <span id="eaShearVal">0</span></label><input type="range" id="eaShear" min="-20" max="20" value="0" step="0.5" style="width:100%" oninput="evalAugSlider(this,'eaShearVal')"></div>
+              </div>
+              <div style="font-size:0.78rem;font-weight:600;color:#555;margin-bottom:6px">Light & Noise</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:10px">
+                <div><label style="font-size:0.72rem;color:#888">Brightness <span id="eaBrightVal">1</span></label><input type="range" id="eaBrightness" min="0.3" max="2.0" value="1.0" step="0.05" style="width:100%" oninput="evalAugSlider(this,'eaBrightVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Contrast <span id="eaContrastVal">1</span></label><input type="range" id="eaContrast" min="0.3" max="2.0" value="1.0" step="0.05" style="width:100%" oninput="evalAugSlider(this,'eaContrastVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Saturation <span id="eaSatVal">1</span></label><input type="range" id="eaSaturation" min="0.0" max="3.0" value="1.0" step="0.05" style="width:100%" oninput="evalAugSlider(this,'eaSatVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Noise <span id="eaNoiseVal">0</span></label><input type="range" id="eaNoise" min="0" max="50" value="0" step="1" style="width:100%" oninput="evalAugSlider(this,'eaNoiseVal')"></div>
+                <div><label style="font-size:0.72rem;color:#888">Blur <span id="eaBlurVal">0</span></label><input type="range" id="eaBlur" min="0" max="10" value="0" step="1" style="width:100%" oninput="evalAugSlider(this,'eaBlurVal')"></div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-sm" onclick="evalAugReset()" style="background:#888;font-size:0.72rem;padding:2px 10px">Reset All</button>
+                <button class="btn btn-sm" onclick="evalAugSaveParams()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px">Save Params</button>
+                <button class="btn btn-sm" onclick="evalAugPreview()" style="background:#ff9800;font-size:0.72rem;padding:2px 10px">Preview</button>
+                <span id="evalAugFixStatus" style="font-size:0.75rem;color:#888"></span>
+              </div>
+            </div>
+
+            <!-- Random mode panel -->
+            <div id="evalAugRandomPanel" style="display:none">
+              <div style="margin-bottom:10px">
+                <label style="font-size:0.82rem;font-weight:600;color:#555">Augmentation Level</label>
+                <select id="evalAugLevel" class="form-input" style="margin-top:4px" onchange="evalAugLevelChanged()">
+                  <option value="1">Level 1 — Mild</option>
+                  <option value="2">Level 2 — Light</option>
+                  <option value="3" selected>Level 3 — Medium</option>
+                  <option value="4">Level 4 — Strong</option>
+                  <option value="5">Level 5 — Extreme</option>
+                </select>
+                <div id="evalAugLevelDesc" style="font-size:0.72rem;color:#888;margin-top:4px;padding:6px 10px;background:#f8f8f8;border-radius:6px"></div>
+              </div>
+              <div style="font-size:0.75rem;color:#666;margin-bottom:10px">
+                Random params will be generated each time you start Test Inference or a new Episode.
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-sm" onclick="evalAugPreview()" style="background:#ff9800;font-size:0.72rem;padding:2px 10px">Preview (Sample)</button>
+                <span id="evalAugRandomStatus" style="font-size:0.75rem;color:#888"></span>
+              </div>
             </div>
           </div>
         </div>
@@ -6788,6 +6850,7 @@ function evalInit() {
   evalLoadSessions();
   evalLoadResetPos();
   evalLoadConfig();
+  evalAugLevelChanged();
 }
 
 async function evalLoadConfig() {
@@ -6804,6 +6867,14 @@ async function evalLoadConfig() {
       if (c.height != null) document.getElementById('evalHeight').value = c.height;
       if (c.fourcc != null) document.getElementById('evalFourcc').value = c.fourcc;
       if (c.use_fakecam != null) document.getElementById('evalUseFakecam').checked = c.use_fakecam;
+      if (c.aug_mode) {
+        const radio = document.querySelector(`input[name="evalAugMode"][value="${c.aug_mode}"]`);
+        if (radio) radio.checked = true;
+      }
+      if (c.aug_level != null) document.getElementById('evalAugLevel').value = c.aug_level;
+      evalFakecamToggle();
+      evalAugModeChanged();
+      evalAugLevelChanged();
     } else {
       document.getElementById('evalTask').value = cfg.default_instruction || '';
     }
@@ -6824,6 +6895,8 @@ async function evalSaveConfig() {
     height: parseInt(document.getElementById('evalHeight').value) || 240,
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
     use_fakecam: document.getElementById('evalUseFakecam').checked,
+    aug_mode: evalGetAugMode(),
+    aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
   };
   try {
     await fetch('/api/eval/config', {
@@ -6967,6 +7040,167 @@ function evalSelectModel() {
   }
 }
 
+// ── Eval Fake Camera Augmentation ──
+const EVAL_AUG_LEVELS = {
+  1: {rotation:[-5,5], translate_x:[-5,5], translate_y:[-5,5], scale:[0.9,1.1], shear:[-3,3], brightness:[0.85,1.15], contrast:[0.85,1.15], saturation:[0.8,1.2], noise:[0,5], blur:[0,1]},
+  2: {rotation:[-10,10], translate_x:[-10,10], translate_y:[-10,10], scale:[0.8,1.2], shear:[-8,8], brightness:[0.7,1.3], contrast:[0.7,1.3], saturation:[0.6,1.4], noise:[0,15], blur:[0,3]},
+  3: {rotation:[-15,15], translate_x:[-15,15], translate_y:[-15,15], scale:[0.7,1.3], shear:[-12,12], brightness:[0.5,1.5], contrast:[0.5,1.5], saturation:[0.4,1.6], noise:[0,25], blur:[0,5]},
+  4: {rotation:[-20,20], translate_x:[-20,20], translate_y:[-20,20], scale:[0.6,1.5], shear:[-16,16], brightness:[0.4,1.7], contrast:[0.4,1.7], saturation:[0.2,2.0], noise:[0,35], blur:[0,7]},
+  5: {rotation:[-30,30], translate_x:[-30,30], translate_y:[-30,30], scale:[0.5,2.0], shear:[-20,20], brightness:[0.3,2.0], contrast:[0.3,2.0], saturation:[0.0,3.0], noise:[0,50], blur:[0,10]},
+};
+
+function evalGetAugMode() {
+  return document.querySelector('input[name="evalAugMode"]:checked')?.value || 'fix';
+}
+
+function evalFakecamToggle() {
+  const on = document.getElementById('evalUseFakecam').checked;
+  document.getElementById('evalFakecamSettings').style.display = on ? '' : 'none';
+  evalUpdateCmd();
+}
+
+function evalAugModeChanged() {
+  const mode = evalGetAugMode();
+  document.getElementById('evalAugFixPanel').style.display = mode === 'fix' ? '' : 'none';
+  document.getElementById('evalAugRandomPanel').style.display = mode === 'random' ? '' : 'none';
+  evalUpdateCmd();
+}
+
+function evalAugSlider(el, valId) {
+  document.getElementById(valId).textContent = el.value;
+}
+
+function evalAugGetParams() {
+  return {
+    rotation: parseFloat(document.getElementById('eaRotation').value),
+    translate_x: parseFloat(document.getElementById('eaTranslateX').value),
+    translate_y: parseFloat(document.getElementById('eaTranslateY').value),
+    scale: parseFloat(document.getElementById('eaScale').value),
+    shear: parseFloat(document.getElementById('eaShear').value),
+    brightness: parseFloat(document.getElementById('eaBrightness').value),
+    contrast: parseFloat(document.getElementById('eaContrast').value),
+    saturation: parseFloat(document.getElementById('eaSaturation').value),
+    noise: parseFloat(document.getElementById('eaNoise').value),
+    blur: parseInt(document.getElementById('eaBlur').value),
+  };
+}
+
+function evalAugRandomParams(level) {
+  const L = EVAL_AUG_LEVELS[level || 3];
+  const r = (min, max) => +(min + Math.random() * (max - min)).toFixed(3);
+  const ri = (min, max) => Math.round(min + Math.random() * (max - min));
+  return {
+    rotation: r(...L.rotation), translate_x: r(...L.translate_x), translate_y: r(...L.translate_y),
+    scale: r(...L.scale), shear: r(...L.shear),
+    brightness: r(...L.brightness), contrast: r(...L.contrast), saturation: r(...L.saturation),
+    noise: ri(...L.noise), blur: ri(...L.blur),
+  };
+}
+
+function evalAugReset() {
+  const defs = {eaRotation:0, eaTranslateX:0, eaTranslateY:0, eaScale:1.0, eaShear:0,
+    eaBrightness:1.0, eaContrast:1.0, eaSaturation:1.0, eaNoise:0, eaBlur:0};
+  const valMap = {eaRotation:'eaRotVal', eaTranslateX:'eaTxVal', eaTranslateY:'eaTyVal', eaScale:'eaScaleVal',
+    eaShear:'eaShearVal', eaBrightness:'eaBrightVal', eaContrast:'eaContrastVal', eaSaturation:'eaSatVal',
+    eaNoise:'eaNoiseVal', eaBlur:'eaBlurVal'};
+  for (const [id, val] of Object.entries(defs)) {
+    document.getElementById(id).value = val;
+    document.getElementById(valMap[id]).textContent = val;
+  }
+}
+
+async function evalAugSaveParams() {
+  const st = document.getElementById('evalAugFixStatus');
+  st.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/fakecam/save-params', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params: evalAugGetParams()}),
+    });
+    const d = await r.json();
+    st.textContent = d.ok ? 'Saved!' : 'Error';
+    setTimeout(() => st.textContent = '', 3000);
+  } catch(e) { st.textContent = 'Error'; }
+}
+
+async function evalAugPreview() {
+  const mode = evalGetAugMode();
+  let params;
+  if (mode === 'fix') {
+    params = evalAugGetParams();
+  } else {
+    const level = parseInt(document.getElementById('evalAugLevel').value) || 3;
+    params = evalAugRandomParams(level);
+  }
+  const statusEl = document.getElementById(mode === 'fix' ? 'evalAugFixStatus' : 'evalAugRandomStatus');
+  statusEl.textContent = 'Capturing...';
+  // Show in sidebar preview
+  const wrap = document.getElementById('evalFakecamPreview');
+  const container = document.getElementById('evalFakecamCams');
+  wrap.style.display = '';
+  container.innerHTML = '<span style="font-size:0.78rem;color:#888">Capturing...</span>';
+  try {
+    const r = await fetch('/api/eval/fakecam-preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params}),
+    });
+    const d = await r.json();
+    statusEl.textContent = '';
+    if (!d.ok) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">${d.error}</span>`; return; }
+    container.innerHTML = '';
+    for (const cam of d.cameras) {
+      if (cam.error) { container.innerHTML += `<span style="color:#c00;font-size:0.78rem">${cam.name}: ${cam.error}</span>`; continue; }
+      const div = document.createElement('div');
+      div.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
+        <div style="display:flex;gap:6px">
+          <div style="flex:1;text-align:center">
+            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Original</div>
+            <img src="data:image/jpeg;base64,${cam.original}" style="width:100%;border-radius:4px;border:1px solid #ddd">
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div>
+            <img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88">
+          </div>
+        </div>`;
+      container.appendChild(div);
+    }
+  } catch(e) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">Error: ${e.message}</span>`; statusEl.textContent = ''; }
+}
+
+async function _evalSaveFakecamParams() {
+  const mode = evalGetAugMode();
+  let params;
+  if (mode === 'fix') {
+    params = evalAugGetParams();
+  } else {
+    const level = parseInt(document.getElementById('evalAugLevel').value) || 3;
+    params = evalAugRandomParams(level);
+  }
+  await fetch('/api/fakecam/save-params', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({params}),
+  });
+  return params;
+}
+
+function _evalAugSuffix() {
+  if (!document.getElementById('evalUseFakecam').checked) return '';
+  const mode = evalGetAugMode();
+  if (mode === 'random') {
+    const level = document.getElementById('evalAugLevel').value || '3';
+    return `_AUGLV${level}`;
+  }
+  return '_AUGFIX';
+}
+
+function evalAugLevelChanged() {
+  const level = parseInt(document.getElementById('evalAugLevel').value) || 3;
+  const L = EVAL_AUG_LEVELS[level];
+  const desc = document.getElementById('evalAugLevelDesc');
+  desc.innerHTML = `Rotation ±${L.rotation[1]}° · Translate ±${L.translate_x[1]}% · Scale ${L.scale[0]}–${L.scale[1]} · Brightness ${L.brightness[0]}–${L.brightness[1]} · Contrast ${L.contrast[0]}–${L.contrast[1]} · Noise 0–${L.noise[1]} · Blur 0–${L.blur[1]}`;
+}
+
 function evalUpdateCmd() {
   const pre = document.getElementById('evalCmdPreview');
   if (!evalSelectedModel) { pre.textContent = 'Select a model to preview command.'; return; }
@@ -7065,6 +7299,11 @@ async function evalTestInference() {
   stopBtn.style.display = '';
   st.textContent = 'Starting...';
 
+  // Save fakecam params before starting (generates random if random mode)
+  if (document.getElementById('evalUseFakecam').checked) {
+    await _evalSaveFakecamParams();
+  }
+
   try {
     const r = await fetch('/api/eval/start', {
       method: 'POST',
@@ -7079,7 +7318,7 @@ async function evalTestInference() {
       return;
     }
     st.innerHTML = '<span style="color:#34a853">Running...</span>';
-    _evalShowFakecamPreview();
+    if (document.getElementById('evalUseFakecam').checked) evalAugPreview();
     // Poll log into evalLog
     evalTestPollTimer = setInterval(async () => {
       try {
@@ -7105,37 +7344,6 @@ async function evalTestInference() {
   }
 }
 
-async function _evalShowFakecamPreview() {
-  const wrap = document.getElementById('evalFakecamPreview');
-  const container = document.getElementById('evalFakecamCams');
-  if (!document.getElementById('evalUseFakecam').checked) { wrap.style.display = 'none'; return; }
-  wrap.style.display = '';
-  container.innerHTML = '<span style="font-size:0.78rem;color:#888">Capturing...</span>';
-  try {
-    const r = await fetch('/api/eval/fakecam-preview');
-    const d = await r.json();
-    if (!d.ok) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">${d.error}</span>`; return; }
-    container.innerHTML = '';
-    for (const cam of d.cameras) {
-      if (cam.error) { container.innerHTML += `<span style="color:#c00;font-size:0.78rem">${cam.name}: ${cam.error}</span>`; continue; }
-      const div = document.createElement('div');
-      div.innerHTML = `
-        <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
-        <div style="display:flex;gap:6px">
-          <div style="flex:1;text-align:center">
-            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Original</div>
-            <img src="data:image/jpeg;base64,${cam.original}" style="width:100%;border-radius:4px;border:1px solid #ddd">
-          </div>
-          <div style="flex:1;text-align:center">
-            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div>
-            <img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88">
-          </div>
-        </div>`;
-      container.appendChild(div);
-    }
-  } catch(e) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">Error: ${e.message}</span>`; }
-}
-
 async function evalTestStop() {
   const st = document.getElementById('evalTestStatus');
   st.textContent = 'Stopping...';
@@ -7154,13 +7362,16 @@ async function evalTestStop() {
 
 function _evalNewSession() {
   const target = parseInt(document.getElementById('evalTargetRuns').value) || 10;
+  const augSuffix = _evalAugSuffix();
   evalSession = {
     session_id: `eval_${Date.now()}`,
     model_id: evalSelectedModel.id,
-    model_name: evalSelectedModel.name,
+    model_name: evalSelectedModel.name + augSuffix,
     task: document.getElementById('evalTask').value,
     fps: parseInt(document.getElementById('evalFps').value) || 30,
     use_fakecam: document.getElementById('evalUseFakecam').checked,
+    aug_mode: evalGetAugMode(),
+    aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
     target_runs: target,
     completed: 0, success: 0, fail: 0, skip: 0,
     results: [],
@@ -7229,6 +7440,11 @@ async function evalStartEpisode() {
   document.getElementById('evalRunBtn').disabled = true;
   document.getElementById('evalStopBtn').style.display = '';
   document.getElementById('evalRecordSection').style.display = 'none';
+
+  // 0) Save fakecam params (generates random if random mode)
+  if (document.getElementById('evalUseFakecam').checked) {
+    await _evalSaveFakecamParams();
+  }
 
   // 1) Start the lerobot-rollout process
   st.innerHTML = '<span style="color:#1a73e8">Starting rollout...</span>';
@@ -7522,6 +7738,14 @@ async function evalLoadSession(sessionId) {
     document.getElementById('evalTargetRuns').value = d.target_runs || 10;
     document.getElementById('evalFps').value = d.fps || 30;
     document.getElementById('evalUseFakecam').checked = d.use_fakecam || false;
+    if (d.aug_mode) {
+      const radio = document.querySelector(`input[name="evalAugMode"][value="${d.aug_mode}"]`);
+      if (radio) radio.checked = true;
+    }
+    if (d.aug_level != null) document.getElementById('evalAugLevel').value = d.aug_level;
+    evalFakecamToggle();
+    evalAugModeChanged();
+    evalAugLevelChanged();
     if (d.completed >= d.target_runs) {
       document.getElementById('evalRunStatus').innerHTML = '<span style="color:#34a853;font-weight:600">Evaluation complete!</span>';
     } else {

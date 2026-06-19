@@ -4596,20 +4596,18 @@ async def eval_move_to_reset():
     return {"ok": False, "error": err}
 
 
-@app.get("/api/eval/fakecam-preview")
-async def eval_fakecam_preview():
+@app.post("/api/eval/fakecam-preview")
+async def eval_fakecam_preview(request: Request):
     """Capture one frame from each camera and return original + augmented as base64 JPEG."""
     import cv2
     import base64
 
+    body = await request.json()
+    params = body.get("params", {})
+
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
     cameras = robot_cfg.get("cameras", {})
-    params_path = ROOT / "fakecam_params.json"
-    if not params_path.exists():
-        return {"ok": False, "error": "fakecam_params.json not found"}
-    with open(params_path) as f:
-        params = json.load(f)
 
     cam_p = _build_cam_params(params)
     light_p = _build_light_params(params)
