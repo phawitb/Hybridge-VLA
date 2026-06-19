@@ -1137,6 +1137,7 @@ bump_height = min(overshoot + 2, 10) degrees
             <div class="form-group"><label class="form-label">FPS</label><input type="number" id="dcTopFps" value="30" min="1" max="60" style="width:70px"></div>
             <div class="form-group"><label class="form-label">Width</label><input type="number" id="dcTopWidth" value="320" min="160" max="1920" step="16" style="width:70px"></div>
             <div class="form-group"><label class="form-label">Height</label><input type="number" id="dcTopHeight" value="240" min="120" max="1080" step="16" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">FourCC</label><input type="text" id="dcTopFourcc" placeholder="e.g. MJPG" style="width:70px"></div>
           </div>
         </div>
         <div style="margin-top:10px">
@@ -1145,6 +1146,7 @@ bump_height = min(overshoot + 2, 10) degrees
             <div class="form-group"><label class="form-label">FPS</label><input type="number" id="dcWristFps" value="30" min="1" max="60" style="width:70px"></div>
             <div class="form-group"><label class="form-label">Width</label><input type="number" id="dcWristWidth" value="320" min="160" max="1920" step="16" style="width:70px"></div>
             <div class="form-group"><label class="form-label">Height</label><input type="number" id="dcWristHeight" value="240" min="120" max="1080" step="16" style="width:70px"></div>
+            <div class="form-group"><label class="form-label">FourCC</label><input type="text" id="dcWristFourcc" placeholder="e.g. MJPG" style="width:70px"></div>
           </div>
         </div>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
@@ -1155,6 +1157,17 @@ bump_height = min(overshoot + 2, 10) degrees
             <input type="checkbox" id="dcResume" checked> Resume previous recording session
           </label>
         </div>
+      </div>
+
+      <div class="config-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Command</h3>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="dcCmdStatus" style="font-size:0.82rem;color:#888"></span>
+            <button class="btn btn-sm" onclick="dcCopyCmd()" style="font-size:0.72rem;padding:2px 10px">Copy</button>
+          </div>
+        </div>
+        <pre id="dcCmdPreview" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;white-space:pre-wrap;word-break:break-all;line-height:1.6;margin:0;max-height:200px;overflow-y:auto">Loading...</pre>
       </div>
 
       <div class="config-card">
@@ -1215,6 +1228,7 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" id="vizTrainBtn" onclick="vizShowTrainGuide()" style="display:none;background:#34a853;color:#fff">Training</button>
       <span id="vizDatasetStatus" style="font-size:0.82rem;color:#888"></span>
       <div style="flex:1"></div>
+      <button class="btn btn-sm" id="vizRandomBtn" onclick="vizShowRandomSubset()" style="display:none;background:#00695c;white-space:nowrap">Random &amp; Generate</button>
       <button class="btn btn-sm" id="vizSplitBtn" onclick="vizSplitDataset()" style="display:none;background:#7b1fa2;white-space:nowrap">Split &amp; Generate</button>
     </div>
 
@@ -3179,6 +3193,7 @@ function setupEvents() {
       document.getElementById('inner-'+el.dataset.inner).classList.add('active');
       if (el.dataset.inner === 'cfg-history') loadResults();
       if (el.dataset.inner === 'train-history') trainLoadHistory();
+      if (el.dataset.inner === 'dc-collect') dcRefreshCmd();
     });
   });
   // Image
@@ -3999,9 +4014,11 @@ function dcPopulate() {
   document.getElementById('dcTopFps').value = topCam.fps ?? dc.fps ?? 30;
   document.getElementById('dcTopWidth').value = topCam.width ?? dc.cam_width ?? 320;
   document.getElementById('dcTopHeight').value = topCam.height ?? dc.cam_height ?? 240;
+  document.getElementById('dcTopFourcc').value = topCam.fourcc || 'MJPG';
   document.getElementById('dcWristFps').value = wristCam.fps ?? dc.fps ?? 30;
   document.getElementById('dcWristWidth').value = wristCam.width ?? dc.cam_width ?? 320;
   document.getElementById('dcWristHeight').value = wristCam.height ?? dc.cam_height ?? 240;
+  document.getElementById('dcWristFourcc').value = wristCam.fourcc || 'MJPG';
   document.getElementById('dcPushHub').checked = dc.push_to_hub || false;
   document.getElementById('dcResume').checked = dc.resume !== undefined ? dc.resume : true;
   // Hardware fields
@@ -4012,7 +4029,7 @@ function dcPopulate() {
   document.getElementById('dcTeleopPort').value = tel.port || '';
   document.getElementById('dcTeleopId').value = tel.id || 'my_awesome_leader_arm';
   document.getElementById('dcCamTop').value = cfg.camera_top_index ?? 0;
-  document.getElementById('dcCamWrist').value = cfg.camera_wrist_index ?? 1;
+  document.getElementById('dcCamWrist').value = cfg.camera_wrist_index ?? 0;
 }
 
 function dcAutoFillDataset() {
@@ -4051,8 +4068,8 @@ async function dcSaveConfig() {
       body: JSON.stringify({
         robot_port: document.getElementById('dcRobotPort').value,
         robot_id: document.getElementById('dcRobotId').value,
-        camera_top_index: parseInt(document.getElementById('dcCamTop').value) || 0,
-        camera_wrist_index: parseInt(document.getElementById('dcCamWrist').value) || 1,
+        camera_top_index: parseInt(document.getElementById('dcCamTop').value),
+        camera_wrist_index: parseInt(document.getElementById('dcCamWrist').value),
         teleop: {
           type: document.getElementById('dcTeleopType').value,
           port: document.getElementById('dcTeleopPort').value,
@@ -4071,11 +4088,13 @@ async function dcSaveConfig() {
               fps: parseInt(document.getElementById('dcTopFps').value) || 30,
               width: parseInt(document.getElementById('dcTopWidth').value) || 320,
               height: parseInt(document.getElementById('dcTopHeight').value) || 240,
+              ...(document.getElementById('dcTopFourcc').value.trim() && {fourcc: document.getElementById('dcTopFourcc').value.trim()}),
             },
             wrist: {
               fps: parseInt(document.getElementById('dcWristFps').value) || 30,
               width: parseInt(document.getElementById('dcWristWidth').value) || 320,
               height: parseInt(document.getElementById('dcWristHeight').value) || 240,
+              ...(document.getElementById('dcWristFourcc').value.trim() && {fourcc: document.getElementById('dcWristFourcc').value.trim()}),
             },
           },
         }
@@ -4087,11 +4106,36 @@ async function dcSaveConfig() {
       // Refresh cfg
       const r2 = await fetch('/api/config');
       cfg = await r2.json();
+      dcRefreshCmd();
     } else {
       st.textContent = 'Error saving';
     }
   } catch(e) { st.textContent = 'Error: ' + e.message; }
   setTimeout(() => st.textContent = '', 3000);
+}
+
+async function dcRefreshCmd() {
+  const pre = document.getElementById('dcCmdPreview');
+  try {
+    const r = await fetch('/api/datacollect/command');
+    const d = await r.json();
+    pre.textContent = d.ok ? d.command : 'Error: ' + (d.error || 'unknown');
+  } catch(e) { pre.textContent = 'Error: ' + e.message; }
+}
+
+function dcCopyCmd() {
+  const text = document.getElementById('dcCmdPreview').textContent;
+  const st = document.getElementById('dcCmdStatus');
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  st.textContent = 'Copied!';
+  setTimeout(() => st.textContent = '', 2000);
 }
 
 async function dcRunVerify() {
@@ -4319,6 +4363,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
   document.getElementById('vizTrainBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizRandomBtn').style.display = 'none';
   if (!name) { infoSection.style.display = 'none'; return; }
   vizCurrentDataset = name;
   try {
@@ -4336,6 +4381,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const splitBtn = document.getElementById('vizSplitBtn');
     const canSplit = /pick\s+up\s+.+\s+(to\s+the|and\s+place|in\s+the|into\s+the|onto\s+the)\s+/i.test(task);
     splitBtn.style.display = canSplit ? '' : 'none';
+    document.getElementById('vizRandomBtn').style.display = '';
 
     // Fetch episodes metadata (timestamps for video seeking)
     const epR = await fetch(`/api/datasets/${name}/episodes`);
@@ -4507,6 +4553,81 @@ async function vizSplitDataset() {
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
   btn.textContent = 'Split & Generate';
+}
+
+// ── Random Subset ──
+
+async function vizShowRandomSubset() {
+  if (!vizCurrentDataset) return;
+  // Fetch dataset info for total episodes
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/info`);
+    const d = await r.json();
+    if (!d.ok) { alert('Error loading dataset'); return; }
+    const totalEps = d.info.total_episodes || 0;
+    const defaultName = `${vizCurrentDataset}_rand`;
+    const html = `
+      <div style="text-align:left;font-size:0.9rem">
+        <p>Source: <b>${vizCurrentDataset}</b> (${totalEps} episodes)</p>
+        <div style="margin:10px 0">
+          <label style="font-weight:600">Number of episodes:</label><br>
+          <input type="number" id="_randNumEps" value="${Math.min(10, totalEps)}" min="1" max="${totalEps}" style="width:120px;margin-top:4px;padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+        </div>
+        <div style="margin:10px 0">
+          <label style="font-weight:600">New dataset name:</label><br>
+          <input type="text" id="_randNewName" value="${defaultName}" style="width:100%;margin-top:4px;padding:4px 8px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+          <div style="font-size:0.75rem;color:#999;margin-top:2px">Name will auto-update with episode count</div>
+        </div>
+      </div>`;
+    // Use a simple modal via prompt replacement
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+      <h3 style="margin:0 0 14px 0">Random &amp; Generate</h3>
+      ${html}
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+        <button class="btn btn-sm" id="_randCancel" style="background:#e0e0e0;color:#333">Cancel</button>
+        <button class="btn btn-sm" id="_randOk" style="background:#00695c">Generate</button>
+      </div>
+      <div id="_randStatus" style="font-size:0.82rem;color:#888;margin-top:10px"></div>
+    </div>`;
+    document.body.appendChild(modal);
+    // Auto-update name when episodes change
+    const epsInput = document.getElementById('_randNumEps');
+    const nameInput = document.getElementById('_randNewName');
+    epsInput.addEventListener('input', () => {
+      nameInput.value = `${vizCurrentDataset}_rand${epsInput.value}`;
+    });
+    // Update name with initial value
+    nameInput.value = `${vizCurrentDataset}_rand${epsInput.value}`;
+    document.getElementById('_randCancel').onclick = () => modal.remove();
+    document.getElementById('_randOk').onclick = async () => {
+      const numEps = parseInt(epsInput.value);
+      const newName = nameInput.value.trim();
+      if (!newName) { alert('Enter a dataset name'); return; }
+      if (numEps < 1 || numEps > totalEps) { alert(`Episodes must be between 1 and ${totalEps}`); return; }
+      const st = document.getElementById('_randStatus');
+      const okBtn = document.getElementById('_randOk');
+      okBtn.disabled = true;
+      st.textContent = 'Generating...';
+      try {
+        const r2 = await fetch(`/api/datasets/${vizCurrentDataset}/random-subset`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({num_episodes: numEps, new_name: newName}),
+        });
+        const d2 = await r2.json();
+        if (d2.ok) {
+          modal.remove();
+          alert(`Created "${d2.name}" with ${d2.episodes} episodes (${d2.frames} frames)`);
+          vizRefreshDatasets();
+        } else {
+          st.textContent = 'Error: ' + d2.error;
+          okBtn.disabled = false;
+        }
+      } catch(e) { st.textContent = 'Error: ' + e.message; okBtn.disabled = false; }
+    };
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // ── Combine Datasets ──
@@ -4786,7 +4907,7 @@ function infUpdateCommands() {
   const robotPort = cfg.robot_port || '/dev/tty.usbmodem5B141122411';
   const robotId = cfg.robot_id || 'my_awesome_follower_arm';
   const camTop = cfg.camera_top_index ?? 0;
-  const camWrist = cfg.camera_wrist_index ?? 1;
+  const camWrist = cfg.camera_wrist_index ?? 0;
 
   // Step 1: Download
   const cmd1 = [

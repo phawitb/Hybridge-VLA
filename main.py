@@ -1522,6 +1522,223 @@ async def combine_datasets(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/datasets/{name}/random-subset")
+async def random_subset_dataset(name: str, request: Request):
+    """Create a new dataset by randomly sampling episodes from an existing one."""
+    import shutil
+    import random
+
+    body = await request.json()
+    num_episodes = int(body.get("num_episodes", 10))
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        return {"ok": False, "error": "Enter a name for the new dataset"}
+    new_name = new_name.replace(" ", "-").replace("/", "-")
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', new_name):
+        return {"ok": False, "error": "Invalid name. Use only letters, numbers, dash, underscore."}
+
+    src_dir = ROOT / "data" / name
+    new_dir = ROOT / "data" / new_name
+    info_path = src_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": f"Dataset '{name}' not found"}
+    if new_dir.exists():
+        return {"ok": False, "error": f"Dataset '{new_name}' already exists"}
+
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        src_info = json.loads(info_path.read_text())
+        total_eps = src_info.get("total_episodes", 0)
+        if num_episodes > total_eps:
+            return {"ok": False, "error": f"Requested {num_episodes} episodes but dataset only has {total_eps}"}
+        if num_episodes < 1:
+            return {"ok": False, "error": "Need at least 1 episode"}
+
+        # Randomly select episodes
+        selected_eps = sorted(random.sample(range(total_eps), num_episodes))
+
+        # Read tasks
+        all_tasks = []
+        tp = src_dir / "meta" / "tasks.parquet"
+        if tp.exists():
+            try:
+                tbl = pq.read_table(str(tp))
+                all_tasks = tbl.to_pydict().get("task", [])
+            except Exception:
+                pass
+
+        # Read episode metadata
+        ep_meta_list = []
+        ep_dir = src_dir / "meta" / "episodes"
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep_meta_list.append({k: v[i] for k, v in d.items()})
+        ep_meta_list.sort(key=lambda r: r.get("episode_index", 0))
+
+        # Read data frames
+        data_dir = src_dir / "data"
+        src_frames = {}
+        if data_dir.exists():
+            for pf in sorted(data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep = d["episode_index"][i]
+                    if ep not in selected_eps:
+                        continue
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    src_frames.setdefault(ep, []).append(row)
+
+        for ep in src_frames:
+            src_frames[ep].sort(key=lambda r: r.get("frame_index", 0))
+
+        # Build new dataset
+        combined_data = []
+        combined_ep = []
+        new_ep_idx = 0
+        global_frame_idx = 0
+
+        for old_ep in selected_eps:
+            frames = src_frames.get(old_ep, [])
+            if not frames:
+                continue
+            ep_meta = next((m for m in ep_meta_list if m["episode_index"] == old_ep), None)
+            ep_global_start = global_frame_idx
+
+            for fi, row in enumerate(frames):
+                new_row = dict(row)
+                new_row["episode_index"] = new_ep_idx
+                new_row["frame_index"] = fi
+                new_row["index"] = global_frame_idx
+                combined_data.append(new_row)
+                global_frame_idx += 1
+
+            new_meta = {}
+            new_meta["episode_index"] = new_ep_idx
+            if ep_meta and "tasks" in ep_meta:
+                new_meta["tasks"] = ep_meta["tasks"]
+            elif all_tasks:
+                new_meta["tasks"] = [all_tasks[0]]
+            else:
+                new_meta["tasks"] = [""]
+            new_meta["length"] = len(frames)
+            new_meta["data/chunk_index"] = 0
+            new_meta["data/file_index"] = 0
+            new_meta["dataset_from_index"] = ep_global_start
+            new_meta["dataset_to_index"] = global_frame_idx
+
+            for cam in ["observation.images.top", "observation.images.wrist"]:
+                cam_key = f"videos/{cam}"
+                if ep_meta:
+                    orig_chunk = ep_meta.get(f"{cam_key}/chunk_index", 0)
+                    orig_file = ep_meta.get(f"{cam_key}/file_index", 0)
+                    src_vid = src_dir / "videos" / cam / f"chunk-{orig_chunk:03d}" / f"file-{orig_file:03d}.mp4"
+                else:
+                    src_vid = None
+                new_meta[f"{cam_key}/from_timestamp"] = ep_meta.get(f"{cam_key}/from_timestamp", 0.0) if ep_meta else 0.0
+                new_meta[f"{cam_key}/to_timestamp"] = ep_meta.get(f"{cam_key}/to_timestamp", 0.0) if ep_meta else 0.0
+                new_meta[f"{cam_key}/chunk_index"] = 0
+                new_meta[f"{cam_key}/file_index"] = 0
+                new_meta[f"_src_vid_{cam}"] = str(src_vid) if src_vid and src_vid.exists() else None
+
+            if ep_meta:
+                for k, v in ep_meta.items():
+                    if k.startswith("stats/"):
+                        new_meta[k] = v
+                if "meta/episodes/chunk_index" in ep_meta:
+                    new_meta["meta/episodes/chunk_index"] = 0
+                if "meta/episodes/file_index" in ep_meta:
+                    new_meta["meta/episodes/file_index"] = 0
+
+            combined_ep.append(new_meta)
+            new_ep_idx += 1
+
+        if not combined_data:
+            return {"ok": False, "error": "No data found for selected episodes"}
+
+        # Create output directory
+        new_dir.mkdir(parents=True)
+        (new_dir / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+        (new_dir / "data" / "chunk-000").mkdir(parents=True)
+
+        # Copy video files
+        for cam in ["observation.images.top", "observation.images.wrist"]:
+            vid_dir = new_dir / "videos" / cam / "chunk-000"
+            vid_dir.mkdir(parents=True)
+            src_vids = []
+            src_vid_set = set()
+            for ep_meta in combined_ep:
+                sv = ep_meta.get(f"_src_vid_{cam}")
+                if sv and sv not in src_vid_set:
+                    src_vid_set.add(sv)
+                    src_vids.append(sv)
+            vid_map = {}
+            for fi, sv in enumerate(src_vids):
+                dst = vid_dir / f"file-{fi:03d}.mp4"
+                shutil.copy2(sv, str(dst))
+                vid_map[sv] = fi
+            cam_key = f"videos/{cam}"
+            for ep_meta in combined_ep:
+                sv = ep_meta.pop(f"_src_vid_{cam}", None)
+                if sv and sv in vid_map:
+                    ep_meta[f"{cam_key}/file_index"] = vid_map[sv]
+
+        # Write data parquet
+        cols = {k: [r[k] for r in combined_data] for k in combined_data[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "data" / "chunk-000" / "file-000.parquet"))
+
+        # Write episode meta parquet
+        for ep in combined_ep:
+            for k in list(ep.keys()):
+                if k.startswith("_src_vid_"):
+                    del ep[k]
+        cols = {k: [r[k] for r in combined_ep] for k in combined_ep[0]}
+        pq.write_table(pa.table(cols), str(new_dir / "meta" / "episodes" / "chunk-000" / "file-000.parquet"))
+
+        # Write tasks parquet
+        import pandas as pd
+        if all_tasks:
+            tasks_df = pd.DataFrame({"task_index": list(range(len(all_tasks)))}, index=pd.Index(all_tasks, name="task"))
+            tasks_df.to_parquet(str(new_dir / "meta" / "tasks.parquet"))
+
+        # Write info.json
+        new_info = dict(src_info)
+        new_info["total_episodes"] = new_ep_idx
+        new_info["total_frames"] = len(combined_data)
+        new_info["splits"] = {"train": f"0:{new_ep_idx}"}
+        (new_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+        _compute_stats_json(combined_data, new_dir)
+
+        print(f"[Dataset] Random subset from {name}: {new_name} ({new_ep_idx} eps, {len(combined_data)} frames)")
+        return {
+            "ok": True,
+            "name": new_name,
+            "episodes": new_ep_idx,
+            "frames": len(combined_data),
+            "selected": selected_eps,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 @app.delete("/api/datasets/{name}")
 async def delete_dataset(name: str):
     """Delete an entire dataset directory."""
@@ -3771,43 +3988,32 @@ async def datacollect_verify():
     return result
 
 
-@app.post("/api/datacollect/start")
-async def datacollect_start():
-    """Start lerobot-record subprocess."""
-    if datacollect_state["running"]:
-        return {"ok": False, "error": "Already recording"}
-    # Stop teleop and slider-mode robot if running (they share ports & cameras)
-    if teleop_state["running"]:
-        await teleop_stop()
-    if robot_state["connected"]:
-        disconnect_robot()
-    # Wait for cameras to fully release
-    time.sleep(1)
-
+def _build_datacollect_cmd() -> list[str]:
+    """Build the lerobot-record command from current config (without --resume)."""
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
     teleop_cfg = cfg.get("teleop", {})
     dc_cfg = cfg.get("data_collection", {})
     cams = robot_cfg.get("cameras", {})
-
     dc_cams = dc_cfg.get("cameras", {})
 
-    # Build cameras config string for lerobot (use per-camera resolution)
     cam_parts = []
     for cam_name, cam_c in cams.items():
         dc_cam = dc_cams.get(cam_name, {})
         cam_fps = dc_cam.get("fps", 30)
         cam_w = dc_cam.get("width", 320)
         cam_h = dc_cam.get("height", 240)
-        cam_parts.append(
-            f"{cam_name}: {{type: opencv, index_or_path: {cam_c.get('index', 0)}, "
-            f"width: {cam_w}, height: {cam_h}, fps: {cam_fps}}}"
-        )
+        fourcc = dc_cam.get("fourcc", "MJPG")
+        part = (f"{cam_name}: {{type: opencv, index_or_path: {cam_c.get('index', 0)}, "
+                f"width: {cam_w}, height: {cam_h}, fps: {cam_fps}")
+        if fourcc:
+            part += f", fourcc: '{fourcc}'"
+        part += "}"
+        cam_parts.append(part)
     cameras_str = "{" + ", ".join(cam_parts) + "}"
-    # Use top camera fps for dataset fps (primary)
     fps = dc_cams.get("top", {}).get("fps", 30)
 
-    cmd = [
+    return [
         "/opt/miniconda3/envs/lerobot/bin/lerobot-record",
         f"--robot.type=so101_follower",
         f"--robot.port={robot_cfg.get('port', '')}",
@@ -3826,7 +4032,45 @@ async def datacollect_start():
         f"--dataset.fps={fps}",
         f"--dataset.encoder_threads={dc_cfg.get('encoder_threads', 4)}",
     ]
+
+
+@app.get("/api/datacollect/command")
+async def datacollect_command():
+    """Return the lerobot-record command that would be run."""
+    cmd = _build_datacollect_cmd()
+    # Add --resume if applicable
+    cfg = load_config()
+    dc_cfg = cfg.get("data_collection", {})
+    dataset_root = Path(dc_cfg.get("dataset_root", "./data/dataset"))
+    if not dataset_root.is_absolute():
+        dataset_root = ROOT / dataset_root
+    dataset_exists = dataset_root.exists() and (dataset_root / "meta" / "info.json").exists()
+    if dc_cfg.get("resume", False) and dataset_exists:
+        cmd.append("--resume=true")
+    # Shell-quote args that contain spaces or braces for copy-paste
+    import shlex
+    quoted = [shlex.quote(arg) if any(c in arg for c in ' {}') else arg for arg in cmd]
+    return {"ok": True, "command": " \\\n  ".join(quoted)}
+
+
+@app.post("/api/datacollect/start")
+async def datacollect_start():
+    """Start lerobot-record subprocess."""
+    if datacollect_state["running"]:
+        return {"ok": False, "error": "Already recording"}
+    # Stop teleop and slider-mode robot if running (they share ports & cameras)
+    if teleop_state["running"]:
+        await teleop_stop()
+    if robot_state["connected"]:
+        disconnect_robot()
+    # Wait for cameras to fully release
+    time.sleep(1)
+
+    cmd = _build_datacollect_cmd()
+
     import shutil
+    cfg = load_config()
+    dc_cfg = cfg.get("data_collection", {})
     dataset_root = Path(dc_cfg.get("dataset_root", "./data/dataset"))
     if not dataset_root.is_absolute():
         dataset_root = ROOT / dataset_root
