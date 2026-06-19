@@ -4473,6 +4473,25 @@ async def calibrate_move_to(request: Request):
 EVAL_DIR = ROOT / "data" / "eval_sessions"
 EVAL_DIR.mkdir(parents=True, exist_ok=True)
 
+EVAL_CONFIG_FILE = EVAL_DIR / "eval_config.json"
+
+
+@app.get("/api/eval/config")
+async def eval_get_config():
+    if EVAL_CONFIG_FILE.exists():
+        try:
+            return {"ok": True, "config": json.loads(EVAL_CONFIG_FILE.read_text())}
+        except Exception:
+            pass
+    return {"ok": True, "config": {}}
+
+
+@app.post("/api/eval/config")
+async def eval_save_config(request: Request):
+    body = await request.json()
+    EVAL_CONFIG_FILE.write_text(json.dumps(body, indent=2))
+    return {"ok": True}
+
 eval_state = {"running": False, "process": None, "log_lines": [], "session_id": None}
 
 EVAL_RESET_POS_FILE = EVAL_DIR / "reset_position.json"

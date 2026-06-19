@@ -2826,11 +2826,17 @@ lerobot-rollout \
 
         <!-- Eval config -->
         <div class="config-card" style="margin-bottom:14px">
-          <h3>2. Evaluation Config</h3>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <h3 style="margin:0">2. Evaluation Config</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span id="evalConfigSaveStatus" style="font-size:0.78rem;color:#888"></span>
+              <button class="btn btn-sm" onclick="evalSaveConfig()" style="background:#1a73e8;font-size:0.72rem;padding:2px 12px">Save</button>
+            </div>
+          </div>
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px">
             <div class="form-group">
               <label class="form-label">Task Description</label>
-              <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl">
+              <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Target Runs</label>
@@ -2842,24 +2848,24 @@ lerobot-rollout \
             </div>
             <div class="form-group">
               <label class="form-label">FPS</label>
-              <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60">
+              <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Width</label>
-              <input type="number" id="evalWidth" class="form-input" value="320" min="160" max="1920">
+              <input type="number" id="evalWidth" class="form-input" value="320" min="160" max="1920" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Height</label>
-              <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080">
+              <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">FourCC</label>
-              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG">
+              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
             </div>
           </div>
           <div style="margin-top:8px">
             <label style="font-size:0.85rem;display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="evalUseFakecam"> Use Fake Camera (fakecam_inject.py)
+              <input type="checkbox" id="evalUseFakecam" onchange="evalUpdateCmd()"> Use Fake Camera (fakecam_inject.py)
             </label>
           </div>
 
@@ -7570,7 +7576,57 @@ function evalInit() {
   evalLoadModels();
   evalLoadSessions();
   evalLoadResetPos();
-  document.getElementById('evalTask').value = cfg.default_instruction || '';
+  evalLoadConfig();
+}
+
+async function evalLoadConfig() {
+  try {
+    const r = await fetch('/api/eval/config');
+    const d = await r.json();
+    if (d.ok && d.config && Object.keys(d.config).length) {
+      const c = d.config;
+      if (c.task != null) document.getElementById('evalTask').value = c.task;
+      if (c.target_runs != null) document.getElementById('evalTargetRuns').value = c.target_runs;
+      if (c.duration != null) document.getElementById('evalDuration').value = c.duration;
+      if (c.fps != null) document.getElementById('evalFps').value = c.fps;
+      if (c.width != null) document.getElementById('evalWidth').value = c.width;
+      if (c.height != null) document.getElementById('evalHeight').value = c.height;
+      if (c.fourcc != null) document.getElementById('evalFourcc').value = c.fourcc;
+      if (c.use_fakecam != null) document.getElementById('evalUseFakecam').checked = c.use_fakecam;
+    } else {
+      document.getElementById('evalTask').value = cfg.default_instruction || '';
+    }
+  } catch(e) {
+    document.getElementById('evalTask').value = cfg.default_instruction || '';
+  }
+  evalUpdateCmd();
+}
+
+async function evalSaveConfig() {
+  const st = document.getElementById('evalConfigSaveStatus');
+  const config = {
+    task: document.getElementById('evalTask').value,
+    target_runs: parseInt(document.getElementById('evalTargetRuns').value) || 10,
+    duration: parseInt(document.getElementById('evalDuration').value) || 10,
+    fps: parseInt(document.getElementById('evalFps').value) || 30,
+    width: parseInt(document.getElementById('evalWidth').value) || 320,
+    height: parseInt(document.getElementById('evalHeight').value) || 240,
+    fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
+    use_fakecam: document.getElementById('evalUseFakecam').checked,
+  };
+  try {
+    await fetch('/api/eval/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(config),
+    });
+    st.textContent = 'Saved!';
+    st.style.color = '#34a853';
+    setTimeout(() => { st.textContent = ''; }, 2000);
+  } catch(e) {
+    st.textContent = 'Error';
+    st.style.color = '#d93025';
+  }
 }
 
 async function evalLoadResetPos() {
@@ -7784,16 +7840,7 @@ async function evalTestInference() {
     const r = await fetch('/api/eval/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        model_id: evalSelectedModel.id,
-        model_name: evalSelectedModel.name,
-        task: document.getElementById('evalTask').value,
-        fps: parseInt(document.getElementById('evalFps').value) || 30,
-        width: parseInt(document.getElementById('evalWidth').value) || 320,
-        height: parseInt(document.getElementById('evalHeight').value) || 240,
-        fourcc: document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG',
-        use_fakecam: document.getElementById('evalUseFakecam').checked,
-      }),
+      body: JSON.stringify(_evalBuildBody()),
     });
     const d = await r.json();
     if (!d.ok) {
@@ -7890,7 +7937,7 @@ function _evalBuildBody() {
     fps: parseInt(document.getElementById('evalFps').value) || 30,
     width: parseInt(document.getElementById('evalWidth').value) || 320,
     height: parseInt(document.getElementById('evalHeight').value) || 240,
-    fourcc: document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG',
+    fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
     use_fakecam: document.getElementById('evalUseFakecam').checked,
   };
 }
