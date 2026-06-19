@@ -2824,6 +2824,7 @@ lerobot-rollout \
           </div>
         </div>
 
+        <div id="evalCardsSection" style="display:none">
         <!-- Eval config -->
         <div class="config-card" style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2963,6 +2964,7 @@ lerobot-rollout \
           <h3>Log</h3>
           <div id="evalLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start...</div>
         </div>
+        </div><!-- /evalCardsSection -->
 
       </div>
 
@@ -7731,17 +7733,17 @@ async function evalLoadModels() {
 function evalSelectModel() {
   const idx = document.getElementById('evalModelSelect').value;
   const dlSection = document.getElementById('evalModelDownloadSection');
+  const cardsSection = document.getElementById('evalCardsSection');
   if (idx === '') {
     evalSelectedModel = null;
     evalUpdateCmd();
     dlSection.style.display = 'none';
-    document.getElementById('evalRunBtn').disabled = true;
-    document.getElementById('evalTestInferBtn').disabled = true;
-    document.getElementById('evalRunStatus').textContent = 'Select a model first';
+    cardsSection.style.display = 'none';
     return;
   }
   evalSelectedModel = evalModels[parseInt(idx)];
   evalUpdateCmd();
+  cardsSection.style.display = '';
 
   if (evalSelectedModel.local_exists) {
     dlSection.style.display = 'none';
@@ -8259,6 +8261,7 @@ async function evalLoadSession(sessionId) {
     const d = await r.json();
     if (!d.ok) return;
     evalSession = d;
+    document.getElementById('evalCardsSection').style.display = '';
     document.getElementById('evalProgressSection').style.display = '';
     evalUpdateProgress();
     // Select matching model if available
@@ -8267,7 +8270,11 @@ async function evalLoadSession(sessionId) {
       document.getElementById('evalModelSelect').value = modelIdx;
       evalSelectedModel = evalModels[modelIdx];
       evalUpdateCmd();
-      document.getElementById('evalRunBtn').disabled = false;
+      document.getElementById('evalRunBtn').disabled = !(evalSelectedModel.local_exists);
+      document.getElementById('evalTestInferBtn').disabled = !(evalSelectedModel.local_exists);
+      if (!evalSelectedModel.local_exists) {
+        document.getElementById('evalModelDownloadSection').style.display = '';
+      }
     }
     document.getElementById('evalTask').value = d.task || '';
     document.getElementById('evalTargetRuns').value = d.target_runs || 10;
