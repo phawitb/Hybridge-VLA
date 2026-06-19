@@ -7945,47 +7945,64 @@ async function evalStartEpisode() {
   }
 
   evalEpRunning = true;
+  let countdownStarted = false;
+  const initStart = Date.now();
 
-  // 2) Start countdown + poll log immediately
-  evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+  // 2) Poll log — wait for robot ready, then start countdown
+  st.innerHTML = '<span style="color:#1a73e8">Initializing (loading model, connecting cameras)...</span>';
   cdEl.style.display = '';
-  cdEl.textContent = evalCountdownSec + 's';
-  st.innerHTML = '<span style="color:#34a853">Running...</span>';
+  cdEl.textContent = 'init...';
 
-  evalCountdownTimer = setInterval(async () => {
-    evalCountdownSec--;
-    if (evalCountdownSec <= 0) {
-      _evalCleanupTimers();
-      evalEpRunning = false;
-      cdEl.textContent = '0s';
-      st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
-      await _evalStopProcess();
-      st.textContent = 'Episode done. Record result:';
-      _evalShowRecordButtons();
-    } else {
-      cdEl.textContent = evalCountdownSec + 's';
-    }
-  }, 1000);
-
-  // Poll log display
   evalEpPollTimer = setInterval(async () => {
+    if (!evalEpRunning) return;
     try {
       const sr = await fetch('/api/eval/status');
       const sd = await sr.json();
+
+      // Update log display
       const logEl = document.getElementById('evalLog');
       if (sd.lines && sd.lines.length) {
         logEl.textContent = sd.lines.join('\n');
         logEl.scrollTop = logEl.scrollHeight;
       }
-      // Process died before countdown finished
+
+      // Process died
       if (!sd.running && evalEpRunning) {
         evalEpRunning = false;
         _evalCleanupTimers();
         st.textContent = 'Process ended. Record result:';
         _evalShowRecordButtons();
+        return;
+      }
+
+      // Detect robot ready → start countdown
+      if (!countdownStarted && sd.lines && sd.lines.length) {
+        const last20 = sd.lines.slice(-20).join('\n');
+        const ready = last20.includes('control loop started') || last20.includes('Rollout setup complete') || last20.includes('action_dict sent to robot');
+        const timeout = (Date.now() - initStart) > 30000; // 30s fallback
+        if (ready || timeout) {
+          countdownStarted = true;
+          evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+          cdEl.textContent = evalCountdownSec + 's';
+          st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
+          evalCountdownTimer = setInterval(async () => {
+            evalCountdownSec--;
+            if (evalCountdownSec <= 0) {
+              _evalCleanupTimers();
+              evalEpRunning = false;
+              cdEl.textContent = '0s';
+              st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
+              await _evalStopProcess();
+              st.textContent = 'Episode done. Record result:';
+              _evalShowRecordButtons();
+            } else {
+              cdEl.textContent = evalCountdownSec + 's';
+            }
+          }, 1000);
+        }
       }
     } catch(e) {}
-  }, 1000);
+  }, 500);
 }
 
 async function evalStopEpisode() {
