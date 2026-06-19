@@ -4680,13 +4680,6 @@ async def eval_stop():
     p = eval_state["process"]
     if p:
         import signal as sig
-        # Resume first if paused (can't SIGINT a stopped process)
-        if eval_state.get("paused"):
-            try:
-                os.killpg(os.getpgid(p.pid), sig.SIGCONT)
-            except (ProcessLookupError, OSError):
-                pass
-            eval_state["paused"] = False
         try:
             os.killpg(os.getpgid(p.pid), sig.SIGINT)
         except (ProcessLookupError, OSError):
@@ -4708,42 +4701,11 @@ async def eval_stop():
     return {"ok": True}
 
 
-@app.post("/api/eval/pause")
-async def eval_pause():
-    """Pause the eval process (SIGSTOP). Robot stops moving, model stays loaded."""
-    p = eval_state["process"]
-    if not p or not eval_state["running"]:
-        return {"ok": False, "message": "Not running"}
-    try:
-        import signal as sig
-        os.killpg(os.getpgid(p.pid), sig.SIGSTOP)
-        eval_state["paused"] = True
-        return {"ok": True}
-    except (ProcessLookupError, OSError) as e:
-        return {"ok": False, "error": str(e)}
-
-
-@app.post("/api/eval/resume")
-async def eval_resume():
-    """Resume the eval process (SIGCONT)."""
-    p = eval_state["process"]
-    if not p or not eval_state["running"]:
-        return {"ok": False, "message": "Not running"}
-    try:
-        import signal as sig
-        os.killpg(os.getpgid(p.pid), sig.SIGCONT)
-        eval_state["paused"] = False
-        return {"ok": True}
-    except (ProcessLookupError, OSError) as e:
-        return {"ok": False, "error": str(e)}
-
-
 @app.get("/api/eval/status")
 async def eval_status():
     """Get eval process status and logs."""
     return {
         "running": eval_state["running"],
-        "paused": eval_state.get("paused", False),
         "lines": eval_state["log_lines"][-100:],
     }
 
