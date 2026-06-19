@@ -7657,25 +7657,67 @@ function evalRenderResults() {
     const color = r.result === 'success' ? '#34a853' : r.result === 'fail' ? '#d93025' : '#888';
     const icon = r.result === 'success' ? '&#10003;' : r.result === 'fail' ? '&#10007;' : '&#8211;';
     const time = new Date(r.timestamp).toLocaleTimeString();
-    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #f0f0f0">
-      <span style="font-size:0.78rem;color:#888;width:40px">Run ${r.run}</span>
-      <span style="color:${color};font-weight:700;font-size:1rem;width:24px;text-align:center">${icon}</span>
-      <span style="font-size:0.82rem;font-weight:500;color:${color};text-transform:uppercase;flex:1">${r.result}</span>
-      <span style="font-size:0.72rem;color:#999">${time}</span>
-      <button onclick="evalEditResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.72rem;color:#1a73e8;padding:2px 4px" title="Edit">Edit</button>
-      <button onclick="evalDeleteResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.72rem;color:#d93025;padding:2px 4px" title="Delete">&times;</button>
+    const hasAug = r.aug_params || r.aug_preview;
+    // Build detail section
+    let detail = '';
+    if (hasAug) {
+      let paramHtml = '';
+      if (r.aug_params) {
+        const p = r.aug_params;
+        paramHtml = `<div style="font-size:0.7rem;color:#555;margin-bottom:6px;display:flex;flex-wrap:wrap;gap:4px 10px">
+          ${Object.entries(p).map(([k,v]) => `<span><b>${k}:</b> ${typeof v==='number'?v.toFixed(2):v}</span>`).join('')}
+        </div>`;
+      }
+      let imgHtml = '';
+      if (r.aug_preview && r.aug_preview.length) {
+        imgHtml = r.aug_preview.map(c => `<div style="margin-bottom:4px">
+          <div style="font-size:0.68rem;font-weight:600;color:#555;margin-bottom:2px">${c.name}</div>
+          <div style="display:flex;gap:4px">
+            <div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#999">Original</div><img src="data:image/jpeg;base64,${c.original}" style="width:100%;border-radius:3px;border:1px solid #ddd"></div>
+            <div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#999">Augmented</div><img src="data:image/jpeg;base64,${c.augmented}" style="width:100%;border-radius:3px;border:1px solid #e88"></div>
+          </div>
+        </div>`).join('');
+      }
+      detail = `<div id="evalResultDetail_${i}" style="display:none;padding:6px 10px 10px 48px;border-bottom:1px solid #f0f0f0;background:#fafafa">
+        ${paramHtml}${imgHtml}
+      </div>`;
+    }
+    const expandBtn = hasAug ? `<span onclick="evalToggleDetail(${i})" style="cursor:pointer;font-size:0.7rem;color:#1a73e8;padding:0 2px" title="Show details" id="evalDetailBtn_${i}">&#9660;</span>` : '';
+    return `<div>
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:${hasAug?'none':'1px solid #f0f0f0'}">
+        ${expandBtn}
+        <span style="font-size:0.78rem;color:#888;width:40px">Run ${r.run}</span>
+        <span style="color:${color};font-weight:700;font-size:1rem;width:24px;text-align:center">${icon}</span>
+        <span style="font-size:0.82rem;font-weight:500;color:${color};text-transform:uppercase;flex:1">${r.result}</span>
+        <span style="font-size:0.72rem;color:#999">${time}</span>
+        <select onchange="evalEditResult(${i},this.value)" style="font-size:0.68rem;border:1px solid #ddd;border-radius:3px;padding:1px 4px;color:#555;background:#fff;cursor:pointer">
+          <option value="success" ${r.result==='success'?'selected':''}>Success</option>
+          <option value="fail" ${r.result==='fail'?'selected':''}>Fail</option>
+          <option value="skip" ${r.result==='skip'?'selected':''}>Skip</option>
+        </select>
+        <button onclick="evalDeleteResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.72rem;color:#d93025;padding:2px 4px" title="Delete">&times;</button>
+      </div>
+      ${detail}
     </div>`;
   }).reverse().join('');
 }
 
-function evalEditResult(idx) {
+function evalToggleDetail(idx) {
+  const el = document.getElementById('evalResultDetail_' + idx);
+  const btn = document.getElementById('evalDetailBtn_' + idx);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    btn.innerHTML = '&#9650;';
+  } else {
+    el.style.display = 'none';
+    btn.innerHTML = '&#9660;';
+  }
+}
+
+function evalEditResult(idx, newResult) {
   if (!evalSession || !evalSession.results[idx]) return;
-  const current = evalSession.results[idx].result;
-  const options = ['success', 'fail', 'skip'].filter(o => o !== current);
-  const choice = prompt(`Run ${evalSession.results[idx].run}: currently "${current}"\nChange to: ${options.join(' / ')}`);
-  if (!choice || !['success', 'fail', 'skip'].includes(choice.toLowerCase().trim())) return;
-  const newResult = choice.toLowerCase().trim();
-  if (newResult === current) return;
+  if (newResult === evalSession.results[idx].result) return;
   evalSession.results[idx].result = newResult;
   _evalRecalcSession();
 }
