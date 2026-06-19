@@ -7791,8 +7791,9 @@ async function evalLoadSession(sessionId) {
     document.getElementById('evalCardsSection').style.display = '';
     document.getElementById('evalProgressSection').style.display = '';
     evalUpdateProgress();
-    // Select matching model if available
-    const modelIdx = evalModels.findIndex(m => m.name === d.model_name);
+    // Select matching model — strip aug suffix (_AUGFIX, _AUGLV1-5) for matching
+    const baseModelName = (d.model_name || '').replace(/_(AUGFIX|AUGLV\d)$/, '');
+    const modelIdx = evalModels.findIndex(m => m.name === baseModelName || m.name === d.model_name);
     if (modelIdx >= 0) {
       document.getElementById('evalModelSelect').value = modelIdx;
       evalSelectedModel = evalModels[modelIdx];
