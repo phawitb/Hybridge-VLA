@@ -2854,7 +2854,7 @@ lerobot-rollout \
             </div>
             <div class="form-group">
               <label class="form-label">FourCC</label>
-              <input type="text" id="evalFourcc" class="form-input" value="MJPG" maxlength="4" style="text-transform:uppercase">
+              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG">
             </div>
           </div>
           <div style="margin-top:8px">
@@ -7690,19 +7690,20 @@ function evalUpdateCmd() {
   const fps = document.getElementById('evalFps').value || '30';
   const width = document.getElementById('evalWidth').value || '320';
   const height = document.getElementById('evalHeight').value || '240';
-  const fourcc = document.getElementById('evalFourcc').value.toUpperCase() || 'MJPG';
+  const fourcc = document.getElementById('evalFourcc').value.toUpperCase().trim();
   const useFakecam = document.getElementById('evalUseFakecam').checked;
   const robotPort = cfg.robot_port || '';
   const robotId = cfg.robot_id || '';
   const camTop = cfg.camera_top_index ?? 0;
   const camWrist = cfg.camera_wrist_index ?? 0;
 
+  const fourccPart = fourcc ? `, fourcc: ${fourcc}` : '';
   let cmd = useFakecam ? 'python fakecam_inject.py --params-file fakecam_params.json -- \\\n  ' : '';
   cmd += `lerobot-rollout \\\n`;
   cmd += `  --robot.type=so101_follower \\\n`;
   cmd += `  --robot.port=${robotPort} \\\n`;
   cmd += `  --robot.id=${robotId} \\\n`;
-  cmd += `  --robot.cameras='{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}, fourcc: ${fourcc}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}, fourcc: ${fourcc}}}' \\\n`;
+  cmd += `  --robot.cameras='{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}' \\\n`;
   cmd += `  --policy.path=./models/${m.name} \\\n`;
   cmd += `  --task='${task}' \\\n`;
   cmd += `  --fps=${fps} \\\n`;

@@ -4589,7 +4589,7 @@ async def eval_start(request: Request):
     fps = int(body.get("fps", 30))
     cam_width = int(body.get("width", 320))
     cam_height = int(body.get("height", 240))
-    fourcc = body.get("fourcc", "MJPG")
+    fourcc = body.get("fourcc", "").strip()
     use_fakecam = body.get("use_fakecam", False)
 
     if not model_name:
@@ -4615,10 +4615,11 @@ async def eval_start(request: Request):
 
     # Build cameras config string
     cam_parts = []
+    fourcc_part = f", fourcc: {fourcc}" if fourcc else ""
     for cam_name, cam_c in cams.items():
         cam_parts.append(
             f"{cam_name}: {{type: opencv, index_or_path: {cam_c.get('index', 0)}, "
-            f"width: {cam_width}, height: {cam_height}, fps: {fps}, fourcc: {fourcc}}}"
+            f"width: {cam_width}, height: {cam_height}, fps: {fps}{fourcc_part}}}"
         )
     cameras_str = "{" + ", ".join(cam_parts) + "}"
 
