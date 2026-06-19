@@ -8224,15 +8224,33 @@ async function evalLoadSessions() {
       const rate = total > 0 ? (s.success / total * 100).toFixed(0) + '%' : '-';
       const date = s.created ? new Date(s.created).toLocaleDateString() : '';
       const color = total > 0 ? (s.success / total > 0.7 ? '#34a853' : s.success / total > 0.4 ? '#e8710a' : '#d93025') : '#888';
-      return `<div onclick="evalLoadSession('${s.id}')" style="padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:4px;cursor:pointer;transition:background 0.15s" onmouseenter="this.style.background='#f5f5f5'" onmouseleave="this.style.background=''">
-        <div style="display:flex;align-items:center;gap:6px">
+      return `<div style="padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:4px;cursor:pointer;transition:background 0.15s;position:relative" onmouseenter="this.style.background='#f5f5f5'" onmouseleave="this.style.background=''">
+        <div onclick="evalLoadSession('${s.id}')" style="display:flex;align-items:center;gap:6px">
           <span style="font-size:0.82rem;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${s.model}</span>
           <span style="font-size:1rem;font-weight:700;color:${color};flex-shrink:0">${rate}</span>
+          <button onclick="event.stopPropagation();evalDeleteSession('${s.id}')" style="background:none;border:none;cursor:pointer;color:#d93025;font-size:0.85rem;padding:0 4px;flex-shrink:0" title="Delete session">&times;</button>
         </div>
-        <div style="font-size:0.7rem;color:#999;margin-top:2px">${s.completed}/${s.target} runs · ${s.success}S ${s.fail}F · ${date}</div>
+        <div onclick="evalLoadSession('${s.id}')" style="font-size:0.7rem;color:#999;margin-top:2px">${s.completed}/${s.target} runs · ${s.success}S ${s.fail}F · ${date}</div>
       </div>`;
     }).join('');
   } catch(e) { el.innerHTML = '<div style="color:#d93025">Error loading sessions</div>'; }
+}
+
+async function evalDeleteSession(sessionId) {
+  if (!confirm('Delete this session?')) return;
+  try {
+    await fetch(`/api/eval/sessions/${sessionId}`, {method: 'DELETE'});
+    // If deleted session is the active one, clear it
+    if (evalSession && evalSession.session_id === sessionId) {
+      evalSession = null;
+      document.getElementById('evalProgressSection').style.display = 'none';
+      document.getElementById('evalRecordSection').style.display = 'none';
+      document.getElementById('evalResultsList').innerHTML = '<div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>';
+      document.getElementById('evalRunStatus').textContent = 'Ready';
+      document.getElementById('evalRunBtn').disabled = !(evalSelectedModel && evalSelectedModel.local_exists);
+    }
+    evalLoadSessions();
+  } catch(e) {}
 }
 
 async function evalLoadSession(sessionId) {
