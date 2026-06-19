@@ -119,7 +119,13 @@ def load_params_from_server(url):
 
 
 def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0):
-    """Monkey-patch cv2.VideoCapture.read to apply augmentation with hot-reload."""
+    """Replace cv2.VideoCapture with a subclass that applies augmentation.
+
+    cv2.VideoCapture is a C++ extension type — patching its .read() method
+    at the class level is unreliable because C extensions may resolve methods
+    via tp_methods slots instead of __dict__. Instead we replace the class
+    itself with a Python subclass whose read() is a normal Python method.
+    """
     import cv2
     import threading
 
@@ -174,19 +180,24 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
         t.start()
         print(f"[FakeCam] Hot-reload enabled (checking every {reload_interval}s from {src})")
 
-    _original_read = cv2.VideoCapture.read
+    # Save the original class
+    _OriginalVideoCapture = cv2.VideoCapture
 
-    def patched_read(self):
-        ret, frame = _original_read(self)
-        if ret and frame is not None:
-            cam_p = state["cam_p"]
-            light_p = state["light_p"]
-            if cam_p or light_p:
-                frame = aug_frame(frame, cam_p, light_p)
-        return ret, frame
+    class AugmentedVideoCapture(_OriginalVideoCapture):
+        """VideoCapture subclass that applies fakecam augmentation on read()."""
 
-    cv2.VideoCapture.read = patched_read
-    print("[FakeCam] cv2.VideoCapture.read patched successfully")
+        def read(self):
+            ret, frame = super().read()
+            if ret and frame is not None:
+                cam_p = state["cam_p"]
+                light_p = state["light_p"]
+                if cam_p or light_p:
+                    frame = aug_frame(frame, cam_p, light_p)
+            return ret, frame
+
+    # Replace cv2.VideoCapture so any new instance uses our subclass
+    cv2.VideoCapture = AugmentedVideoCapture
+    print("[FakeCam] cv2.VideoCapture replaced with AugmentedVideoCapture")
 
 
 def main():
@@ -265,6 +276,9 @@ def main():
     # For subprocess commands like lerobot-rollout, we need to set up
     # the environment with the patched cv2
     cmd_str = cmd_args[0]
+    # Extract basename for entry point lookup (handles full paths like
+    # /opt/miniconda3/envs/lerobot/bin/lerobot-rollout)
+    cmd_name = os.path.basename(cmd_str)
 
     # Check if it's a Python module/script we can run in-process
     if cmd_str.endswith(".py"):
@@ -287,10 +301,10 @@ def main():
             else:
                 scripts = eps.get("console_scripts", [])
             for ep in scripts:
-                if ep.name == cmd_str:
+                if ep.name == cmd_name:
                     sys.argv = cmd_args
                     func = ep.load()
-                    print(f"[FakeCam] Running {cmd_str} in-process with patched cv2")
+                    print(f"[FakeCam] Running {cmd_name} in-process with patched cv2")
                     func()
                     found = True
                     break
@@ -299,7 +313,7 @@ def main():
 
         if not found:
             # Fallback: try importing as module
-            module_name = cmd_str.replace("-", "_")
+            module_name = cmd_name.replace("-", "_")
             try:
                 sys.argv = cmd_args
                 mod = importlib.import_module(module_name)
@@ -307,13 +321,13 @@ def main():
                     print(f"[FakeCam] Running {module_name}.main() with patched cv2")
                     mod.main()
                 else:
-                    print(f"[FakeCam] Cannot find entry point for '{cmd_str}'")
-                    print(f"[FakeCam] Falling back to subprocess (augmentation will NOT apply)")
-                    subprocess.run(cmd_args)
+                    print(f"[FakeCam] ERROR: Cannot find entry point for '{cmd_name}'")
+                    print(f"[FakeCam] Augmentation requires in-process execution. Aborting.")
+                    sys.exit(1)
             except ImportError:
-                print(f"[FakeCam] Cannot import '{module_name}'")
-                print(f"[FakeCam] Falling back to subprocess (augmentation will NOT apply)")
-                subprocess.run(cmd_args)
+                print(f"[FakeCam] ERROR: Cannot import '{cmd_name}'")
+                print(f"[FakeCam] Augmentation requires in-process execution. Aborting.")
+                sys.exit(1)
 
 
 if __name__ == "__main__":

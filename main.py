@@ -4596,6 +4596,51 @@ async def eval_move_to_reset():
     return {"ok": False, "error": err}
 
 
+@app.get("/api/eval/fakecam-preview")
+async def eval_fakecam_preview():
+    """Capture one frame from each camera and return original + augmented as base64 JPEG."""
+    import cv2
+    import base64
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    cameras = robot_cfg.get("cameras", {})
+    params_path = ROOT / "fakecam_params.json"
+    if not params_path.exists():
+        return {"ok": False, "error": "fakecam_params.json not found"}
+    with open(params_path) as f:
+        params = json.load(f)
+
+    cam_p = _build_cam_params(params)
+    light_p = _build_light_params(params)
+
+    result = []
+    for cam_name, cam_cfg in cameras.items():
+        idx = cam_cfg.get("index", 0)
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            result.append({"name": cam_name, "error": f"Cannot open camera {idx}"})
+            continue
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            result.append({"name": cam_name, "error": f"Cannot read from camera {idx}"})
+            continue
+        # Encode original
+        _, orig_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        orig_b64 = base64.b64encode(orig_buf).decode()
+        # Apply augmentation (if any params set)
+        if cam_p or light_p:
+            aug = _aug_frame(frame, cam_p, light_p)
+        else:
+            aug = frame
+        _, aug_buf = cv2.imencode(".jpg", aug, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        aug_b64 = base64.b64encode(aug_buf).decode()
+        result.append({"name": cam_name, "original": orig_b64, "augmented": aug_b64})
+
+    return {"ok": True, "cameras": result}
+
+
 @app.post("/api/eval/start")
 async def eval_start(request: Request):
     """Start lerobot-rollout process for evaluation."""

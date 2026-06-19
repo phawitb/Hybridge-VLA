@@ -1497,7 +1497,7 @@ remainder = 870 % 174 = 0
           <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Parameter</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Default</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--batch_size</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">32</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ขนาด batch (ลดเหลือ 16 ถ้า GPU 12GB)</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--steps</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">100,000</td><td style="padding:6px 12px;border:1px solid #e0e0e0">จำนวน training steps ทั้งหมด</td></tr>
-          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.optimizer_lr</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.0003</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Learning rate</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.optimizer_lr</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.0001</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Learning rate</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.freeze_vision_encoder</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Freeze vision encoder (ประหยัด VRAM)</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.train_expert_only</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Train เฉพาะ expert layers</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.use_amp</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ใช้ mixed precision (FP16) เร็วขึ้น ประหยัด VRAM</td></tr>
@@ -2183,6 +2183,10 @@ conda run -n lerobot uvicorn train_api:app \
         <div class="config-card">
           <h3>Log</h3>
           <div id="evalLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">Waiting to start...</div>
+        </div>
+        <div id="evalFakecamPreview" class="config-card" style="display:none">
+          <h3>Fake Camera Preview</h3>
+          <div id="evalFakecamCams" style="display:flex;flex-direction:column;gap:10px"></div>
         </div>
       </div>
     </div>
@@ -4804,7 +4808,7 @@ function trainPolicyChanged() {
   const lrEl = document.getElementById('trainLr');
   if (policy === 'act') { batchEl.value = '32'; lrEl.value = '0.00001'; }
   else if (policy === 'pi05') { batchEl.value = '16'; lrEl.value = '0.0003'; }
-  else { batchEl.value = '32'; lrEl.value = '0.0003'; }
+  else { batchEl.value = '32'; lrEl.value = '0.0001'; }
   // Show/hide policy-specific option panels
   document.getElementById('trainSmolvlaOpts').style.display = policy === 'smolvla' ? '' : 'none';
   document.getElementById('trainActOpts').style.display = policy === 'act' ? '' : 'none';
@@ -7075,6 +7079,7 @@ async function evalTestInference() {
       return;
     }
     st.innerHTML = '<span style="color:#34a853">Running...</span>';
+    _evalShowFakecamPreview();
     // Poll log into evalLog
     evalTestPollTimer = setInterval(async () => {
       try {
@@ -7098,6 +7103,37 @@ async function evalTestInference() {
     startBtn.disabled = false;
     stopBtn.style.display = 'none';
   }
+}
+
+async function _evalShowFakecamPreview() {
+  const wrap = document.getElementById('evalFakecamPreview');
+  const container = document.getElementById('evalFakecamCams');
+  if (!document.getElementById('evalUseFakecam').checked) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  container.innerHTML = '<span style="font-size:0.78rem;color:#888">Capturing...</span>';
+  try {
+    const r = await fetch('/api/eval/fakecam-preview');
+    const d = await r.json();
+    if (!d.ok) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">${d.error}</span>`; return; }
+    container.innerHTML = '';
+    for (const cam of d.cameras) {
+      if (cam.error) { container.innerHTML += `<span style="color:#c00;font-size:0.78rem">${cam.name}: ${cam.error}</span>`; continue; }
+      const div = document.createElement('div');
+      div.innerHTML = `
+        <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
+        <div style="display:flex;gap:6px">
+          <div style="flex:1;text-align:center">
+            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Original</div>
+            <img src="data:image/jpeg;base64,${cam.original}" style="width:100%;border-radius:4px;border:1px solid #ddd">
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div>
+            <img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88">
+          </div>
+        </div>`;
+      container.appendChild(div);
+    }
+  } catch(e) { container.innerHTML = `<span style="color:#c00;font-size:0.78rem">Error: ${e.message}</span>`; }
 }
 
 async function evalTestStop() {
@@ -7217,6 +7253,7 @@ async function evalStartEpisode() {
     return;
   }
 
+  _evalShowFakecamPreview();
   evalEpRunning = true;
   let countdownStarted = false;
   const initStart = Date.now();
