@@ -1833,12 +1833,20 @@ place the white eraser             1
             <!-- SmolVLA-specific options -->
             <div id="trainSmolvlaOpts" style="display:none;margin-top:10px;padding:10px 12px;background:#e8f5e9;border-radius:8px">
               <div style="font-size:0.78rem;font-weight:600;color:#2e7d32;margin-bottom:8px">SmolVLA Options</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
                 <div class="form-group" style="margin:0">
                   <label class="form-label">VLM Model</label>
                   <select id="trainVlmModel" class="form-input">
                     <option value="HuggingFaceTB/SmolVLM2-500M-Video-Instruct">SmolVLM2-500M-Video-Instruct</option>
                   </select>
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">Chunk Size <span style="color:#aaa;font-weight:400">(def: 50)</span></label>
+                  <input type="number" id="trainSmolvlaChunkSize" class="form-input" placeholder="50">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">N Action Steps <span style="color:#aaa;font-weight:400">(def: 50)</span></label>
+                  <input type="number" id="trainSmolvlaNActionSteps" class="form-input" placeholder="50">
                 </div>
               </div>
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -1862,8 +1870,12 @@ place the white eraser             1
                   </select>
                 </div>
                 <div class="form-group" style="margin:0">
-                  <label class="form-label">Chunk Size</label>
-                  <input type="number" id="trainChunkSize" class="form-input" placeholder="default">
+                  <label class="form-label">Chunk Size <span style="color:#aaa;font-weight:400">(def: 100)</span></label>
+                  <input type="number" id="trainChunkSize" class="form-input" placeholder="100">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label">N Action Steps <span style="color:#aaa;font-weight:400">(def: 100)</span></label>
+                  <input type="number" id="trainActNActionSteps" class="form-input" placeholder="100">
                 </div>
               </div>
               <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -2041,7 +2053,7 @@ conda run -n lerobot uvicorn train_api:app \
               <button class="btn btn-sm" onclick="evalSaveConfig()" style="background:#1a73e8;font-size:0.72rem;padding:2px 12px">Save</button>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px">
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px">
             <div class="form-group">
               <label class="form-label">Task Description</label>
               <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl" oninput="evalUpdateCmd()">
@@ -2069,6 +2081,14 @@ conda run -n lerobot uvicorn train_api:app \
             <div class="form-group">
               <label class="form-label">FourCC</label>
               <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Chunk Size</label>
+              <input type="number" id="evalChunkSize" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd()">
+            </div>
+            <div class="form-group">
+              <label class="form-label">N Action Steps</label>
+              <input type="number" id="evalNActionSteps" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd()">
             </div>
           </div>
           <!-- Reset Position -->
@@ -5215,11 +5235,17 @@ async function trainStart() {
     body.load_vlm_weights = document.getElementById('trainLoadVlm').checked;
     body.train_expert_only = document.getElementById('trainExpertOnly').checked;
     body.freeze_vision_encoder = document.getElementById('trainFreezeVision').checked;
+    const cs = parseInt(document.getElementById('trainSmolvlaChunkSize').value);
+    if (cs > 0) body.chunk_size = cs;
+    const nas = parseInt(document.getElementById('trainSmolvlaNActionSteps').value);
+    if (nas > 0) body.n_action_steps = nas;
   } else if (policyType === 'act') {
     const vb = document.getElementById('trainVisionBackbone').value;
     if (vb) body.vision_backbone = vb;
     const cs = parseInt(document.getElementById('trainChunkSize').value);
     if (cs > 0) body.chunk_size = cs;
+    const nas = parseInt(document.getElementById('trainActNActionSteps').value);
+    if (nas > 0) body.n_action_steps = nas;
     if (document.getElementById('trainUseVae').checked) body.use_vae = true;
   } else if (policyType === 'pi05') {
     const pg = document.getElementById('trainPaligemma').value;
@@ -6874,6 +6900,8 @@ async function evalLoadConfig() {
         if (radio) radio.checked = true;
       }
       if (c.aug_level != null) document.getElementById('evalAugLevel').value = c.aug_level;
+      if (c.chunk_size != null) document.getElementById('evalChunkSize').value = c.chunk_size;
+      if (c.n_action_steps != null) document.getElementById('evalNActionSteps').value = c.n_action_steps;
       evalFakecamToggle();
       evalAugModeChanged();
       evalAugLevelChanged();
@@ -6899,6 +6927,8 @@ async function evalSaveConfig() {
     use_fakecam: document.getElementById('evalUseFakecam').checked,
     aug_mode: evalGetAugMode(),
     aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
+    chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
+    n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || null,
   };
   try {
     await fetch('/api/eval/config', {
@@ -7229,6 +7259,10 @@ function evalUpdateCmd() {
   cmd += `  --task='${task}' \\\n`;
   cmd += `  --fps=${fps} \\\n`;
   cmd += `  --display_data=false`;
+  const chunkSize = parseInt(document.getElementById('evalChunkSize').value);
+  const nActionSteps = parseInt(document.getElementById('evalNActionSteps').value);
+  if (chunkSize > 0) cmd += ` \\\n  --policy.chunk_size=${chunkSize}`;
+  if (nActionSteps > 0) cmd += ` \\\n  --policy.n_action_steps=${nActionSteps}`;
   pre.textContent = cmd;
 }
 
@@ -7448,6 +7482,8 @@ function _evalBuildBody() {
     height: parseInt(document.getElementById('evalHeight').value) || 240,
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
     use_fakecam: document.getElementById('evalUseFakecam').checked,
+    chunk_size: parseInt(document.getElementById('evalChunkSize').value) || 0,
+    n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || 0,
   };
 }
 

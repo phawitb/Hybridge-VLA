@@ -4661,6 +4661,8 @@ async def eval_start(request: Request):
     cam_height = int(body.get("height", 240))
     fourcc = body.get("fourcc", "").strip()
     use_fakecam = body.get("use_fakecam", False)
+    chunk_size = int(body.get("chunk_size", 0))
+    n_action_steps = int(body.get("n_action_steps", 0))
 
     if not model_name:
         return {"ok": False, "error": "No model selected"}
@@ -4707,6 +4709,10 @@ async def eval_start(request: Request):
     ]
     if task:
         cmd.append(f"--task={task}")
+    if chunk_size > 0:
+        cmd.append(f"--policy.chunk_size={chunk_size}")
+    if n_action_steps > 0:
+        cmd.append(f"--policy.n_action_steps={n_action_steps}")
 
     if use_fakecam:
         cmd = ["python", "fakecam_inject.py", "--params-file", "fakecam_params.json", "--"] + cmd
