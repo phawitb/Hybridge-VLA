@@ -175,10 +175,10 @@ click_to_move:
   target_height: 0.0
   safety_height: 10.0
 data_collection:
-  repo_id: phawitbinabik/DS1_1B1O_FF
-  dataset_root: ./data/DS1_1B1O_FF
+  repo_id: phawitbinabik/DS2_1B1O_FV
+  dataset_root: ./data/DS2_1B1O_FV
   task: pick up the pink bow to the green bowl
-  num_episodes: 120
+  num_episodes: 160
   encoder_threads: 4
   push_to_hub: false
   resume: false
