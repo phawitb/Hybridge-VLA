@@ -1903,8 +1903,12 @@ place the white eraser             1
                   </select>
                 </div>
                 <div class="form-group" style="margin:0">
+                  <label class="form-label">Chunk Size</label>
+                  <input type="number" id="trainPi05ChunkSize" class="form-input" placeholder="50">
+                </div>
+                <div class="form-group" style="margin:0">
                   <label class="form-label">N Action Steps</label>
-                  <input type="number" id="trainNActionSteps" class="form-input" placeholder="default">
+                  <input type="number" id="trainPi05NActionSteps" class="form-input" placeholder="50">
                 </div>
               </div>
             </div>
@@ -5252,7 +5256,9 @@ async function trainStart() {
     if (pg) body.paligemma_variant = pg;
     const ae = document.getElementById('trainActionExpert').value;
     if (ae) body.action_expert_variant = ae;
-    const nas = parseInt(document.getElementById('trainNActionSteps').value);
+    const cs = parseInt(document.getElementById('trainPi05ChunkSize').value);
+    if (cs > 0) body.chunk_size = cs;
+    const nas = parseInt(document.getElementById('trainPi05NActionSteps').value);
     if (nas > 0) body.n_action_steps = nas;
   }
 
