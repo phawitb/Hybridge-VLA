@@ -349,7 +349,8 @@
   <div class="sidebar-header">Hybridge VLA</div>
   <div class="sidebar-nav">
     <div class="nav-section">Preparing</div>
-    <div class="nav-item" data-tab="data-collect">Data Collection</div>
+    <div class="nav-item" data-tab="setup-env">Setup Environments</div>
+    <div class="nav-item" data-tab="data-collecting">Data Collecting</div>
     <div class="nav-item" data-tab="visualize">Datasets</div>
     <div class="nav-item" data-tab="training">Training</div>
     <div class="nav-section">Run Model</div>
@@ -986,15 +987,14 @@ bump_height = min(overshoot + 2, 10) degrees
 
   </div><!-- /page-run -->
 
-  <!-- ==================== Data Collection ==================== -->
-  <div class="page" id="page-data-collect">
-    <div class="page-title"><span>Data</span> Collection</div>
+  <!-- ==================== Setup Environments ==================== -->
+  <div class="page" id="page-setup-env">
+    <div class="page-title"><span>Setup</span> Environments</div>
 
     <div class="inner-tabs">
       <button class="inner-tab active" data-inner="dc-config">1. Config</button>
       <button class="inner-tab" data-inner="dc-verify">2. Verify</button>
       <button class="inner-tab" data-inner="dc-mimic">3. Test Mimic</button>
-      <button class="inner-tab" data-inner="dc-collect">4. Collect</button>
     </div>
 
     <!-- ── DC Config ── -->
@@ -1087,8 +1087,12 @@ bump_height = min(overshoot + 2, 10) degrees
       </div>
     </div>
 
-    <!-- ── DC Collect ── -->
-    <div class="inner-page" id="inner-dc-collect">
+  </div><!-- /page-setup-env -->
+
+  <!-- ==================== Data Collecting ==================== -->
+  <div class="page" id="page-data-collecting">
+    <div class="page-title"><span>Data</span> Collecting</div>
+
       <div class="config-card">
         <h3>Dataset Settings</h3>
         <div class="form-group">
@@ -1201,9 +1205,8 @@ bump_height = min(overshoot + 2, 10) degrees
           Waiting to start recording...
         </div>
       </div>
-    </div>
 
-  </div><!-- /page-data-collect -->
+  </div><!-- /page-data-collecting -->
 
   <!-- ==================== Datasets ==================== -->
   <div class="page" id="page-visualize">
@@ -2654,7 +2657,7 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'data-collect' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate';
+        const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate';
         rp.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
@@ -2668,6 +2671,7 @@ function setupEvents() {
       if (el.dataset.tab === 'evaluate' && !evalInited) {
         evalInit();
       }
+      if (el.dataset.tab === 'data-collecting') dcRefreshCmd();
     });
   });
   // Inner tabs (scoped to parent page)
@@ -2680,7 +2684,6 @@ function setupEvents() {
       document.getElementById('inner-'+el.dataset.inner).classList.add('active');
       if (el.dataset.inner === 'cfg-history') loadResults();
       if (el.dataset.inner === 'train-history') trainLoadHistory();
-      if (el.dataset.inner === 'dc-collect') dcRefreshCmd();
     });
   });
   // Image
