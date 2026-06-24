@@ -349,7 +349,7 @@
   <div class="sidebar-header">Hybridge VLA</div>
   <div class="sidebar-nav">
     <div class="nav-section">Preparing</div>
-    <div class="nav-item" data-tab="setup-env">Setup Environments</div>
+    <div class="nav-item active" data-tab="setup-env">Setup Environments</div>
     <div class="nav-item" data-tab="data-collecting">Data Collecting</div>
     <div class="nav-item" data-tab="visualize">Datasets</div>
     <div class="nav-item" data-tab="training">Training</div>
@@ -357,7 +357,7 @@
     <div class="nav-item" data-tab="inference">VLA Inference</div>
     <div class="nav-item" data-tab="evaluate">Evaluate</div>
     <div class="nav-section">Hybridge-VLA</div>
-    <div class="nav-item active" data-tab="config-test">Config & Test</div>
+    <div class="nav-item" data-tab="config-test">Config & Test</div>
     <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
     <div class="nav-item" data-tab="run">Run</div>
     <div class="nav-section">Others</div>
@@ -369,7 +369,7 @@
 <div class="main-content">
 
   <!-- ==================== Config & Test ==================== -->
-  <div class="page active" id="page-config-test">
+  <div class="page" id="page-config-test">
     <div class="page-title"><span>Config</span> & Test</div>
 
     <div class="inner-tabs">
@@ -988,7 +988,7 @@ bump_height = min(overshoot + 2, 10) degrees
   </div><!-- /page-run -->
 
   <!-- ==================== Setup Environments ==================== -->
-  <div class="page" id="page-setup-env">
+  <div class="page active" id="page-setup-env">
     <div class="page-title"><span>Setup</span> Environments</div>
 
     <div class="inner-tabs">
@@ -2337,6 +2337,15 @@ conda run -n lerobot uvicorn train_api:app \
         </div>
 
         <div id="evalCardsSection" style="display:none">
+        <!-- Session name -->
+        <div class="config-card" style="margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <h3 style="margin:0;white-space:nowrap">Session Name</h3>
+            <input type="text" id="evalSessionName" class="form-input" placeholder="e.g. pick_bow_act_2cam" style="flex:1" oninput="evalSessionNameChanged()">
+            <span id="evalSessionNameStatus" style="font-size:0.78rem;color:#888;white-space:nowrap"></span>
+          </div>
+        </div>
+
         <!-- Eval config -->
         <div class="config-card" style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2346,22 +2355,34 @@ conda run -n lerobot uvicorn train_api:app \
               <button class="btn btn-sm" onclick="evalSaveConfig()" style="background:#1a73e8;font-size:0.72rem;padding:2px 12px">Save</button>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:10px">
-            <div class="form-group">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px">
+            <div class="form-group" style="grid-column:1/-1">
               <label class="form-label">Task Description</label>
               <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Target Runs</label>
-              <input type="number" id="evalTargetRuns" class="form-input" value="20" min="1" max="999" onchange="evalUpdateTargetRuns()">
+              <input type="number" id="evalTargetRuns" class="form-input" value="40" min="1" max="999" onchange="evalUpdateTargetRuns()">
             </div>
             <div class="form-group">
               <label class="form-label">Run Duration (sec)</label>
-              <input type="number" id="evalDuration" class="form-input" value="10" min="5" max="300">
+              <input type="number" id="evalDuration" class="form-input" value="12" min="5" max="300">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Cameras</label>
+              <select id="evalCamCount" class="form-input" onchange="evalUpdateCmd()">
+                <option value="2" selected>2 (top+wrist)</option>
+                <option value="1-top">1 (top)</option>
+                <option value="1-wrist">1 (wrist)</option>
+              </select>
             </div>
             <div class="form-group">
               <label class="form-label">FPS</label>
               <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60" oninput="evalUpdateCmd()">
+            </div>
+            <div class="form-group">
+              <label class="form-label">FourCC</label>
+              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Width</label>
@@ -2370,10 +2391,6 @@ conda run -n lerobot uvicorn train_api:app \
             <div class="form-group">
               <label class="form-label">Height</label>
               <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080" oninput="evalUpdateCmd()">
-            </div>
-            <div class="form-group">
-              <label class="form-label">FourCC</label>
-              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
             </div>
             <div class="form-group">
               <label class="form-label">Chunk Size</label>
@@ -2504,6 +2521,7 @@ conda run -n lerobot uvicorn train_api:app \
               <div>
                 <span style="font-size:0.8rem;color:#34a853;display:block">Success</span>
                 <span id="evalSuccessCount" style="font-size:1.4rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#34a853">0</span>
+                <span id="evalAttemptBreakdown" style="font-size:0.72rem;color:#888;display:block;font-family:'SF Mono','Menlo',monospace"></span>
               </div>
               <div>
                 <span style="font-size:0.8rem;color:#d93025;display:block">Fail</span>
@@ -2519,9 +2537,12 @@ conda run -n lerobot uvicorn train_api:app \
           <div id="evalRecordSection" style="display:none">
             <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
               <span style="font-size:0.85rem;font-weight:600;color:#555">Episode #<span id="evalCurrentRunNum">1</span> result:</span>
-              <button class="btn" onclick="evalRecordResult('success')" style="background:#34a853;font-size:0.85rem;padding:6px 20px">Success</button>
-              <button class="btn btn-danger" onclick="evalRecordResult('fail')" style="font-size:0.85rem;padding:6px 20px">Fail</button>
-              <button class="btn" onclick="evalRecordResult('skip')" style="background:#888;font-size:0.85rem;padding:6px 20px">Skip</button>
+              <div style="display:flex;border-radius:8px;overflow:hidden">
+                <button class="btn" onclick="evalRecordResult('1-attempt')" style="background:#1b8a2e;font-size:0.85rem;padding:6px 18px;border-radius:0;border-right:1px solid rgba(255,255,255,0.4)">1</button>
+                <button class="btn" onclick="evalRecordResult('2-attempt')" style="background:#34a853;font-size:0.85rem;padding:6px 18px;border-radius:0;border-right:1px solid rgba(255,255,255,0.4)">2</button>
+                <button class="btn" onclick="evalRecordResult('3-attempt')" style="background:#6abf7b;font-size:0.85rem;padding:6px 18px;border-radius:0">3</button>
+              </div>
+              <button class="btn" onclick="evalRecordResult('fail')" style="background:#888;font-size:0.85rem;padding:6px 16px">Fail</button>
             </div>
           </div>
         </div>
@@ -2550,7 +2571,9 @@ conda run -n lerobot uvicorn train_api:app \
         <div class="config-card">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <h3 style="margin:0;font-size:0.9rem">Sessions</h3>
+            <span style="flex:1"></span>
             <button class="btn btn-sm" onclick="evalLoadSessions()" style="background:#1a73e8;font-size:0.68rem;padding:2px 8px">Refresh</button>
+            <button class="btn btn-sm" onclick="evalNewSessionBtn()" style="background:#34a853;font-size:0.68rem;padding:2px 8px">+ New</button>
           </div>
           <div id="evalSessionsList" style="max-height:calc(100vh - 500px);overflow-y:auto;font-size:0.82rem">
             <div style="color:#888;padding:8px 0">No saved sessions.</div>
@@ -7356,6 +7379,7 @@ let evalCountdownTimer = null; // 1s countdown interval
 let evalCountdownSec = 0;
 let evalEpRunning = false;     // true while episode process is alive
 let evalEpAugData = null;     // per-episode augmentation data {params, cameras}
+let evalEpCameraData = null;  // per-episode camera snapshots (no augmentation)
 
 function evalInit() {
   evalInited = true;
@@ -7385,6 +7409,7 @@ async function evalLoadConfig() {
         if (radio) radio.checked = true;
       }
       if (c.aug_level != null) document.getElementById('evalAugLevel').value = c.aug_level;
+      if (c.cam_count != null) document.getElementById('evalCamCount').value = c.cam_count;
       if (c.chunk_size != null) document.getElementById('evalChunkSize').value = c.chunk_size;
       if (c.n_action_steps != null) document.getElementById('evalNActionSteps').value = c.n_action_steps;
       evalFakecamToggle();
@@ -7404,11 +7429,12 @@ async function evalSaveConfig() {
   const config = {
     task: document.getElementById('evalTask').value,
     target_runs: parseInt(document.getElementById('evalTargetRuns').value) || 10,
-    duration: parseInt(document.getElementById('evalDuration').value) || 10,
+    duration: parseInt(document.getElementById('evalDuration').value) || 12,
     fps: parseInt(document.getElementById('evalFps').value) || 30,
     width: parseInt(document.getElementById('evalWidth').value) || 320,
     height: parseInt(document.getElementById('evalHeight').value) || 240,
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
+    cam_count: document.getElementById('evalCamCount').value || '2',
     use_fakecam: document.getElementById('evalUseFakecam').checked,
     aug_mode: evalGetAugMode(),
     aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
@@ -7530,6 +7556,12 @@ async function evalLoadModels() {
 }
 
 function evalSelectModel() {
+  if (evalSession) {
+    // Revert selection — model is locked during session
+    const lockedIdx = evalModels.findIndex(m => m.id === evalSession.model_id);
+    if (lockedIdx >= 0) document.getElementById('evalModelSelect').value = lockedIdx;
+    return;
+  }
   const idx = document.getElementById('evalModelSelect').value;
   const dlSection = document.getElementById('evalModelDownloadSection');
   const cardsSection = document.getElementById('evalCardsSection');
@@ -7543,6 +7575,8 @@ function evalSelectModel() {
   evalSelectedModel = evalModels[parseInt(idx)];
   evalUpdateCmd();
   cardsSection.style.display = '';
+  // Auto-generate session name from model name
+  _evalAutoSessionName();
 
   if (evalSelectedModel.local_exists) {
     dlSection.style.display = 'none';
@@ -7733,13 +7767,34 @@ function evalUpdateCmd() {
   const camTop = cfg.camera_top_index ?? 0;
   const camWrist = cfg.camera_wrist_index ?? 0;
 
+  const camCountVal = document.getElementById('evalCamCount').value;
   const fourccPart = fourcc ? `, fourcc: ${fourcc}` : '';
-  let cmd = useFakecam ? 'python fakecam_inject.py --params-file fakecam_params.json -- \\\n  ' : '';
+  const DUMMY = 99;
+  let camerasStr;
+  let blackCamArgs = '';
+  // Always pass both cameras so the model gets all expected inputs.
+  // Disabled camera uses dummy index 99 → fakecam_inject sends black frames.
+  if (camCountVal === '1-wrist') {
+    camerasStr = `'{top: {type: opencv, index_or_path: ${DUMMY}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
+    blackCamArgs = ` --black-cameras ${DUMMY} --black-cam-width ${width} --black-cam-height ${height}`;
+  } else if (camCountVal === '1-top') {
+    camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${DUMMY}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
+    blackCamArgs = ` --black-cameras ${DUMMY} --black-cam-width ${width} --black-cam-height ${height}`;
+  } else {
+    camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
+  }
+  let needsFakecam = useFakecam || blackCamArgs;
+  let cmd = '';
+  if (needsFakecam) {
+    cmd = 'python fakecam_inject.py';
+    if (useFakecam) cmd += ' --params-file fakecam_params.json';
+    cmd += blackCamArgs + ' -- \\\n  ';
+  }
   cmd += `lerobot-rollout \\\n`;
   cmd += `  --robot.type=so101_follower \\\n`;
   cmd += `  --robot.port=${robotPort} \\\n`;
   cmd += `  --robot.id=${robotId} \\\n`;
-  cmd += `  --robot.cameras='{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}' \\\n`;
+  cmd += `  --robot.cameras=${camerasStr} \\\n`;
   cmd += `  --policy.path=./models/${m.name} \\\n`;
   cmd += `  --task='${task}' \\\n`;
   cmd += `  --fps=${fps} \\\n`;
@@ -7916,11 +7971,90 @@ async function evalTestStop() {
   document.getElementById('evalTestStopBtn').style.display = 'none';
 }
 
-function _evalNewSession() {
-  const target = parseInt(document.getElementById('evalTargetRuns').value) || 10;
+async function evalNewSessionBtn() {
+  if (evalSession && evalSession.completed > 0 && !confirm('Start a new session? Current session is already saved.')) return;
+  if (evalEpRunning) {
+    _evalCleanupTimers();
+    evalEpRunning = false;
+    try { await fetch('/api/eval/stop', {method: 'POST'}); } catch(e) {}
+  }
+  evalSession = null;
+  document.getElementById('evalProgressSection').style.display = 'none';
+  document.getElementById('evalRecordSection').style.display = 'none';
+  document.getElementById('evalStopBtn').style.display = 'none';
+  document.getElementById('evalCountdown').style.display = 'none';
+  document.getElementById('evalResultsList').innerHTML = '<div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>';
+  document.getElementById('evalRunStatus').textContent = 'Ready';
+  document.getElementById('evalLog').textContent = 'Waiting to start...';
+  document.getElementById('evalModelSelect').disabled = false;
+  document.getElementById('evalModelSelect').value = '';
+  document.getElementById('evalModelDownloadSection').style.display = 'none';
+  document.getElementById('evalCardsSection').style.display = 'none';
+  document.getElementById('evalSessionNameStatus').textContent = '';
+  document.getElementById('evalSessionName').value = '';
+  document.getElementById('evalRunBtn').disabled = true;
+  evalSelectedModel = null;
+  evalLoadSessions();
+}
+
+async function _evalAutoSessionName() {
+  if (!evalSelectedModel) return;
+  const baseName = evalSelectedModel.name;
+  try {
+    const r = await fetch('/api/eval/sessions');
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('evalSessionName').value = baseName; return; }
+    const existingNames = new Set(d.sessions.map(s => s.name));
+    if (!existingNames.has(baseName)) {
+      document.getElementById('evalSessionName').value = baseName;
+    } else {
+      let i = 1;
+      while (existingNames.has(`${baseName} (${i})`)) i++;
+      document.getElementById('evalSessionName').value = `${baseName} (${i})`;
+    }
+  } catch(e) {
+    document.getElementById('evalSessionName').value = baseName;
+  }
+}
+
+let _evalNameSaveTimer = null;
+function evalSessionNameChanged() {
+  if (!evalSession) return;
+  evalSession.session_name = document.getElementById('evalSessionName').value.trim();
+  const st = document.getElementById('evalSessionNameStatus');
+  st.textContent = '...';
+  st.style.color = '#888';
+  // Debounce save
+  if (_evalNameSaveTimer) clearTimeout(_evalNameSaveTimer);
+  _evalNameSaveTimer = setTimeout(() => {
+    fetch('/api/eval/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(evalSession),
+    }).then(() => {
+      st.textContent = 'Saved';
+      st.style.color = '#34a853';
+      evalLoadSessions();
+      setTimeout(() => { st.textContent = ''; }, 1500);
+    }).catch(() => {
+      st.textContent = 'Error';
+      st.style.color = '#d93025';
+    });
+  }, 600);
+}
+
+async function _evalNewSession() {
+  const sessionName = document.getElementById('evalSessionName').value.trim();
+  if (!sessionName) {
+    alert('Please enter a Session Name before starting.');
+    return false;
+  }
+
+  const target = parseInt(document.getElementById('evalTargetRuns').value) || 40;
   const augSuffix = _evalAugSuffix();
   evalSession = {
     session_id: `eval_${Date.now()}`,
+    session_name: sessionName,
     model_id: evalSelectedModel.id,
     model_name: evalSelectedModel.name + augSuffix,
     task: document.getElementById('evalTask').value,
@@ -7929,12 +8063,24 @@ function _evalNewSession() {
     aug_mode: evalGetAugMode(),
     aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
     target_runs: target,
-    completed: 0, success: 0, fail: 0, skip: 0,
+    completed: 0, success: 0, fail: 0,
     results: [],
     created: new Date().toISOString(),
+    config: {
+      duration: parseInt(document.getElementById('evalDuration').value) || 12,
+      cameras: document.getElementById('evalCamCount').value || '2',
+      width: parseInt(document.getElementById('evalWidth').value) || 320,
+      height: parseInt(document.getElementById('evalHeight').value) || 240,
+      fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim() || null,
+      chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
+      n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || null,
+    },
   };
   evalUpdateProgress();
   document.getElementById('evalProgressSection').style.display = '';
+  // Lock model select only
+  document.getElementById('evalModelSelect').disabled = true;
+  return true;
 }
 
 function evalUpdateProgress() {
@@ -7948,6 +8094,20 @@ function evalUpdateProgress() {
   const total = s.success + s.fail;
   document.getElementById('evalSuccessRate').textContent = total > 0 ? (s.success / total * 100).toFixed(0) + '%' : '-';
   document.getElementById('evalCurrentRunNum').textContent = s.completed + 1;
+  // Attempt breakdown
+  const a1 = s.results.filter(r => r.result === '1-attempt').length;
+  const a2 = s.results.filter(r => r.result === '2-attempt').length;
+  const a3 = s.results.filter(r => r.result === '3-attempt').length;
+  const bd = document.getElementById('evalAttemptBreakdown');
+  if (a1 || a2 || a3) {
+    const parts = [];
+    if (a1) parts.push(`<span style="color:#1b8a2e">1st:${a1}</span>`);
+    if (a2) parts.push(`<span style="color:#34a853">2nd:${a2}</span>`);
+    if (a3) parts.push(`<span style="color:#6abf7b">3rd:${a3}</span>`);
+    bd.innerHTML = parts.join(' · ');
+  } else {
+    bd.innerHTML = '';
+  }
   evalRenderResults();
 }
 
@@ -7966,6 +8126,7 @@ function _evalBuildBody() {
     width: parseInt(document.getElementById('evalWidth').value) || 320,
     height: parseInt(document.getElementById('evalHeight').value) || 240,
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
+    cam_count: document.getElementById('evalCamCount').value || '2',
     use_fakecam: document.getElementById('evalUseFakecam').checked,
     chunk_size: parseInt(document.getElementById('evalChunkSize').value) || 0,
     n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || 0,
@@ -7987,7 +8148,10 @@ function _evalShowRecordButtons() {
 
 async function evalStartEpisode() {
   if (!evalSelectedModel) return;
-  if (!evalSession) _evalNewSession();
+  if (!evalSession) {
+    const ok = await _evalNewSession();
+    if (!ok) return;
+  }
   if (evalSession.completed >= evalSession.target_runs) {
     alert('Target runs reached. Reset or increase target.');
     return;
@@ -7999,18 +8163,28 @@ async function evalStartEpisode() {
   document.getElementById('evalStopBtn').style.display = '';
   document.getElementById('evalRecordSection').style.display = 'none';
 
-  // 0) Save fakecam params + capture preview BEFORE starting (camera not locked yet)
+  // 0) Capture camera preview BEFORE starting (camera not locked yet)
   evalEpAugData = null;
+  evalEpCameraData = null;
+  const camCount = document.getElementById('evalCamCount').value || '2';
   if (document.getElementById('evalUseFakecam').checked) {
     const savedParams = await _evalSaveFakecamParams();
     st.innerHTML = '<span style="color:#1a73e8">Capturing fakecam preview...</span>';
     try {
       const pr = await fetch('/api/eval/fakecam-preview', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({params: savedParams}),
+        body: JSON.stringify({params: savedParams, cam_count: camCount}),
       });
       const pd = await pr.json();
       if (pd.ok) {
+        // Check if required cameras are readable
+        const errors = pd.cameras.filter(c => c.error);
+        if (errors.length > 0) {
+          st.innerHTML = `<span style="color:#d93025">Error: ${errors.map(c => c.name + ' - ' + c.error).join(', ')}</span>`;
+          document.getElementById('evalRunBtn').disabled = false;
+          document.getElementById('evalStopBtn').style.display = 'none';
+          return;
+        }
         evalEpAugData = {params: savedParams, cameras: pd.cameras};
         // Show preview in sidebar
         const wrap = document.getElementById('evalFakecamPreview');
@@ -8018,7 +8192,6 @@ async function evalStartEpisode() {
         wrap.style.display = '';
         container.innerHTML = '';
         for (const cam of pd.cameras) {
-          if (cam.error) continue;
           const div = document.createElement('div');
           div.innerHTML = `
             <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
@@ -8034,6 +8207,24 @@ async function evalStartEpisode() {
             </div>`;
           container.appendChild(div);
         }
+      }
+    } catch(e) {}
+  } else {
+    // Capture camera snapshots without augmentation
+    st.innerHTML = '<span style="color:#1a73e8">Capturing camera snapshot...</span>';
+    try {
+      const pr = await fetch(`/api/eval/camera-snapshot?cam_count=${camCount}`);
+      const pd = await pr.json();
+      if (pd.ok) {
+        // Check if required cameras are readable
+        const errors = pd.cameras.filter(c => c.error);
+        if (errors.length > 0) {
+          st.innerHTML = `<span style="color:#d93025">Error: ${errors.map(c => c.name + ' - ' + c.error).join(', ')}</span>`;
+          document.getElementById('evalRunBtn').disabled = false;
+          document.getElementById('evalStopBtn').style.display = 'none';
+          return;
+        }
+        evalEpCameraData = pd.cameras;
       }
     } catch(e) {}
   }
@@ -8098,7 +8289,7 @@ async function evalStartEpisode() {
         const timeout = (Date.now() - initStart) > 30000; // 30s fallback
         if (ready || timeout) {
           countdownStarted = true;
-          evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 10;
+          evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 12;
           cdEl.textContent = evalCountdownSec + 's';
           st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
           evalCountdownTimer = setInterval(async () => {
@@ -8139,6 +8330,18 @@ async function evalRecordResult(result) {
     run: evalSession.completed + 1,
     result: result,
     timestamp: new Date().toISOString(),
+    config: {
+      task: document.getElementById('evalTask').value,
+      duration: parseInt(document.getElementById('evalDuration').value) || 12,
+      cameras: document.getElementById('evalCamCount').value || '2',
+      fps: parseInt(document.getElementById('evalFps').value) || 30,
+      width: parseInt(document.getElementById('evalWidth').value) || 320,
+      height: parseInt(document.getElementById('evalHeight').value) || 240,
+      fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim() || null,
+      chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
+      n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || null,
+      use_fakecam: document.getElementById('evalUseFakecam').checked,
+    },
   };
   if (evalEpAugData) {
     epResult.aug_params = evalEpAugData.params;
@@ -8148,13 +8351,19 @@ async function evalRecordResult(result) {
       original: c.original,
       augmented: c.augmented,
     }));
+  } else if (evalEpCameraData) {
+    // Store camera snapshots (no augmentation)
+    epResult.camera_preview = evalEpCameraData.filter(c => !c.error).map(c => ({
+      name: c.name,
+      original: c.original,
+    }));
   }
   evalSession.results.push(epResult);
   evalEpAugData = null;
+  evalEpCameraData = null;
   evalSession.completed++;
-  if (result === 'success') evalSession.success++;
-  else if (result === 'fail') evalSession.fail++;
-  else evalSession.skip++;
+  if (result === 'fail') evalSession.fail++;
+  else evalSession.success++;
 
   document.getElementById('evalRecordSection').style.display = 'none';
   evalUpdateProgress();
@@ -8186,15 +8395,34 @@ function evalRenderResults() {
     return;
   }
   el.innerHTML = evalSession.results.map((r, i) => {
-    const color = r.result === 'success' ? '#34a853' : r.result === 'fail' ? '#d93025' : '#999';
-    const bg = r.result === 'success' ? '#f0faf2' : r.result === 'fail' ? '#fef0f0' : '#f8f8f8';
-    const icon = r.result === 'success' ? '&#10003;' : r.result === 'fail' ? '&#10007;' : '&#8211;';
+    const colorMap = {'1-attempt':'#1b8a2e','2-attempt':'#34a853','3-attempt':'#6abf7b','fail':'#888','success':'#34a853','skip':'#999'};
+    const bgMap = {'1-attempt':'#e6f4ea','2-attempt':'#f0faf2','3-attempt':'#f5fbf7','fail':'#f5f5f5','success':'#f0faf2','skip':'#f8f8f8'};
+    const iconMap = {'1-attempt':'1','2-attempt':'2','3-attempt':'3','fail':'&#10007;','success':'&#10003;','skip':'&#8211;'};
+    const borderMap = {'1-attempt':'#a8d5b5','2-attempt':'#c8e6c9','3-attempt':'#d8eedd','fail':'#e0e0e0','success':'#c8e6c9','skip':'#e0e0e0'};
+    const color = colorMap[r.result] || '#999';
+    const bg = bgMap[r.result] || '#f8f8f8';
+    const icon = iconMap[r.result] || '?';
     const time = new Date(r.timestamp).toLocaleTimeString();
-    const hasAug = r.aug_params || r.aug_preview;
+    const hasDetail = r.aug_params || r.aug_preview || r.camera_preview || r.config;
 
     // Detail section
     let detail = '';
-    if (hasAug) {
+    if (hasDetail) {
+      let configHtml = '';
+      if (r.config) {
+        const c = r.config;
+        const entries = [
+          ['Duration', c.duration ? c.duration + 's' : '-'],
+          ['Cameras', c.cameras || '-'],
+          ['FPS', c.fps || '-'],
+          ['Size', (c.width && c.height) ? c.width + '×' + c.height : '-'],
+          ['FourCC', c.fourcc || '-'],
+          ['Chunk', c.chunk_size || 'default'],
+          ['N Steps', c.n_action_steps || 'default'],
+          ['FakeCam', c.use_fakecam ? 'ON' : 'OFF'],
+        ].filter(([,v]) => v !== '-');
+        configHtml = `<div style="font-size:0.68rem;color:#888;margin-bottom:6px">${entries.map(([k,v]) => `<span style="margin-right:10px"><strong>${k}:</strong> ${v}</span>`).join('')}</div>`;
+      }
       let paramHtml = '';
       if (r.aug_params) {
         const p = r.aug_params;
@@ -8212,31 +8440,37 @@ function evalRenderResults() {
         </table>`;
       }
       let imgHtml = '';
-      if (r.aug_preview && r.aug_preview.length) {
-        imgHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap">${r.aug_preview.map(c => `<div style="flex:1;min-width:120px">
-          <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:3px">${c.name}</div>
-          <div style="display:flex;gap:4px">
-            <div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">Original</div><img src="data:image/jpeg;base64,${c.original}" style="width:100%;border-radius:4px;border:1px solid #e0e0e0"></div>
-            <div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">Augmented</div><img src="data:image/jpeg;base64,${c.augmented}" style="width:100%;border-radius:4px;border:1px solid #e0a0a0"></div>
-          </div>
-        </div>`).join('')}</div>`;
+      const previews = r.aug_preview || r.camera_preview || [];
+      if (previews.length) {
+        imgHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap">${previews.map(c => {
+          const hasAugImg = c.augmented;
+          return `<div style="flex:1;min-width:120px">
+            <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:3px">${c.name}</div>
+            <div style="display:flex;gap:4px">
+              <div style="${hasAugImg?'flex:1;':''}text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">${hasAugImg?'Original':'Camera'}</div><img src="data:image/jpeg;base64,${c.original}" style="width:100%;border-radius:4px;border:1px solid #e0e0e0"></div>
+              ${hasAugImg?`<div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">Augmented</div><img src="data:image/jpeg;base64,${c.augmented}" style="width:100%;border-radius:4px;border:1px solid #e0a0a0"></div>`:''}
+            </div>
+          </div>`;
+        }).join('')}</div>`;
       }
       detail = `<div id="evalResultDetail_${i}" style="display:none;padding:8px 12px 10px;background:#fafafa;border-radius:0 0 8px 8px;border-top:1px dashed #e0e0e0">
-        ${paramHtml}${imgHtml}
+        ${configHtml}${paramHtml}${imgHtml}
       </div>`;
     }
 
-    return `<div style="background:${bg};border-radius:8px;margin-bottom:4px;border:1px solid ${r.result==='success'?'#c8e6c9':r.result==='fail'?'#ffcdd2':'#e0e0e0'}">
-      <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;${hasAug?'cursor:pointer':''};" ${hasAug?`onclick="evalToggleDetail(${i})"`:''}>
+    return `<div style="background:${bg};border-radius:8px;margin-bottom:4px;border:1px solid ${borderMap[r.result]||'#e0e0e0'}">
+      <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;${hasDetail?'cursor:pointer':''};" ${hasDetail?`onclick="evalToggleDetail(${i})"`:''}>
         <span style="color:${color};font-weight:700;font-size:1.1rem;width:22px;text-align:center;flex-shrink:0">${icon}</span>
         <span style="font-size:0.8rem;font-weight:600;color:#444;width:46px;flex-shrink:0">#${r.run}</span>
+        <span style="font-size:0.7rem;color:${color};font-weight:500;flex-shrink:0">${r.result}</span>
         <span style="flex:1"></span>
-        ${hasAug?`<span style="font-size:0.65rem;color:#aaa;flex-shrink:0" id="evalDetailBtn_${i}">&#9660; aug</span>`:''}
+        ${hasDetail?`<span style="font-size:0.65rem;color:#aaa;flex-shrink:0" id="evalDetailBtn_${i}">&#9660; detail</span>`:''}
         <span style="font-size:0.7rem;color:#aaa;flex-shrink:0">${time}</span>
         <select onclick="event.stopPropagation()" onchange="evalEditResult(${i},this.value)" style="font-size:0.7rem;border:1px solid #ddd;border-radius:4px;padding:2px 6px;color:#555;background:#fff;cursor:pointer;flex-shrink:0">
-          <option value="success" ${r.result==='success'?'selected':''}>Success</option>
+          <option value="1-attempt" ${r.result==='1-attempt'?'selected':''}>1-Attempt</option>
+          <option value="2-attempt" ${r.result==='2-attempt'?'selected':''}>2-Attempt</option>
+          <option value="3-attempt" ${r.result==='3-attempt'?'selected':''}>3-Attempt</option>
           <option value="fail" ${r.result==='fail'?'selected':''}>Fail</option>
-          <option value="skip" ${r.result==='skip'?'selected':''}>Skip</option>
         </select>
         <button onclick="event.stopPropagation();evalDeleteResult(${i})" style="background:none;border:none;cursor:pointer;font-size:0.82rem;color:#ccc;padding:0 2px;flex-shrink:0" title="Delete">&times;</button>
       </div>
@@ -8251,10 +8485,10 @@ function evalToggleDetail(idx) {
   if (!el) return;
   if (el.style.display === 'none') {
     el.style.display = '';
-    if (btn) btn.innerHTML = '&#9650; aug';
+    if (btn) btn.innerHTML = '&#9650; detail';
   } else {
     el.style.display = 'none';
-    if (btn) btn.innerHTML = '&#9660; aug';
+    if (btn) btn.innerHTML = '&#9660; detail';
   }
 }
 
@@ -8284,9 +8518,8 @@ function evalClearAllResults() {
 function _evalRecalcSession() {
   if (!evalSession) return;
   evalSession.completed = evalSession.results.length;
-  evalSession.success = evalSession.results.filter(r => r.result === 'success').length;
+  evalSession.success = evalSession.results.filter(r => r.result !== 'fail').length;
   evalSession.fail = evalSession.results.filter(r => r.result === 'fail').length;
-  evalSession.skip = evalSession.results.filter(r => r.result === 'skip').length;
   evalUpdateProgress();
   evalRenderResults();
   // Auto-save
@@ -8302,7 +8535,7 @@ function evalExportResults() {
   const blob = new Blob([JSON.stringify(evalSession, null, 2)], {type: 'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${evalSession.session_id}.json`;
+  a.download = `${evalSession.session_name || evalSession.session_id}.json`;
   a.click();
 }
 
@@ -8322,6 +8555,9 @@ async function evalResetSession() {
   document.getElementById('evalRunStatus').textContent = 'Ready';
   document.getElementById('evalRunBtn').disabled = !(evalSelectedModel && evalSelectedModel.local_exists);
   document.getElementById('evalLog').textContent = 'Waiting to start...';
+  // Unlock model select
+  document.getElementById('evalModelSelect').disabled = false;
+  document.getElementById('evalSessionNameStatus').textContent = '';
 }
 
 async function evalLoadSessions() {
@@ -8338,13 +8574,14 @@ async function evalLoadSessions() {
       const rate = total > 0 ? (s.success / total * 100).toFixed(0) + '%' : '-';
       const date = s.created ? new Date(s.created).toLocaleDateString() : '';
       const color = total > 0 ? (s.success / total > 0.7 ? '#34a853' : s.success / total > 0.4 ? '#e8710a' : '#d93025') : '#888';
+      const displayName = s.name || s.model;
       return `<div style="padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:4px;cursor:pointer;transition:background 0.15s;position:relative" onmouseenter="this.style.background='#f5f5f5'" onmouseleave="this.style.background=''">
         <div onclick="evalLoadSession('${s.id}')" style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:0.82rem;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${s.model}</span>
+          <span style="font-size:0.82rem;font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${displayName}</span>
           <span style="font-size:1rem;font-weight:700;color:${color};flex-shrink:0">${rate}</span>
           <button onclick="event.stopPropagation();evalDeleteSession('${s.id}')" style="background:none;border:none;cursor:pointer;color:#d93025;font-size:0.85rem;padding:0 4px;flex-shrink:0" title="Delete session">&times;</button>
         </div>
-        <div onclick="evalLoadSession('${s.id}')" style="font-size:0.7rem;color:#999;margin-top:2px">${s.completed}/${s.target} runs · ${s.success}S ${s.fail}F · ${date}</div>
+        <div onclick="evalLoadSession('${s.id}')" style="font-size:0.7rem;color:#999;margin-top:2px">${s.name ? s.model + ' · ' : ''}${s.completed}/${s.target} runs · ${s.success}S ${s.fail}F · ${date}</div>
       </div>`;
     }).join('');
   } catch(e) { el.innerHTML = '<div style="color:#d93025">Error loading sessions</div>'; }
@@ -8362,6 +8599,7 @@ async function evalDeleteSession(sessionId) {
       document.getElementById('evalResultsList').innerHTML = '<div style="padding:10px;text-align:center;color:#888;font-size:0.85rem">No results yet.</div>';
       document.getElementById('evalRunStatus').textContent = 'Ready';
       document.getElementById('evalRunBtn').disabled = !(evalSelectedModel && evalSelectedModel.local_exists);
+      document.getElementById('evalModelSelect').disabled = false;
     }
     evalLoadSessions();
   } catch(e) {}
@@ -8375,6 +8613,8 @@ async function evalLoadSession(sessionId) {
     evalSession = d;
     document.getElementById('evalCardsSection').style.display = '';
     document.getElementById('evalProgressSection').style.display = '';
+    // Set session name (always editable)
+    document.getElementById('evalSessionName').value = d.session_name || d.session_id || '';
     evalUpdateProgress();
     // Select matching model — strip aug suffix (_AUGFIX, _AUGLV1-5) for matching
     const baseModelName = (d.model_name || '').replace(/_(AUGFIX|AUGLV\d)$/, '');
@@ -8389,6 +8629,8 @@ async function evalLoadSession(sessionId) {
         document.getElementById('evalModelDownloadSection').style.display = '';
       }
     }
+    // Lock model select
+    document.getElementById('evalModelSelect').disabled = true;
     document.getElementById('evalTask').value = d.task || '';
     document.getElementById('evalTargetRuns').value = d.target_runs || 10;
     document.getElementById('evalFps').value = d.fps || 30;

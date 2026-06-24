@@ -118,6 +118,65 @@ def load_params_from_server(url):
     return json.loads(resp.read().decode())
 
 
+def patch_black_cameras(black_indices, width=320, height=240):
+    """Monkey-patch cv2.VideoCapture so that cameras opened with indices in
+    `black_indices` always return a black frame instead of real camera data."""
+    import cv2
+    import numpy as np
+
+    black_indices = set(int(i) for i in black_indices)
+    print(f"[FakeCam] Black-camera mode for indices: {black_indices}")
+
+    _OriginalVideoCapture = cv2.VideoCapture
+
+    class BlackCameraCapture(_OriginalVideoCapture):
+        def __init__(self, *args, **kwargs):
+            self._is_black = False
+            self._black_frame = None
+            if args and isinstance(args[0], int) and args[0] in black_indices:
+                self._is_black = True
+                self._black_frame = np.zeros((height, width, 3), dtype=np.uint8)
+                print(f"[FakeCam] Camera index {args[0]} → black frame ({width}x{height})")
+                # Don't open real device — just init base with no args
+                super().__init__()
+            else:
+                super().__init__(*args, **kwargs)
+
+        def isOpened(self):
+            if self._is_black:
+                return True
+            return super().isOpened()
+
+        def read(self):
+            if self._is_black:
+                return True, self._black_frame.copy()
+            return super().read()
+
+        def release(self):
+            if self._is_black:
+                return
+            return super().release()
+
+        def set(self, propId, value):
+            if self._is_black:
+                return True
+            return super().set(propId, value)
+
+        def get(self, propId):
+            if self._is_black:
+                if propId == cv2.CAP_PROP_FRAME_WIDTH:
+                    return float(width)
+                if propId == cv2.CAP_PROP_FRAME_HEIGHT:
+                    return float(height)
+                if propId == cv2.CAP_PROP_FPS:
+                    return 30.0
+                return 0.0
+            return super().get(propId)
+
+    cv2.VideoCapture = BlackCameraCapture
+    print("[FakeCam] cv2.VideoCapture replaced with BlackCameraCapture")
+
+
 def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0):
     """Replace cv2.VideoCapture with a subclass that applies augmentation.
 
@@ -216,9 +275,13 @@ def main():
     parser.add_argument("--params-file", type=str, help="Path to JSON file with params")
     parser.add_argument("--from-server", type=str, help="Load params from Hybridge VLA server URL")
     parser.add_argument("--save", type=str, help="Save resolved params to file and exit")
+    parser.add_argument("--black-cameras", type=str, help="Comma-separated camera indices to replace with black frames")
+    parser.add_argument("--black-cam-width", type=int, default=320, help="Width for black camera frames")
+    parser.add_argument("--black-cam-height", type=int, default=240, help="Height for black camera frames")
     args = parser.parse_args(our_args)
 
     # Resolve params
+    has_aug = args.from_server or args.params_file or args.params
     params = {}
     if args.from_server:
         try:
@@ -233,13 +296,14 @@ def main():
         print(f"[FakeCam] Loaded params from file: {args.params_file}")
     elif args.params:
         params = json.loads(args.params)
-    else:
-        # Try loading from default file
+    elif not args.black_cameras:
+        # Try loading from default file (only required if no --black-cameras)
         default_path = os.path.join(os.path.dirname(__file__), "fakecam_params.json")
         if os.path.exists(default_path):
             with open(default_path) as f:
                 params = json.load(f)
             print(f"[FakeCam] Loaded params from {default_path}")
+            has_aug = True
         else:
             print("[FakeCam] No params specified. Use --params, --params-file, or --from-server")
             print("[FakeCam] Or save params from the web UI first")
@@ -269,8 +333,14 @@ def main():
         if os.path.exists(default_path):
             reload_file = default_path
 
-    # Patch OpenCV before running the command (with hot-reload)
-    patch_opencv(params, params_file=reload_file, server_url=reload_server)
+    # Patch black cameras first (so augmentation wraps on top if needed)
+    if args.black_cameras:
+        black_indices = [int(i.strip()) for i in args.black_cameras.split(",")]
+        patch_black_cameras(black_indices, width=args.black_cam_width, height=args.black_cam_height)
+
+    # Patch OpenCV for augmentation (with hot-reload)
+    if has_aug:
+        patch_opencv(params, params_file=reload_file, server_url=reload_server)
 
     # Run the command in the same process by importing and executing
     # For subprocess commands like lerobot-rollout, we need to set up

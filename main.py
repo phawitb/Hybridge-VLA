@@ -4600,6 +4600,18 @@ async def eval_move_to_reset():
     return {"ok": False, "error": err}
 
 
+def _eval_filter_cameras(all_cameras: dict, cam_select: str) -> dict:
+    """Filter cameras based on selection string: '2' (all), '1-top', '1-wrist', or '1' (first)."""
+    if cam_select == '1-top':
+        return {k: v for k, v in all_cameras.items() if k == 'top'}
+    elif cam_select == '1-wrist':
+        return {k: v for k, v in all_cameras.items() if k == 'wrist'}
+    elif cam_select.startswith('1'):
+        return dict(list(all_cameras.items())[:1])
+    else:
+        return all_cameras
+
+
 @app.post("/api/eval/fakecam-preview")
 async def eval_fakecam_preview(request: Request):
     """Capture one frame from each camera and return original + augmented as base64 JPEG."""
@@ -4608,10 +4620,12 @@ async def eval_fakecam_preview(request: Request):
 
     body = await request.json()
     params = body.get("params", {})
+    cam_select = str(body.get("cam_count", "2"))
 
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
-    cameras = robot_cfg.get("cameras", {})
+    all_cameras = robot_cfg.get("cameras", {})
+    cameras = _eval_filter_cameras(all_cameras, cam_select)
 
     cam_p = _build_cam_params(params)
     light_p = _build_light_params(params)
@@ -4648,6 +4662,40 @@ async def eval_fakecam_preview(request: Request):
     return {"ok": True, "cameras": result}
 
 
+@app.get("/api/eval/camera-snapshot")
+async def eval_camera_snapshot(cam_count: str = "2"):
+    """Capture one frame from each camera and return as base64 JPEG (no augmentation)."""
+    import cv2
+    import base64
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    all_cameras = robot_cfg.get("cameras", {})
+    cameras = _eval_filter_cameras(all_cameras, cam_count)
+
+    result = []
+    for cam_name, cam_cfg in cameras.items():
+        idx = cam_cfg.get("index", 0)
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            result.append({"name": cam_name, "error": f"Cannot open camera {idx}"})
+            continue
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            result.append({"name": cam_name, "error": f"Cannot read from camera {idx}"})
+            continue
+        preview_w = 320
+        h, w = frame.shape[:2]
+        preview_h = int(h * preview_w / w)
+        small = cv2.resize(frame, (preview_w, preview_h))
+        _, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        b64 = base64.b64encode(buf).decode()
+        result.append({"name": cam_name, "original": b64})
+
+    return {"ok": True, "cameras": result}
+
+
 @app.post("/api/eval/start")
 async def eval_start(request: Request):
     """Start lerobot-rollout process for evaluation."""
@@ -4661,6 +4709,7 @@ async def eval_start(request: Request):
     cam_width = int(body.get("width", 320))
     cam_height = int(body.get("height", 240))
     fourcc = body.get("fourcc", "").strip()
+    cam_select = str(body.get("cam_count", "2"))
     use_fakecam = body.get("use_fakecam", False)
     chunk_size = int(body.get("chunk_size", 0))
     n_action_steps = int(body.get("n_action_steps", 0))
@@ -4684,9 +4733,27 @@ async def eval_start(request: Request):
 
     cfg = load_config()
     robot_cfg = cfg.get("robot", {})
-    cams = robot_cfg.get("cameras", {})
+    all_cams = robot_cfg.get("cameras", {})
 
     # Build cameras config string
+    # Always include all cameras so the model gets all expected inputs.
+    # When 1 camera is selected, disabled cameras get a dummy index and
+    # fakecam_inject.py sends black frames for them.
+    black_cam_indices = []
+    selected_cams = _eval_filter_cameras(all_cams, cam_select)
+    if cam_select.startswith('1-') and len(all_cams) > 1:
+        # Use a high dummy index (99) for disabled cameras — fakecam will intercept
+        DUMMY_INDEX = 99
+        cams = {}
+        for cam_name, cam_c in all_cams.items():
+            if cam_name in selected_cams:
+                cams[cam_name] = cam_c
+            else:
+                cams[cam_name] = {**cam_c, 'index': DUMMY_INDEX}
+                black_cam_indices.append(DUMMY_INDEX)
+    else:
+        cams = all_cams
+
     cam_parts = []
     fourcc_part = f", fourcc: {fourcc}" if fourcc else ""
     for cam_name, cam_c in cams.items():
@@ -4715,8 +4782,14 @@ async def eval_start(request: Request):
     if n_action_steps > 0:
         cmd.append(f"--policy.n_action_steps={n_action_steps}")
 
-    if use_fakecam:
-        cmd = ["python", "fakecam_inject.py", "--params-file", "fakecam_params.json", "--"] + cmd
+    if use_fakecam or black_cam_indices:
+        inject_args = ["python", "fakecam_inject.py"]
+        if use_fakecam:
+            inject_args += ["--params-file", "fakecam_params.json"]
+        if black_cam_indices:
+            inject_args += ["--black-cameras", ",".join(str(i) for i in black_cam_indices),
+                            "--black-cam-width", str(cam_width), "--black-cam-height", str(cam_height)]
+        cmd = inject_args + ["--"] + cmd
 
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -4789,6 +4862,7 @@ async def eval_list_sessions():
             d = json.loads(f.read_text())
             sessions.append({
                 "id": d.get("session_id", f.stem),
+                "name": d.get("session_name", ""),
                 "model": d.get("model_name", ""),
                 "task": d.get("task", ""),
                 "target": d.get("target_runs", 0),
