@@ -7,6 +7,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -4817,6 +4818,127 @@ async def eval_delete_session(session_id: str):
     if path.exists():
         path.unlink()
     return {"ok": True}
+
+
+# ── Python Inference API ──
+
+infer_py_state = {"running": False, "process": None, "log_lines": []}
+
+
+def _infer_py_reader(proc, state):
+    """Background thread to read Python inference subprocess output."""
+    for line in iter(proc.stdout.readline, b''):
+        text = line.decode("utf-8", errors="replace").rstrip()
+        state["log_lines"].append(text)
+        if len(state["log_lines"]) > 2000:
+            state["log_lines"] = state["log_lines"][-1500:]
+    proc.wait()
+    state["running"] = False
+
+
+@app.post("/api/infer-python/start")
+async def infer_python_start(request: Request):
+    """Start Python inference process."""
+    if infer_py_state["running"]:
+        return {"ok": False, "error": "Already running"}
+    body = await request.json()
+    model_name = body.get("model_name", "")
+    task = body.get("task", "")
+    fps = int(body.get("fps", 30))
+    cam_width = int(body.get("width", 320))
+    cam_height = int(body.get("height", 240))
+    chunk_size = int(body.get("chunk_size", 0))
+    n_action_steps = int(body.get("n_action_steps", 0))
+    cache_language = body.get("cache_language", False)
+
+    if not model_name:
+        return {"ok": False, "error": "No model selected"}
+
+    # Stop teleop/robot if running
+    if teleop_state["running"]:
+        await teleop_stop()
+    if robot_state["connected"]:
+        disconnect_robot()
+        time.sleep(0.2)
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    cams = robot_cfg.get("cameras", {})
+
+    # Build cameras JSON
+    cameras_json = {}
+    for cam_name, cam_c in cams.items():
+        cameras_json[cam_name] = cam_c.get("index", 0)
+
+    model_dir = f"./models/{model_name}"
+
+    cmd = [
+        sys.executable, "infer_python.py",
+        f"--model-path={model_dir}",
+        f"--robot-port={robot_cfg.get('port', '')}",
+        f"--robot-id={robot_cfg.get('id', 'my_awesome_follower_arm')}",
+        f"--cameras={json.dumps(cameras_json)}",
+        f"--fps={fps}",
+        f"--width={cam_width}",
+        f"--height={cam_height}",
+    ]
+    if task:
+        cmd.append(f"--task={task}")
+    if chunk_size > 0:
+        cmd.append(f"--chunk-size={chunk_size}")
+    if n_action_steps > 0:
+        cmd.append(f"--n-action-steps={n_action_steps}")
+    if cache_language:
+        cmd.append("--cache-language")
+
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        infer_py_state["process"] = p
+        infer_py_state["running"] = True
+        infer_py_state["log_lines"] = []
+        threading.Thread(target=_infer_py_reader, args=(p, infer_py_state), daemon=True).start()
+        return {"ok": True, "pid": p.pid, "cmd": " ".join(cmd)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/infer-python/stop")
+async def infer_python_stop():
+    """Stop the running Python inference process."""
+    if not infer_py_state["running"] and not infer_py_state["process"]:
+        return {"ok": True, "message": "Not running"}
+
+    p = infer_py_state["process"]
+    if p:
+        import signal as sig
+        try:
+            os.killpg(os.getpgid(p.pid), sig.SIGINT)
+        except (ProcessLookupError, OSError):
+            try:
+                p.send_signal(sig.SIGINT)
+            except (ProcessLookupError, OSError):
+                pass
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(p.pid), sig.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
+                    p.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+    infer_py_state["running"] = False
+    return {"ok": True}
+
+
+@app.get("/api/infer-python/status")
+async def infer_python_status():
+    """Get Python inference process status and logs."""
+    return {
+        "running": infer_py_state["running"],
+        "lines": infer_py_state["log_lines"][-100:],
+    }
 
 
 # ── Calibrate JSON API (receive JSON body) ──

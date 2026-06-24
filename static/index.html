@@ -1500,7 +1500,7 @@ remainder = 870 % 174 = 0
           <tr style="background:#f5f5f5"><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Parameter</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">Default</th><th style="padding:6px 12px;border:1px solid #e0e0e0;text-align:left">คำอธิบาย</th></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--batch_size</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">32</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ขนาด batch (ลดเหลือ 16 ถ้า GPU 12GB)</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--steps</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">100,000</td><td style="padding:6px 12px;border:1px solid #e0e0e0">จำนวน training steps ทั้งหมด</td></tr>
-          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.optimizer_lr</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.0001</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Learning rate</td></tr>
+          <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.optimizer_lr</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">0.00001</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Learning rate</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.freeze_vision_encoder</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Freeze vision encoder (ประหยัด VRAM)</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.train_expert_only</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">Train เฉพาะ expert layers</td></tr>
           <tr><td style="padding:6px 12px;border:1px solid #e0e0e0"><code>--policy.use_amp</code></td><td style="padding:6px 12px;border:1px solid #e0e0e0">true</td><td style="padding:6px 12px;border:1px solid #e0e0e0">ใช้ mixed precision (FP16) เร็วขึ้น ประหยัด VRAM</td></tr>
@@ -1577,6 +1577,13 @@ place the white eraser             1
   <div class="page" id="page-inference">
     <div class="page-title"><span>VLA</span> Inference</div>
 
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="inf-main">Inference</button>
+      <button class="inner-tab" data-inner="inf-docs">Documents</button>
+    </div>
+
+    <div class="inner-page active" id="inner-inf-main">
+
     <div class="config-card" style="margin-bottom:16px">
       <h3 style="margin-top:0">Select Model</h3>
       <p style="font-size:0.85rem;color:#666;margin-bottom:12px">Models from your Hugging Face repository. Click <strong>Refresh</strong> to fetch the latest list.</p>
@@ -1637,6 +1644,48 @@ place the white eraser             1
         <div class="train-cmd" id="infCmd4"><button style="position:absolute;top:8px;right:8px;background:#555;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:0.7rem;cursor:pointer;z-index:1" onclick="vizCopyCmd('infCmd4')">Copy</button></div>
       </div>
 
+      <!-- Run Inference Controls -->
+      <div class="config-card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Run Inference</h3>
+        <p style="font-size:0.82rem;color:#777;margin-bottom:10px">Run inference directly from this UI. Choose between <strong>Robot Rollout</strong> (lerobot-rollout) or <strong>Python</strong> (infer_python.py).</p>
+        <div style="display:flex;gap:14px;margin-bottom:10px;flex-wrap:wrap">
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">FPS</label>
+            <input type="number" id="infRunFps" class="form-input" value="30" min="1" max="60" style="width:100%">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">Width</label>
+            <input type="number" id="infRunWidth" class="form-input" value="320" min="160" max="1920" style="width:100%">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">Height</label>
+            <input type="number" id="infRunHeight" class="form-input" value="240" min="120" max="1080" style="width:100%">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">Chunk Size</label>
+            <input type="number" id="infRunChunkSize" class="form-input" placeholder="default" min="1" max="500" style="width:100%">
+          </div>
+          <div class="form-group" style="margin:0;flex:1;min-width:120px">
+            <label class="form-label">N Action Steps</label>
+            <input type="number" id="infRunNActionSteps" class="form-input" placeholder="default" min="1" max="500" style="width:100%">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn" id="infRunRolloutBtn" onclick="infRunRollout()" style="background:#1a73e8" disabled>Run with Robot Rollout</button>
+          <button class="btn" id="infRunPythonBtn" onclick="infRunPython()" style="background:#34a853" disabled>Run with Python</button>
+          <button class="btn" id="infRunPythonCacheBtn" onclick="infRunPythonCache()" style="background:#ff9800" disabled>Run with Python + Cache</button>
+          <button class="btn btn-danger" id="infRunStopBtn" onclick="infRunStop()" style="display:none">Stop</button>
+          <span id="infRunStatus" style="font-size:0.85rem;color:#888">Select a model first</span>
+        </div>
+        <div id="infRunLogSection" style="display:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:0.82rem;font-weight:600;color:#555">Log</span>
+            <button class="btn btn-sm" onclick="document.getElementById('infRunLog').textContent=''" style="background:#888;font-size:0.68rem;padding:2px 8px">Clear</button>
+          </div>
+          <pre id="infRunLog" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;line-height:1.6;margin:0">Waiting to start...</pre>
+        </div>
+      </div>
+
       <div style="background:#f0f7ff;border-radius:6px;padding:10px 14px;font-size:0.82rem;color:#333">
         <strong>Tips:</strong>
         <ul style="margin:4px 0 0 0;padding-left:18px">
@@ -1645,9 +1694,246 @@ place the white eraser             1
           <li>ปรับ camera index ให้ตรงกับ device จริง</li>
           <li>ถ้าต้องการ run บน robot โดยตรง ให้ download model ลง robot แทน GPU server</li>
           <li>Step 2 (fakecam) ต้อง save params จากหน้า Fake Camera ก่อน หรือใช้ <code>--from-server</code> แทน</li>
+          <li><strong>Run with Robot Rollout</strong> = ใช้ lerobot-rollout (เหมือน copy command ไปรัน)</li>
+          <li><strong>Run with Python</strong> = ใช้ infer_python.py (Python API โดยตรง)</li>
+          <li><strong>Run with Python + Cache</strong> = เหมือน Python แต่ cache language tokens &amp; embeddings (เร็วขึ้นเมื่อ task text ไม่เปลี่ยน)</li>
         </ul>
       </div>
     </div>
+
+    </div><!-- /inner-inf-main -->
+
+    <div class="inner-page" id="inner-inf-docs">
+    <div class="doc">
+
+      <h2>SmolVLA Inference — Time Profiling Report</h2>
+
+      <p>This report documents the inference timing breakdown of SmolVLA on <strong>Apple MPS (M-series)</strong> with model <code>smolvla_DS1_1B1O_FF_100EP</code> using <code>infer_python.py</code>.</p>
+
+      <h3>Overview</h3>
+      <p>SmolVLA uses <strong>action chunking</strong>: the model predicts 50 actions at once (<code>chunk_size=50</code>), then reuses them for <code>n_action_steps=50</code> steps before predicting again. This means only <strong>2% of steps</strong> require model inference.</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:12px 0">
+        <thead>
+          <tr style="border-bottom:2px solid #333;text-align:left">
+            <th style="padding:6px 10px">Step Type</th>
+            <th style="padding:6px 10px">Frequency</th>
+            <th style="padding:6px 10px">Total Time</th>
+            <th style="padding:6px 10px">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #e0e0e0;background:#fff3e0">
+            <td style="padding:6px 10px;font-weight:600">PREDICT</td>
+            <td style="padding:6px 10px">Every 50 steps</td>
+            <td style="padding:6px 10px">~370ms</td>
+            <td style="padding:6px 10px">Full model inference to generate new action chunk</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px;font-weight:600">Reuse</td>
+            <td style="padding:6px 10px">49 out of 50 steps</td>
+            <td style="padding:6px 10px">~8-11ms</td>
+            <td style="padding:6px 10px">Pop next action from queue, no model inference</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>PREDICT Step Breakdown (~370ms)</h3>
+      <p>When the action queue is empty, <code>select_action()</code> calls <code>sample_actions()</code> which consists of 3 phases:</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:12px 0">
+        <thead>
+          <tr style="border-bottom:2px solid #333;text-align:left">
+            <th style="padding:6px 10px">Phase</th>
+            <th style="padding:6px 10px">Time</th>
+            <th style="padding:6px 10px">Share</th>
+            <th style="padding:6px 10px">What It Does</th>
+            <th style="padding:6px 10px">Cacheable?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px;font-weight:600">embed_prefix</td>
+            <td style="padding:6px 10px">~175ms</td>
+            <td style="padding:6px 10px;font-weight:700;color:#e65100">47%</td>
+            <td style="padding:6px 10px">SigLIP image encoding + language embedding + state projection</td>
+            <td style="padding:6px 10px;color:#d93025">No (image changes)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px;font-weight:600">kv_cache</td>
+            <td style="padding:6px 10px">~25ms</td>
+            <td style="padding:6px 10px">7%</td>
+            <td style="padding:6px 10px">VLM forward pass to build KV cache from prefix</td>
+            <td style="padding:6px 10px;color:#d93025">No (depends on image)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px;font-weight:600">denoise x10</td>
+            <td style="padding:6px 10px">~165ms</td>
+            <td style="padding:6px 10px;font-weight:700;color:#e65100">45%</td>
+            <td style="padding:6px 10px">10 flow-matching denoising steps (~16.5ms each)</td>
+            <td style="padding:6px 10px;color:#ff9800">Reducible (fewer steps)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Reuse Step Breakdown (~10ms)</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:12px 0">
+        <thead>
+          <tr style="border-bottom:2px solid #333;text-align:left">
+            <th style="padding:6px 10px">Phase</th>
+            <th style="padding:6px 10px">Time</th>
+            <th style="padding:6px 10px">What It Does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">obs</td>
+            <td style="padding:6px 10px">~1ms</td>
+            <td style="padding:6px 10px">Read camera frames + joint state from robot</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">frame</td>
+            <td style="padding:6px 10px">~3ms</td>
+            <td style="padding:6px 10px">Build inference frame (format conversion)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">preprocess</td>
+            <td style="padding:6px 10px">~2ms</td>
+            <td style="padding:6px 10px">Tokenize text + normalize images/state</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">action</td>
+            <td style="padding:6px 10px">~3ms</td>
+            <td style="padding:6px 10px">Pop next action from queue (no inference)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">postprocess</td>
+            <td style="padding:6px 10px">~0.8ms</td>
+            <td style="padding:6px 10px">Denormalize action values</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">send</td>
+            <td style="padding:6px 10px">~0.1ms</td>
+            <td style="padding:6px 10px">Send action to robot via serial</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Architecture Flow</h3>
+      <pre style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:14px;line-height:1.7;overflow-x:auto">
+SmolVLA Inference Pipeline (per PREDICT step)
+==============================================
+
+1. embed_prefix (~175ms, 47%)
+   ├── SigLIP Vision Encoder: image → image embeddings     ← HEAVIEST, not cacheable
+   ├── Language Embedding: token IDs → language embeddings  ← very fast (~0.1ms)
+   └── State Projection: joint state → state embeddings    ← very fast
+
+2. kv_cache (~25ms, 7%)
+   └── VLM Forward: prefix embeddings → KV cache
+       (cross-attention between image + language + state)
+
+3. denoise x10 (~165ms, 45%)
+   └── Flow Matching: noise → action chunk (50 actions)
+       Step 1: ~16.5ms  (noise → slightly less noisy)
+       Step 2: ~16.5ms
+       ...
+       Step 10: ~16.5ms (clean action output)
+
+Total: ~370ms per PREDICT → produces 50 actions
+Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
+
+      <h3>Key Parameters</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:12px 0">
+        <thead>
+          <tr style="border-bottom:2px solid #333;text-align:left">
+            <th style="padding:6px 10px">Parameter</th>
+            <th style="padding:6px 10px">Default</th>
+            <th style="padding:6px 10px">Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px"><code>chunk_size</code></td>
+            <td style="padding:6px 10px">50</td>
+            <td style="padding:6px 10px">Number of actions the model predicts per inference</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px"><code>n_action_steps</code></td>
+            <td style="padding:6px 10px">50</td>
+            <td style="padding:6px 10px">Number of actions used before re-predicting. Lower = more responsive but slower overall</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px"><code>num_steps</code></td>
+            <td style="padding:6px 10px">10</td>
+            <td style="padding:6px 10px">Denoising iterations. Lower = faster PREDICT (~16.5ms saved per step removed) but noisier actions</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px"><code>tokenizer_max_length</code></td>
+            <td style="padding:6px 10px">48</td>
+            <td style="padding:6px 10px">Max tokens for task text. Negligible impact on speed</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Optimization Analysis</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:12px 0">
+        <thead>
+          <tr style="border-bottom:2px solid #333;text-align:left">
+            <th style="padding:6px 10px">Optimization</th>
+            <th style="padding:6px 10px">PREDICT Time</th>
+            <th style="padding:6px 10px">Speedup</th>
+            <th style="padding:6px 10px">Trade-off</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">Baseline (num_steps=10)</td>
+            <td style="padding:6px 10px">~370ms</td>
+            <td style="padding:6px 10px">-</td>
+            <td style="padding:6px 10px">-</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">num_steps=5</td>
+            <td style="padding:6px 10px">~285ms</td>
+            <td style="padding:6px 10px">~23%</td>
+            <td style="padding:6px 10px">Action quality may decrease slightly</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">num_steps=3</td>
+            <td style="padding:6px 10px">~225ms</td>
+            <td style="padding:6px 10px">~40%</td>
+            <td style="padding:6px 10px">Action quality may decrease noticeably</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">Language cache</td>
+            <td style="padding:6px 10px">~370ms</td>
+            <td style="padding:6px 10px">~0%</td>
+            <td style="padding:6px 10px">No measurable improvement (language is not the bottleneck)</td>
+          </tr>
+          <tr style="border-bottom:1px solid #e0e0e0">
+            <td style="padding:6px 10px">SmolVLM2-256M backbone</td>
+            <td style="padding:6px 10px">TBD</td>
+            <td style="padding:6px 10px">TBD</td>
+            <td style="padding:6px 10px">Requires retraining expert head</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Conclusion</h3>
+      <ul>
+        <li><strong>Action chunking already provides massive speedup</strong> — 98% of steps run at ~10ms (reuse), only 2% need ~370ms (predict)</li>
+        <li><strong>Language caching has no measurable effect</strong> — language embedding is &lt;0.1ms out of ~370ms total</li>
+        <li><strong>The two bottlenecks are SigLIP image encoding (47%) and denoising (45%)</strong> — both are compute-bound and cannot be cached</li>
+        <li><strong>Reducing <code>num_steps</code></strong> is the most practical optimization without retraining</li>
+        <li><strong>Effective per-action cost</strong> is ~7.4ms amortized (370ms / 50 actions), achieving well above 30 FPS effective throughput</li>
+      </ul>
+
+      <p style="font-size:0.78rem;color:#999;margin-top:20px">Measured on Apple MPS (M-series), model: smolvla_DS1_1B1O_FF_100EP, chunk_size=50, n_action_steps=50, num_steps=10</p>
+
+    </div>
+    </div><!-- /inner-inf-docs -->
+
   </div><!-- /page-inference -->
 
   <!-- ==================== Fake Camera ==================== -->
@@ -1825,7 +2111,7 @@ place the white eraser             1
               </div>
               <div class="form-group">
                 <label class="form-label">Learning Rate</label>
-                <input type="number" id="trainLr" class="form-input" value="0.0003" step="0.0001">
+                <input type="number" id="trainLr" class="form-input" value="0.00001" step="0.0001">
               </div>
               <div class="form-group">
                 <label class="form-label">W&B Project</label>
@@ -4335,9 +4621,13 @@ document.getElementById('infModelSelect').addEventListener('change', async funct
     infoEl.style.display = 'none';
     cmdsEl.style.display = 'none';
     infSelectedModel = null;
+    _infEnableRunBtns(false);
+    document.getElementById('infRunStatus').textContent = 'Select a model first';
+    document.getElementById('infRunStatus').style.color = '#888';
     return;
   }
   infSelectedModel = infModels[parseInt(idx)];
+  _infEnableRunBtns(true);
   const m = infSelectedModel;
   // Show model info
   const modified = m.last_modified ? new Date(m.last_modified).toLocaleString() : 'unknown';
@@ -4460,6 +4750,184 @@ function infUpdateCommands() {
   document.getElementById('infCmd2').innerHTML = cb('infCmd2') + _escHtml(cmd2);
   document.getElementById('infCmd3').innerHTML = cb('infCmd3') + _escHtml(cmd3);
   document.getElementById('infCmd4').innerHTML = cb('infCmd4') + _escHtml(cmd4);
+}
+
+// ── Inference Run Controls ──
+
+let infRunPollTimer = null;
+let infRunMode = null; // 'rollout' or 'python'
+
+function _infEnableRunBtns(enabled) {
+  document.getElementById('infRunRolloutBtn').disabled = !enabled;
+  document.getElementById('infRunPythonBtn').disabled = !enabled;
+  document.getElementById('infRunPythonCacheBtn').disabled = !enabled;
+  if (enabled) {
+    document.getElementById('infRunStatus').textContent = 'Ready';
+    document.getElementById('infRunStatus').style.color = '#34a853';
+  }
+}
+
+function _infDisableAllRunBtns() {
+  document.getElementById('infRunRolloutBtn').disabled = true;
+  document.getElementById('infRunPythonBtn').disabled = true;
+  document.getElementById('infRunPythonCacheBtn').disabled = true;
+  document.getElementById('infRunStopBtn').style.display = '';
+}
+
+function _infBuildRunBody() {
+  if (!infSelectedModel) return {};
+  return {
+    model_id: infSelectedModel.id,
+    model_name: infSelectedModel.name,
+    task: document.getElementById('infTaskInput').value || '',
+    fps: parseInt(document.getElementById('infRunFps').value) || 30,
+    width: parseInt(document.getElementById('infRunWidth').value) || 320,
+    height: parseInt(document.getElementById('infRunHeight').value) || 240,
+    chunk_size: parseInt(document.getElementById('infRunChunkSize').value) || 0,
+    n_action_steps: parseInt(document.getElementById('infRunNActionSteps').value) || 0,
+  };
+}
+
+function _infStartPolling(statusEndpoint) {
+  const logEl = document.getElementById('infRunLog');
+  const logSection = document.getElementById('infRunLogSection');
+  logSection.style.display = '';
+  infRunPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(statusEndpoint);
+      const d = await r.json();
+      if (d.lines && d.lines.length) {
+        logEl.textContent = d.lines.join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      if (!d.running) {
+        clearInterval(infRunPollTimer);
+        infRunPollTimer = null;
+        document.getElementById('infRunStatus').textContent = 'Stopped';
+        document.getElementById('infRunStatus').style.color = '#888';
+        document.getElementById('infRunStopBtn').style.display = 'none';
+        _infEnableRunBtns(true);
+      }
+    } catch(e) {}
+  }, 1000);
+}
+
+async function infRunRollout() {
+  if (!infSelectedModel) return;
+  infRunMode = 'rollout';
+  const st = document.getElementById('infRunStatus');
+  _infDisableAllRunBtns();
+  st.textContent = 'Starting rollout...';
+  st.style.color = '#1a73e8';
+
+  try {
+    const r = await fetch('/api/eval/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_infBuildRunBody()),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#d93025';
+      document.getElementById('infRunStopBtn').style.display = 'none';
+      _infEnableRunBtns(true);
+      return;
+    }
+    st.innerHTML = '<span style="color:#34a853">Running (rollout)...</span>';
+    _infStartPolling('/api/eval/status');
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = '#d93025';
+    document.getElementById('infRunStopBtn').style.display = 'none';
+    _infEnableRunBtns(true);
+  }
+}
+
+async function infRunPython() {
+  if (!infSelectedModel) return;
+  infRunMode = 'python';
+  const st = document.getElementById('infRunStatus');
+  _infDisableAllRunBtns();
+  st.textContent = 'Starting Python inference...';
+  st.style.color = '#34a853';
+
+  try {
+    const r = await fetch('/api/infer-python/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_infBuildRunBody()),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#d93025';
+      document.getElementById('infRunStopBtn').style.display = 'none';
+      _infEnableRunBtns(true);
+      return;
+    }
+    st.innerHTML = '<span style="color:#34a853">Running (Python)...</span>';
+    _infStartPolling('/api/infer-python/status');
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = '#d93025';
+    document.getElementById('infRunStopBtn').style.display = 'none';
+    _infEnableRunBtns(true);
+  }
+}
+
+async function infRunPythonCache() {
+  if (!infSelectedModel) return;
+  infRunMode = 'python';
+  const st = document.getElementById('infRunStatus');
+  _infDisableAllRunBtns();
+  st.textContent = 'Starting Python + Cache...';
+  st.style.color = '#ff9800';
+
+  try {
+    const body = _infBuildRunBody();
+    body.cache_language = true;
+    const r = await fetch('/api/infer-python/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#d93025';
+      document.getElementById('infRunStopBtn').style.display = 'none';
+      _infEnableRunBtns(true);
+      return;
+    }
+    st.innerHTML = '<span style="color:#ff9800">Running (Python + Cache)...</span>';
+    _infStartPolling('/api/infer-python/status');
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = '#d93025';
+    document.getElementById('infRunStopBtn').style.display = 'none';
+    _infEnableRunBtns(true);
+  }
+}
+
+async function infRunStop() {
+  const st = document.getElementById('infRunStatus');
+  st.textContent = 'Stopping...';
+  st.style.color = '#888';
+  if (infRunPollTimer) { clearInterval(infRunPollTimer); infRunPollTimer = null; }
+
+  const stopEndpoint = infRunMode === 'python' ? '/api/infer-python/stop' : '/api/eval/stop';
+  try {
+    await fetch(stopEndpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reset: false}),
+    });
+  } catch(e) {}
+
+  st.textContent = 'Stopped';
+  document.getElementById('infRunStopBtn').style.display = 'none';
+  _infEnableRunBtns(true);
 }
 
 // ── Augmentation Grid ──
@@ -4903,6 +5371,12 @@ function trainPolicyChanged() {
   document.getElementById('trainSmolvlaOpts').style.display = policy === 'smolvla' ? '' : 'none';
   document.getElementById('trainActOpts').style.display = policy === 'act' ? '' : 'none';
   document.getElementById('trainPi05Opts').style.display = policy === 'pi05' ? '' : 'none';
+  // Auto-update job name with new policy prefix
+  const jn = document.getElementById('trainJobName');
+  if (jn.value && trainSelectedRepoId) {
+    const dsName = trainSelectedRepoId.split('/').pop() || jn.value.replace(/^(act|smolvla|pi05)_/, '');
+    jn.value = `${policy}_${dsName}`;
+  }
 }
 
 async function trainCheckServer() {
@@ -5133,9 +5607,10 @@ function trainSelectDs(el) {
   el.style.background = '#e3f2fd';
   trainSelectedRepoId = el.dataset.repo;
   document.getElementById('trainSelectedDs').textContent = el.dataset.repo;
-  // Auto-fill job name
+  // Auto-fill job name with policy prefix
   const jn = document.getElementById('trainJobName');
-  if (!jn.value) jn.value = el.dataset.name;
+  const policy = document.getElementById('trainPolicyType').value;
+  jn.value = `${policy}_${el.dataset.name}`;
 }
 
 async function trainDownloadDs() {
@@ -5226,7 +5701,7 @@ async function trainStart() {
     use_amp: document.getElementById('trainAmp').checked,
     steps: parseInt(document.getElementById('trainSteps').value) || 100000,
     batch_size: parseInt(document.getElementById('trainBatchSize').value) || 32,
-    optimizer_lr: parseFloat(document.getElementById('trainLr').value) || 0.0003,
+    optimizer_lr: parseFloat(document.getElementById('trainLr').value) || 0.00001,
     wandb_enable: document.getElementById('trainWandb').checked,
     wandb_project: document.getElementById('trainWandbProject').value.trim() || 'SO101-Experiments',
     wandb_entity: 'phawitbinabik-turun-ammattikorkeakoulu',
@@ -5758,7 +6233,7 @@ function _tgBuildCmds(firstRender) {
     `  --policy.use_amp=true \\`,
     `  --steps=100000 \\`,
     `  --batch_size=32 \\`,
-    `  --policy.optimizer_lr=0.0003 \\`,
+    `  --policy.optimizer_lr=0.0001 \\`,
     ...wbLines,
     `  --output_dir=outputs/train/smolvla_${name} \\`,
     `  --job_name=smolvla_${name} \\`,
@@ -5775,6 +6250,7 @@ function _tgBuildCmds(firstRender) {
     `  --dataset.root=${dataDir} \\`,
     `  --steps=100000 \\`,
     `  --batch_size=32 \\`,
+    `  --policy.optimizer_lr=0.00001 \\`,
     ...wbLines,
     `  --output_dir=${actOutDir} \\`,
     `  --job_name=act_${name} \\`,
@@ -5813,7 +6289,7 @@ function _tgBuildCmds(firstRender) {
     `  --policy.use_amp=true \\`,
     `  --steps=100000 \\`,
     `  --batch_size=32 \\`,
-    `  --policy.optimizer_lr=0.0003 \\`,
+    `  --policy.optimizer_lr=0.0001 \\`,
     ...wbLines,
     `  --output_dir=${outDir} \\`,
     `  --job_name=smolvla_${name} \\`,
