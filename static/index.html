@@ -2350,27 +2350,24 @@ conda run -n lerobot uvicorn train_api:app \
         <div class="config-card" style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <h3 style="margin:0">2. Evaluation Config</h3>
-            <div style="display:flex;gap:8px;align-items:center">
-              <span id="evalConfigSaveStatus" style="font-size:0.78rem;color:#888"></span>
-              <button class="btn btn-sm" onclick="evalSaveConfig()" style="background:#1a73e8;font-size:0.72rem;padding:2px 12px">Save</button>
-            </div>
+            <span id="evalConfigSaveStatus" style="font-size:0.78rem;color:#888"></span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px">
             <div class="form-group" style="grid-column:1/-1">
               <label class="form-label">Task Description</label>
-              <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl" oninput="evalUpdateCmd()">
+              <input type="text" id="evalTask" class="form-input" placeholder="pick up the pink bow to the green bowl" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Target Runs</label>
-              <input type="number" id="evalTargetRuns" class="form-input" value="40" min="1" max="999" onchange="evalUpdateTargetRuns()">
+              <input type="number" id="evalTargetRuns" class="form-input" value="40" min="1" max="999" onchange="evalUpdateTargetRuns();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Run Duration (sec)</label>
-              <input type="number" id="evalDuration" class="form-input" value="12" min="5" max="300">
+              <input type="number" id="evalDuration" class="form-input" value="12" min="5" max="300" onchange="evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Cameras</label>
-              <select id="evalCamCount" class="form-input" onchange="evalUpdateCmd()">
+              <select id="evalCamCount" class="form-input" onchange="evalUpdateCmd();evalConfigChanged()">
                 <option value="2" selected>2 (top+wrist)</option>
                 <option value="1-top">1 (top)</option>
                 <option value="1-wrist">1 (wrist)</option>
@@ -2378,27 +2375,27 @@ conda run -n lerobot uvicorn train_api:app \
             </div>
             <div class="form-group">
               <label class="form-label">FPS</label>
-              <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60" oninput="evalUpdateCmd()">
+              <input type="number" id="evalFps" class="form-input" value="30" min="1" max="60" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">FourCC</label>
-              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd()">
+              <input type="text" id="evalFourcc" class="form-input" value="" maxlength="4" style="text-transform:uppercase" placeholder="e.g. MJPG" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Width</label>
-              <input type="number" id="evalWidth" class="form-input" value="320" min="160" max="1920" oninput="evalUpdateCmd()">
+              <input type="number" id="evalWidth" class="form-input" value="320" min="160" max="1920" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Height</label>
-              <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080" oninput="evalUpdateCmd()">
+              <input type="number" id="evalHeight" class="form-input" value="240" min="120" max="1080" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">Chunk Size</label>
-              <input type="number" id="evalChunkSize" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd()">
+              <input type="number" id="evalChunkSize" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
             <div class="form-group">
               <label class="form-label">N Action Steps</label>
-              <input type="number" id="evalNActionSteps" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd()">
+              <input type="number" id="evalNActionSteps" class="form-input" placeholder="default" min="1" max="500" oninput="evalUpdateCmd();evalConfigChanged()">
             </div>
           </div>
           <!-- Reset Position -->
@@ -2419,17 +2416,17 @@ conda run -n lerobot uvicorn train_api:app \
         <div class="config-card" style="margin-bottom:14px">
           <h3 style="margin:0">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.95rem">
-              <input type="checkbox" id="evalUseFakecam" onchange="evalFakecamToggle()"> Fake Camera Augmentation
+              <input type="checkbox" id="evalUseFakecam" onchange="evalFakecamToggle();evalConfigChanged()"> Fake Camera Augmentation
             </label>
           </h3>
           <div id="evalFakecamSettings" style="display:none;margin-top:12px">
             <!-- Mode selector -->
             <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">
               <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;cursor:pointer">
-                <input type="radio" name="evalAugMode" value="fix" checked onchange="evalAugModeChanged()"> Fix
+                <input type="radio" name="evalAugMode" value="fix" checked onchange="evalAugModeChanged();evalConfigChanged()"> Fix
               </label>
               <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;cursor:pointer">
-                <input type="radio" name="evalAugMode" value="random" onchange="evalAugModeChanged()"> Random
+                <input type="radio" name="evalAugMode" value="random" onchange="evalAugModeChanged();evalConfigChanged()"> Random
               </label>
             </div>
 
@@ -2463,7 +2460,7 @@ conda run -n lerobot uvicorn train_api:app \
             <div id="evalAugRandomPanel" style="display:none">
               <div style="margin-bottom:10px">
                 <label style="font-size:0.82rem;font-weight:600;color:#555">Augmentation Level</label>
-                <select id="evalAugLevel" class="form-input" style="margin-top:4px" onchange="evalAugLevelChanged()">
+                <select id="evalAugLevel" class="form-input" style="margin-top:4px" onchange="evalAugLevelChanged();evalConfigChanged()">
                   <option value="1">Level 1 — Mild</option>
                   <option value="2">Level 2 — Light</option>
                   <option value="3" selected>Level 3 — Medium</option>
@@ -7424,9 +7421,8 @@ async function evalLoadConfig() {
   evalUpdateCmd();
 }
 
-async function evalSaveConfig() {
-  const st = document.getElementById('evalConfigSaveStatus');
-  const config = {
+function _evalGetCurrentConfig() {
+  return {
     task: document.getElementById('evalTask').value,
     target_runs: parseInt(document.getElementById('evalTargetRuns').value) || 10,
     duration: parseInt(document.getElementById('evalDuration').value) || 12,
@@ -7441,19 +7437,60 @@ async function evalSaveConfig() {
     chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
     n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || null,
   };
-  try {
-    await fetch('/api/eval/config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(config),
-    });
-    st.textContent = 'Saved!';
-    st.style.color = '#34a853';
-    setTimeout(() => { st.textContent = ''; }, 2000);
-  } catch(e) {
-    st.textContent = 'Error';
-    st.style.color = '#d93025';
+}
+
+let _evalConfigSaveTimer = null;
+function evalConfigChanged() {
+  const st = document.getElementById('evalConfigSaveStatus');
+  const config = _evalGetCurrentConfig();
+
+  // Update session config if active
+  if (evalSession) {
+    evalSession.task = config.task;
+    evalSession.fps = config.fps;
+    evalSession.use_fakecam = config.use_fakecam;
+    evalSession.aug_mode = config.aug_mode;
+    evalSession.aug_level = config.aug_level;
+    evalSession.target_runs = config.target_runs;
+    evalSession.config = {
+      duration: config.duration,
+      cameras: config.cam_count,
+      width: config.width,
+      height: config.height,
+      fourcc: config.fourcc || null,
+      chunk_size: config.chunk_size,
+      n_action_steps: config.n_action_steps,
+    };
   }
+
+  // Debounce save
+  if (_evalConfigSaveTimer) clearTimeout(_evalConfigSaveTimer);
+  st.textContent = '...';
+  st.style.color = '#888';
+  _evalConfigSaveTimer = setTimeout(async () => {
+    try {
+      // Save to global config
+      await fetch('/api/eval/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config),
+      });
+      // Save to session if active
+      if (evalSession) {
+        await fetch('/api/eval/sessions', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(evalSession),
+        });
+      }
+      st.textContent = 'Saved';
+      st.style.color = '#34a853';
+      setTimeout(() => { st.textContent = ''; }, 1500);
+    } catch(e) {
+      st.textContent = 'Error';
+      st.style.color = '#d93025';
+    }
+  }, 600);
 }
 
 function evalUpdateTargetRuns() {
@@ -8631,6 +8668,7 @@ async function evalLoadSession(sessionId) {
     }
     // Lock model select
     document.getElementById('evalModelSelect').disabled = true;
+    // Restore all config fields from session
     document.getElementById('evalTask').value = d.task || '';
     document.getElementById('evalTargetRuns').value = d.target_runs || 10;
     document.getElementById('evalFps').value = d.fps || 30;
@@ -8640,9 +8678,21 @@ async function evalLoadSession(sessionId) {
       if (radio) radio.checked = true;
     }
     if (d.aug_level != null) document.getElementById('evalAugLevel').value = d.aug_level;
+    // Restore config sub-fields
+    const c = d.config || {};
+    if (c.duration != null) document.getElementById('evalDuration').value = c.duration;
+    if (c.cameras != null) document.getElementById('evalCamCount').value = c.cameras;
+    if (c.width != null) document.getElementById('evalWidth').value = c.width;
+    if (c.height != null) document.getElementById('evalHeight').value = c.height;
+    document.getElementById('evalFourcc').value = c.fourcc || '';
+    if (c.chunk_size != null) document.getElementById('evalChunkSize').value = c.chunk_size;
+    else document.getElementById('evalChunkSize').value = '';
+    if (c.n_action_steps != null) document.getElementById('evalNActionSteps').value = c.n_action_steps;
+    else document.getElementById('evalNActionSteps').value = '';
     evalFakecamToggle();
     evalAugModeChanged();
     evalAugLevelChanged();
+    evalUpdateCmd();
     if (d.completed >= d.target_runs) {
       document.getElementById('evalRunStatus').innerHTML = '<span style="color:#34a853;font-weight:600">Evaluation complete!</span>';
     } else {

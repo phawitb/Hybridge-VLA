@@ -260,6 +260,9 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
 
 
 def main():
+    # Ensure prints appear immediately in piped output
+    sys.stdout.reconfigure(line_buffering=True)
+
     # Split args at '--'
     argv = sys.argv[1:]
     if "--" in argv:
@@ -363,7 +366,7 @@ def main():
         from importlib.metadata import entry_points
 
         # Try to find as console_scripts entry point
-        found = False
+        func = None
         try:
             eps = entry_points()
             if hasattr(eps, "select"):
@@ -372,22 +375,22 @@ def main():
                 scripts = eps.get("console_scripts", [])
             for ep in scripts:
                 if ep.name == cmd_name:
-                    sys.argv = cmd_args
                     func = ep.load()
-                    print(f"[FakeCam] Running {cmd_name} in-process with patched cv2")
-                    func()
-                    found = True
                     break
         except Exception as e:
             print(f"[FakeCam] Entry point lookup failed: {e}")
 
-        if not found:
+        if func:
+            sys.argv = cmd_args
+            print(f"[FakeCam] Running {cmd_name} in-process with patched cv2")
+            func()
+        else:
             # Fallback: try importing as module
             module_name = cmd_name.replace("-", "_")
             try:
-                sys.argv = cmd_args
                 mod = importlib.import_module(module_name)
                 if hasattr(mod, "main"):
+                    sys.argv = cmd_args
                     print(f"[FakeCam] Running {module_name}.main() with patched cv2")
                     mod.main()
                 else:

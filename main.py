@@ -4722,7 +4722,7 @@ async def eval_start(request: Request):
         await teleop_stop()
     if robot_state["connected"]:
         disconnect_robot()
-        time.sleep(0.2)
+        time.sleep(1.0)
 
     # Move robot to reset position before starting rollout
     reset_pos = _eval_load_reset_position()
