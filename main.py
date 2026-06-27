@@ -1782,27 +1782,39 @@ No explanations, no markdown."""
                 if parsed and "objects" in parsed:
                     gemini_objects = parsed["objects"]
                     for obj in gemini_objects:
-                        # Normalize field names: label→name, box_2d→bbox
+                        # Normalize field names: label→name
                         if "label" in obj and "name" not in obj:
                             obj["name"] = obj.pop("label")
-                        if "box_2d" in obj and "bbox" not in obj:
-                            obj["bbox"] = obj.pop("box_2d")
                         if "confidence" not in obj:
                             obj["confidence"] = 1.0
 
-                        bbox = obj.get("bbox", [0, 0, 0, 0])
-                        if len(bbox) == 4:
-                            # Gemini box_2d uses [y_min, x_min, y_max, x_max] in 0-1000 range
-                            # Convert to pixel [x_min, y_min, x_max, y_max]
-                            if max(bbox) <= 1000 and (max(bbox) > max(img_w, img_h) or all(v <= 1000 for v in bbox)):
-                                # 0-1000 normalized, format: [y_min, x_min, y_max, x_max]
-                                y1, x1, y2, x2 = bbox
+                        # Handle box_2d (Gemini native) vs bbox
+                        is_box_2d = "box_2d" in obj
+                        raw_box = obj.pop("box_2d", None) or obj.get("bbox", [0, 0, 0, 0])
+                        obj["bbox_raw"] = list(raw_box)  # keep raw for debug
+
+                        if len(raw_box) == 4:
+                            if is_box_2d:
+                                # Gemini box_2d: [y_min, x_min, y_max, x_max] in 0-1000 range
+                                y1, x1, y2, x2 = raw_box
                                 obj["bbox"] = [
                                     int(x1 * img_w / 1000),
                                     int(y1 * img_h / 1000),
                                     int(x2 * img_w / 1000),
                                     int(y2 * img_h / 1000),
                                 ]
+                            elif max(raw_box) > max(img_w, img_h):
+                                # Likely 0-1000 normalized [y_min, x_min, y_max, x_max]
+                                y1, x1, y2, x2 = raw_box
+                                obj["bbox"] = [
+                                    int(x1 * img_w / 1000),
+                                    int(y1 * img_h / 1000),
+                                    int(x2 * img_w / 1000),
+                                    int(y2 * img_h / 1000),
+                                ]
+                            else:
+                                # Already pixel coords [x_min, y_min, x_max, y_max]
+                                obj["bbox"] = [int(v) for v in raw_box]
         except Exception:
             pass
 

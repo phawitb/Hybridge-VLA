@@ -9886,17 +9886,12 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // ══ Object Detection subtab
 // ════════════════════════════════════════════════════
 
-const OD_DEFAULT_PROMPT = `This is a top-down camera view of a robot workspace.
+const OD_DEFAULT_PROMPT = `Detect objects in this robot workspace image.
 The robot is performing the task: "{task_text}"
-Detect ONLY the objects mentioned or implied in this task instruction.
+Detect ONLY the objects mentioned or implied in the task above.
 
-For each object, return:
-- "name": short descriptive name (e.g. "pink bow", "green bowl")
-- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates (image is {img_w}x{img_h})
-- "color_hex": color as hex (e.g. "#ff69b4")
-- "confidence": 0.0 to 1.0
-
-Return ONLY valid JSON: {"objects": [...]}
+Return each object with box_2d bounding box coordinates.
+Return ONLY valid JSON: {"objects": [{"box_2d": [y_min, x_min, y_max, x_max], "label": "object name"}]}
 No explanations, no markdown.`;
 
 const OD = {
@@ -10091,7 +10086,7 @@ document.getElementById('odDetectBtn').addEventListener('click', async function(
     }
 
     odDrawResults(data);
-    status.textContent = `Found ${data.objects.length} objects (${data.elapsed}s)`;
+    status.textContent = `Found ${data.objects.length} objects (${data.elapsed}s) — img ${data.image_width}x${data.image_height}`;
   } catch (e) {
     status.textContent = 'Detection failed: ' + e.message;
   }
@@ -10147,7 +10142,8 @@ function odDrawResults(data) {
         <img src="${cropCanvas.toDataURL()}" style="max-width:150px;max-height:120px;border-radius:4px;display:block;margin:0 auto 6px">
         <div style="font-size:0.82rem;font-weight:600;color:${color}">${obj.name}</div>
         <div style="font-size:0.72rem;color:#888">${(conf * 100).toFixed(0)}% conf</div>
-        <div style="font-size:0.68rem;color:#aaa">[${x1},${y1},${x2},${y2}]</div>
+        <div style="font-size:0.68rem;color:#aaa">px [${x1},${y1},${x2},${y2}]</div>
+        <div style="font-size:0.65rem;color:#ccc">raw ${JSON.stringify(obj.bbox_raw||[])}</div>
       `;
       cropsDiv.appendChild(card);
     });
