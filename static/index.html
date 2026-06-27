@@ -2055,18 +2055,24 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
       <!-- Video player with canvas overlay -->
       <div class="config-card" style="margin-bottom:16px">
         <h3>Camera Feed</h3>
-        <div style="position:relative;display:inline-block;max-width:100%">
+        <div id="odCanvasWrap" style="position:relative;display:inline-block;max-width:100%">
           <canvas id="odCanvas" style="max-width:100%;display:block;background:#000;border-radius:8px"></canvas>
+          <canvas id="odDrawCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;display:none;border-radius:8px"></canvas>
         </div>
         <div style="margin-top:8px">
           <input type="range" id="odScrubber" min="0" max="0" value="0" style="width:100%" disabled>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;flex-wrap:wrap;gap:6px">
             <span id="odFrameLabel" style="font-size:0.78rem;color:#888">Frame 0 / 0</span>
-            <div style="display:flex;gap:8px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn btn-sm btn-outline" id="odPrevBtn" disabled>&#9664; Prev</button>
               <button class="btn btn-sm btn-outline" id="odNextBtn" disabled>&#9654; Next</button>
               <button class="btn btn-sm" id="odDetectBtn" disabled>Detect Objects</button>
+              <button class="btn btn-sm btn-outline" id="odDrawBtn" disabled onclick="odToggleDraw()" style="background:#fff3e0;border-color:#ff9800;color:#e65100">&#9998; Draw BBox</button>
+              <button class="btn btn-sm btn-outline" id="odClearBboxBtn" style="display:none" onclick="odClearManualBboxes()">Clear All</button>
             </div>
+          </div>
+          <div id="odDrawHint" style="display:none;margin-top:6px;font-size:0.78rem;color:#e65100;background:#fff3e0;padding:6px 10px;border-radius:6px">
+            Click and drag on the image to draw a bounding box. You'll be asked for the object name.
           </div>
         </div>
       </div>
@@ -10033,6 +10039,7 @@ document.getElementById('odLoadBtn').addEventListener('click', async function() 
     document.getElementById('odPrevBtn').disabled = false;
     document.getElementById('odNextBtn').disabled = false;
     document.getElementById('odDetectBtn').disabled = false;
+    document.getElementById('odDrawBtn').disabled = false;
 
     // Show first frame
     odShowFrame(0);
@@ -10205,6 +10212,196 @@ function odDrawResults(data) {
   };
   img.src = 'data:image/jpeg;base64,' + data.frame_image_b64;
 }
+
+// ── Manual BBox Drawing ──
+
+OD.drawMode = false;
+OD.drawStart = null;
+OD.manualBoxes = []; // [{name, bbox: [x1,y1,x2,y2], color}]
+OD.frameImageB64 = null; // store last frame for cropping
+
+function odToggleDraw() {
+  OD.drawMode = !OD.drawMode;
+  const drawCanvas = document.getElementById('odDrawCanvas');
+  const btn = document.getElementById('odDrawBtn');
+  const hint = document.getElementById('odDrawHint');
+  const clearBtn = document.getElementById('odClearBboxBtn');
+
+  if (OD.drawMode) {
+    // Size the draw canvas to match the display canvas
+    const baseCanvas = document.getElementById('odCanvas');
+    drawCanvas.width = baseCanvas.width;
+    drawCanvas.height = baseCanvas.height;
+    drawCanvas.style.display = 'block';
+    btn.style.background = '#e65100';
+    btn.style.color = '#fff';
+    btn.innerHTML = '&#10003; Done Drawing';
+    hint.style.display = 'block';
+    clearBtn.style.display = 'inline-block';
+  } else {
+    drawCanvas.style.display = 'none';
+    btn.style.background = '#fff3e0';
+    btn.style.color = '#e65100';
+    btn.innerHTML = '&#9998; Draw BBox';
+    hint.style.display = 'none';
+  }
+}
+
+function odClearManualBboxes() {
+  OD.manualBoxes = [];
+  OD.templates = OD.templates.filter(t => !t.manual);
+  odRedrawManualOverlay();
+  odRefreshCrops();
+}
+
+function odRedrawManualOverlay() {
+  const drawCanvas = document.getElementById('odDrawCanvas');
+  const ctx = drawCanvas.getContext('2d');
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+  const baseCanvas = document.getElementById('odCanvas');
+  const scaleX = drawCanvas.width / (baseCanvas.width || 1);
+  const scaleY = drawCanvas.height / (baseCanvas.height || 1);
+
+  const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
+  OD.manualBoxes.forEach((box, i) => {
+    const [x1, y1, x2, y2] = box.bbox;
+    const color = box.color || colors[i % colors.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+    ctx.setLineDash([]);
+
+    ctx.font = 'bold 13px sans-serif';
+    const lbl = box.name;
+    const tw = ctx.measureText(lbl).width;
+    ctx.fillStyle = color;
+    ctx.fillRect(x1 * scaleX, Math.max(0, y1 * scaleY - 20), tw + 8, 20);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(lbl, x1 * scaleX + 4, Math.max(14, y1 * scaleY - 5));
+  });
+}
+
+function odRefreshCrops() {
+  // Rebuild crops display from OD.templates
+  const cropsDiv = document.getElementById('odCrops');
+  if (!cropsDiv) return;
+  cropsDiv.innerHTML = '';
+
+  const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
+  OD.templates.forEach((t, i) => {
+    const color = colors[i % colors.length];
+    const card = document.createElement('div');
+    card.style.cssText = 'text-align:center;border:2px solid ' + color + ';border-radius:8px;padding:8px;background:#fff;min-width:120px;position:relative';
+    const src = t.manual ? 'manual' : 'gemini';
+    const [x1, y1, x2, y2] = t.bbox;
+    card.innerHTML = `
+      <img src="${t.image_b64}" style="max-width:180px;max-height:140px;border-radius:4px;display:block;margin:0 auto 6px">
+      <div style="font-size:0.85rem;font-weight:600;color:${color}">${t.name}</div>
+      <div style="font-size:0.7rem;color:#aaa">[${x1},${y1},${x2},${y2}] (${src})</div>
+      <button onclick="odRemoveTemplate(${i})" style="position:absolute;top:4px;right:4px;background:#ff4444;color:#fff;border:none;border-radius:50%;width:20px;height:20px;cursor:pointer;font-size:12px;line-height:20px;padding:0">&times;</button>
+    `;
+    cropsDiv.appendChild(card);
+  });
+
+  // Show Detect All button if templates exist
+  document.getElementById('odDetectAllBtn').style.display = OD.templates.length ? 'inline-block' : 'none';
+  document.getElementById('odResults').style.display = OD.templates.length ? 'block' : 'none';
+}
+
+function odRemoveTemplate(idx) {
+  const t = OD.templates[idx];
+  if (t.manual) {
+    OD.manualBoxes = OD.manualBoxes.filter(b => b.name !== t.name);
+    odRedrawManualOverlay();
+  }
+  OD.templates.splice(idx, 1);
+  odRefreshCrops();
+}
+
+// Mouse events for drawing
+(function() {
+  const drawCanvas = document.getElementById('odDrawCanvas');
+  let startX, startY, drawing = false;
+
+  drawCanvas.addEventListener('mousedown', (e) => {
+    if (!OD.drawMode) return;
+    const rect = drawCanvas.getBoundingClientRect();
+    startX = e.clientX - rect.left;
+    startY = e.clientY - rect.top;
+    drawing = true;
+  });
+
+  drawCanvas.addEventListener('mousemove', (e) => {
+    if (!drawing) return;
+    const rect = drawCanvas.getBoundingClientRect();
+    const curX = e.clientX - rect.left;
+    const curY = e.clientY - rect.top;
+
+    // Redraw overlay + current rectangle
+    odRedrawManualOverlay();
+    const ctx = drawCanvas.getContext('2d');
+    ctx.strokeStyle = '#FF6B6B';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(startX, startY, curX - startX, curY - startY);
+    ctx.setLineDash([]);
+  });
+
+  drawCanvas.addEventListener('mouseup', (e) => {
+    if (!drawing) return;
+    drawing = false;
+
+    const rect = drawCanvas.getBoundingClientRect();
+    const endX = e.clientX - rect.left;
+    const endY = e.clientY - rect.top;
+
+    // Convert display coords to image coords
+    const baseCanvas = document.getElementById('odCanvas');
+    const scaleX = baseCanvas.width / drawCanvas.getBoundingClientRect().width;
+    const scaleY = baseCanvas.height / drawCanvas.getBoundingClientRect().height;
+
+    let x1 = Math.round(Math.min(startX, endX) * scaleX);
+    let y1 = Math.round(Math.min(startY, endY) * scaleY);
+    let x2 = Math.round(Math.max(startX, endX) * scaleX);
+    let y2 = Math.round(Math.max(startY, endY) * scaleY);
+
+    // Clamp to image bounds
+    x1 = Math.max(0, x1); y1 = Math.max(0, y1);
+    x2 = Math.min(baseCanvas.width, x2); y2 = Math.min(baseCanvas.height, y2);
+
+    // Ignore tiny rectangles
+    if (x2 - x1 < 10 || y2 - y1 < 10) {
+      odRedrawManualOverlay();
+      return;
+    }
+
+    const name = prompt('Object name:');
+    if (!name || !name.trim()) {
+      odRedrawManualOverlay();
+      return;
+    }
+
+    const bbox = [x1, y1, x2, y2];
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
+    const color = colors[OD.manualBoxes.length % colors.length];
+    OD.manualBoxes.push({ name: name.trim(), bbox, color });
+
+    // Create crop from the base canvas
+    const cw = x2 - x1, ch = y2 - y1;
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = cw;
+    cropCanvas.height = ch;
+    cropCanvas.getContext('2d').drawImage(baseCanvas, x1, y1, cw, ch, 0, 0, cw, ch);
+    const cropB64 = cropCanvas.toDataURL('image/jpeg', 0.9);
+
+    OD.templates.push({ name: name.trim(), image_b64: cropB64, bbox, manual: true });
+
+    odRedrawManualOverlay();
+    odRefreshCrops();
+  });
+})();
 
 async function odDetectAllEpisodes() {
   const dsName = document.getElementById('odDataset').value;
