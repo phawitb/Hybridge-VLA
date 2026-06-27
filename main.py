@@ -1781,17 +1781,27 @@ No explanations, no markdown."""
                 parsed = parse_json_response(gemini_raw)
                 if parsed and "objects" in parsed:
                     gemini_objects = parsed["objects"]
-                    # Normalize bbox coordinates if Gemini returns 0-1000 range
                     for obj in gemini_objects:
+                        # Normalize field names: label→name, box_2d→bbox
+                        if "label" in obj and "name" not in obj:
+                            obj["name"] = obj.pop("label")
+                        if "box_2d" in obj and "bbox" not in obj:
+                            obj["bbox"] = obj.pop("box_2d")
+                        if "confidence" not in obj:
+                            obj["confidence"] = 1.0
+
                         bbox = obj.get("bbox", [0, 0, 0, 0])
-                        if len(bbox) == 4 and all(0 <= v <= 1000 for v in bbox):
-                            if max(bbox) > img_w and max(bbox) > img_h:
-                                # Likely 0-1000 normalized
+                        if len(bbox) == 4:
+                            # Gemini box_2d uses [y_min, x_min, y_max, x_max] in 0-1000 range
+                            # Convert to pixel [x_min, y_min, x_max, y_max]
+                            if max(bbox) <= 1000 and (max(bbox) > max(img_w, img_h) or all(v <= 1000 for v in bbox)):
+                                # 0-1000 normalized, format: [y_min, x_min, y_max, x_max]
+                                y1, x1, y2, x2 = bbox
                                 obj["bbox"] = [
-                                    int(bbox[0] * img_w / 1000),
-                                    int(bbox[1] * img_h / 1000),
-                                    int(bbox[2] * img_w / 1000),
-                                    int(bbox[3] * img_h / 1000),
+                                    int(x1 * img_w / 1000),
+                                    int(y1 * img_h / 1000),
+                                    int(x2 * img_w / 1000),
+                                    int(y2 * img_h / 1000),
                                 ]
         except Exception:
             pass
