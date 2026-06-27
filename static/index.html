@@ -9215,6 +9215,9 @@ function simUpdateDisplay() {
   SIM.actionGhost.visible = showAction;
   if (showAction) simApplyJoints(SIM.actionGhost, f.action);
 
+  // Update physics — objects follow gripper, fall with gravity
+  simUpdatePhysics();
+
   document.getElementById('simScrubber').value = SIM.currentFrame;
   document.getElementById('simTimeLabel').textContent = simFormatTime(SIM.currentFrame / SIM.fps);
 
@@ -9406,10 +9409,16 @@ async function simLoadEpisode() {
 // ── Detect Objects ──
 
 SIM.sceneObjects = []; // track added 3D objects for cleanup
+SIM.physicsObjects = []; // interactive objects with physics {mesh, sprite, state, velocity, height, grabOffset, originalPos}
+SIM.prevGripperOpen = true;
+SIM.prevFrame = -1;
 
 function simClearSceneObjects() {
   SIM.sceneObjects.forEach(obj => SIM.scene.remove(obj));
   SIM.sceneObjects = [];
+  SIM.physicsObjects = [];
+  SIM.prevGripperOpen = true;
+  SIM.prevFrame = -1;
 }
 
 function simAddObjectToScene(obj) {
@@ -9464,6 +9473,18 @@ function simAddObjectToScene(obj) {
   SIM.scene.add(sprite);
   SIM.sceneObjects.push(sprite);
 
+  // Track as physics object
+  SIM.physicsObjects.push({
+    mesh, sprite,
+    state: 'ground', // 'ground' | 'held' | 'falling'
+    velocity: 0,
+    height: sh,
+    grabOffset: new THREE.Vector3(),
+    originalPos: new THREE.Vector3(wx, sh / 2, wz),
+    graspFrame: obj.graspFrame || -1, // frame when this object gets grasped
+    releaseFrame: obj.releaseFrame || -1, // frame when this object gets released
+  });
+
   return mesh;
 }
 
@@ -9483,6 +9504,102 @@ function simGetGripperWorldPos(jointValues) {
   jawJoint.getWorldPosition(jawPos);
   // Return the midpoint = center of gripper
   return gripperPos.lerp(jawPos, 0.5);
+}
+
+function simGetGripperCenter() {
+  // Read gripper center from already-applied scene graph (no re-apply)
+  SIM.robot.updateMatrixWorld(true);
+  const gp = new THREE.Vector3();
+  const jp = new THREE.Vector3();
+  SIM.robot.userData.jointTransforms[4].getWorldPosition(gp);
+  SIM.robot.userData.jointTransforms[5].getWorldPosition(jp);
+  return gp.lerp(jp, 0.5);
+}
+
+function simResetPhysics() {
+  // Reset all objects to their original positions
+  for (const po of SIM.physicsObjects) {
+    po.mesh.position.copy(po.originalPos);
+    po.sprite.position.set(po.originalPos.x, po.originalPos.y + po.height / 2 + 0.015, po.originalPos.z);
+    po.state = 'ground';
+    po.velocity = 0;
+  }
+  SIM.prevGripperOpen = true;
+  SIM.prevFrame = -1;
+}
+
+function simUpdatePhysics() {
+  if (!SIM.robot || !SIM.physicsObjects.length || !SIM.frames.length) return;
+
+  const f = SIM.frames[SIM.currentFrame];
+  const gripperVal = f.state[5];
+  const isOpen = gripperVal >= 15;
+
+  // Detect non-sequential frame change (scrub/loop) → reset physics
+  if (SIM.prevFrame >= 0 && Math.abs(SIM.currentFrame - SIM.prevFrame) > 1) {
+    simResetPhysics();
+    SIM.prevFrame = SIM.currentFrame;
+    return;
+  }
+  SIM.prevFrame = SIM.currentFrame;
+
+  // Get gripper center (joints already applied in simUpdateDisplay)
+  const gripperPos = simGetGripperCenter();
+
+  const GRAB_DIST = 0.04; // 4cm proximity threshold
+  const GRAVITY = 9.81;
+  const dt = 1 / (SIM.fps || 30);
+
+  // Gripper just closed → try to grab nearest ground/falling object
+  if (!isOpen && SIM.prevGripperOpen) {
+    let nearest = null, nearestDist = Infinity;
+    for (const po of SIM.physicsObjects) {
+      if (po.state === 'held') continue;
+      const d = gripperPos.distanceTo(po.mesh.position);
+      if (d < GRAB_DIST && d < nearestDist) {
+        nearest = po;
+        nearestDist = d;
+      }
+    }
+    if (nearest) {
+      nearest.state = 'held';
+      nearest.velocity = 0;
+      nearest.grabOffset = nearest.mesh.position.clone().sub(gripperPos);
+    }
+  }
+
+  // Gripper just opened → release held objects
+  if (isOpen && !SIM.prevGripperOpen) {
+    for (const po of SIM.physicsObjects) {
+      if (po.state === 'held') {
+        po.state = 'falling';
+        po.velocity = 0;
+      }
+    }
+  }
+
+  // Update object positions
+  for (const po of SIM.physicsObjects) {
+    if (po.state === 'held') {
+      // Follow gripper with offset
+      const newPos = gripperPos.clone().add(po.grabOffset);
+      po.mesh.position.copy(newPos);
+    } else if (po.state === 'falling') {
+      // Apply gravity
+      po.velocity += GRAVITY * dt;
+      po.mesh.position.y -= po.velocity * dt;
+      const groundY = po.height / 2;
+      if (po.mesh.position.y <= groundY) {
+        po.mesh.position.y = groundY;
+        po.state = 'ground';
+        po.velocity = 0;
+      }
+    }
+    // Update label position above object
+    po.sprite.position.set(po.mesh.position.x, po.mesh.position.y + po.height / 2 + 0.015, po.mesh.position.z);
+  }
+
+  SIM.prevGripperOpen = isOpen;
 }
 
 function simFindGripperEvents() {
@@ -9619,8 +9736,14 @@ async function simDetectObjects() {
   finalObjects.forEach(obj => {
     // Place object at XZ from gripper, but Y on the ground
     obj.position_3d = [obj.position_3d[0], 0, obj.position_3d[2]];
+    obj.graspFrame = obj.event === 'grasp' ? obj.frame : -1;
+    obj.releaseFrame = obj.event === 'release' ? obj.frame : -1;
     simAddObjectToScene(obj);
   });
+
+  // Reset physics state so playback starts clean
+  SIM.prevGripperOpen = true;
+  SIM.prevFrame = -1;
 
   // Show detected objects list
   let html = `<div style="font-size:0.82rem;color:#666;margin-bottom:4px">${finalObjects.length} objects from ${gripperPositions.length} gripper events`;
