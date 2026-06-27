@@ -10485,7 +10485,9 @@ async function odDetectAllEpisodes() {
         listDiv.style.cssText = 'padding:6px 10px;font-size:0.72rem;color:#666';
         ep.objects.forEach((obj, i) => {
           const color = colors[i % colors.length];
-          listDiv.innerHTML += `<span style="color:${color};font-weight:600">${obj.name}</span> ${(obj.confidence*100).toFixed(0)}% (s${obj.scale}) &nbsp;`;
+          const ts = obj.template_score != null ? ` t${(obj.template_score*100).toFixed(0)}` : '';
+          const cs = obj.color_score != null ? ` c${(obj.color_score*100).toFixed(0)}` : '';
+          listDiv.innerHTML += `<span style="color:${color};font-weight:600">${obj.name}</span> ${(obj.confidence*100).toFixed(0)}%${ts}${cs} (s${obj.scale}) &nbsp;`;
         });
         card.appendChild(listDiv);
       } else {

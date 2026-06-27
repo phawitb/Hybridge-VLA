@@ -1931,40 +1931,73 @@ async def sim_detect_all_episodes(request: Request):
         scene_gray = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
         h_scene, w_scene = scene_gray.shape[:2]
 
-        # Multi-scale template matching for each template
+        # Multi-scale template matching + color verification
         ep_objects = []
+        scene_hsv = cv2.cvtColor(scene, cv2.COLOR_BGR2HSV)
+
         for tmpl in tmpl_imgs:
             t_img = tmpl["img"]
             t_gray = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+            t_hsv = cv2.cvtColor(t_img, cv2.COLOR_BGR2HSV)
             th, tw = t_gray.shape[:2]
 
-            best_val = -1
-            best_loc = (0, 0)
-            best_scale = 1.0
+            # Compute template color histogram (H and S channels)
+            t_hist = cv2.calcHist([t_hsv], [0, 1], None, [30, 32], [0, 180, 0, 256])
+            cv2.normalize(t_hist, t_hist, 0, 1, cv2.NORM_MINMAX)
 
-            # Try multiple scales
-            for scale in [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4]:
+            # Collect top-N candidates across scales
+            candidates = []
+            for scale in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5]:
                 new_w = int(tw * scale)
                 new_h = int(th * scale)
                 if new_w < 10 or new_h < 10 or new_w > w_scene or new_h > h_scene:
                     continue
                 resized = cv2.resize(t_gray, (new_w, new_h))
                 result = cv2.matchTemplate(scene_gray, resized, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                if max_val > best_val:
-                    best_val = max_val
-                    best_loc = max_loc
-                    best_scale = scale
 
-            # Only accept matches above threshold
-            if best_val > 0.3:
-                bw = int(tw * best_scale)
-                bh = int(th * best_scale)
+                # Get top 3 locations per scale (avoid overlapping detections)
+                for _ in range(3):
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    if max_val < 0.3:
+                        break
+                    candidates.append((max_val, max_loc, scale, new_w, new_h))
+                    # Suppress this location
+                    cx, cy = max_loc
+                    y1s = max(0, cy - new_h // 2)
+                    y2s = min(result.shape[0], cy + new_h // 2 + 1)
+                    x1s = max(0, cx - new_w // 2)
+                    x2s = min(result.shape[1], cx + new_w // 2 + 1)
+                    result[y1s:y2s, x1s:x2s] = -1
+
+            # Score each candidate with color histogram correlation
+            best_combined = -1
+            best_candidate = None
+            for (tmatch, loc, sc, bw, bh) in candidates:
+                x1c, y1c = loc
+                x2c = min(x1c + bw, w_scene)
+                y2c = min(y1c + bh, h_scene)
+                roi_hsv = scene_hsv[y1c:y2c, x1c:x2c]
+                if roi_hsv.size == 0:
+                    continue
+                roi_hist = cv2.calcHist([roi_hsv], [0, 1], None, [30, 32], [0, 180, 0, 256])
+                cv2.normalize(roi_hist, roi_hist, 0, 1, cv2.NORM_MINMAX)
+                color_score = cv2.compareHist(t_hist, roi_hist, cv2.HISTCMP_CORREL)
+
+                # Combined: 40% template match + 60% color similarity
+                combined = 0.4 * tmatch + 0.6 * max(0, color_score)
+                if combined > best_combined:
+                    best_combined = combined
+                    best_candidate = (tmatch, color_score, loc, sc, bw, bh)
+
+            if best_candidate and best_combined > 0.3:
+                tmatch, cscore, loc, sc, bw, bh = best_candidate
                 ep_objects.append({
                     "name": tmpl["name"],
-                    "bbox": [best_loc[0], best_loc[1], best_loc[0] + bw, best_loc[1] + bh],
-                    "confidence": round(float(best_val), 3),
-                    "scale": round(best_scale, 2),
+                    "bbox": [loc[0], loc[1], loc[0] + bw, loc[1] + bh],
+                    "confidence": round(float(best_combined), 3),
+                    "template_score": round(float(tmatch), 3),
+                    "color_score": round(float(cscore), 3),
+                    "scale": round(sc, 2),
                 })
 
         # Encode frame as base64 for display
