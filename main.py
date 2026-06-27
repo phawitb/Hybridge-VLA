@@ -1831,6 +1831,165 @@ No explanations, no markdown."""
     }
 
 
+@app.post("/api/simulation/detect-all-episodes")
+async def sim_detect_all_episodes(request: Request):
+    """Detect objects in all episodes using template matching (no Gemini).
+
+    Uses crop templates from a prior Gemini detection to find objects
+    in the first frame of every episode via multi-scale template matching.
+    """
+    import cv2
+    import pyarrow.parquet as pq
+    import subprocess
+
+    body = await request.json()
+    dataset = body.get("dataset", "")
+    templates = body.get("templates", [])  # [{name, image_b64, bbox}]
+
+    ds_dir = ROOT / "data" / dataset
+    if not ds_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    if not templates:
+        return {"ok": False, "error": "No templates provided"}
+
+    # Read info
+    info_path = ds_dir / "meta" / "info.json"
+    info = json.loads(info_path.read_text()) if info_path.exists() else {}
+    fps = info.get("fps", 30)
+    total_eps = info.get("total_episodes", 0)
+
+    # Build episode video mapping: {ep_idx: (video_path, from_timestamp)}
+    ep_videos = {}
+    ep_dir = ds_dir / "meta" / "episodes"
+    if ep_dir.exists():
+        for pf in sorted(ep_dir.rglob("*.parquet")):
+            try:
+                tbl = pq.read_table(str(pf))
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    ep_idx = d["episode_index"][i]
+                    cam = "observation.images.top"
+                    ck = f"videos/{cam}/chunk_index"
+                    fk = f"videos/{cam}/file_index"
+                    ft = f"videos/{cam}/from_timestamp"
+                    if ck in d and fk in d:
+                        ci, fi = d[ck][i], d[fk][i]
+                        vp = ds_dir / "videos" / cam / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                        offset = d[ft][i] if ft in d else 0
+                        ep_videos[ep_idx] = (vp, offset)
+            except Exception:
+                pass
+
+    # Decode template images
+    tmpl_imgs = []
+    for t in templates:
+        b64_data = t.get("image_b64", "")
+        if not b64_data:
+            continue
+        # Remove data URL prefix if present
+        if "," in b64_data:
+            b64_data = b64_data.split(",", 1)[1]
+        raw = base64.b64decode(b64_data)
+        arr = np.frombuffer(raw, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is not None:
+            tmpl_imgs.append({"name": t.get("name", "?"), "img": img})
+
+    if not tmpl_imgs:
+        return {"ok": False, "error": "Failed to decode template images"}
+
+    # Process each episode
+    t0 = time.time()
+    tmp_dir = ROOT / "data" / "images"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+
+    for ep_idx in sorted(ep_videos.keys()):
+        vp, offset = ep_videos[ep_idx]
+        if not vp.exists():
+            results.append({"episode": ep_idx, "objects": [], "error": "video not found"})
+            continue
+
+        # Extract first frame
+        tmp_frame = tmp_dir / f"tmatch_{uuid.uuid4().hex[:8]}.jpg"
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(offset + 0.05), "-i", str(vp),
+             "-frames:v", "1", "-q:v", "2", str(tmp_frame)],
+            capture_output=True, timeout=10,
+        )
+
+        if not tmp_frame.exists():
+            results.append({"episode": ep_idx, "objects": [], "error": "frame extraction failed"})
+            continue
+
+        scene = cv2.imread(str(tmp_frame))
+        if scene is None:
+            tmp_frame.unlink(missing_ok=True)
+            results.append({"episode": ep_idx, "objects": [], "error": "image read failed"})
+            continue
+
+        scene_gray = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
+        h_scene, w_scene = scene_gray.shape[:2]
+
+        # Multi-scale template matching for each template
+        ep_objects = []
+        for tmpl in tmpl_imgs:
+            t_img = tmpl["img"]
+            t_gray = cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY)
+            th, tw = t_gray.shape[:2]
+
+            best_val = -1
+            best_loc = (0, 0)
+            best_scale = 1.0
+
+            # Try multiple scales
+            for scale in [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4]:
+                new_w = int(tw * scale)
+                new_h = int(th * scale)
+                if new_w < 10 or new_h < 10 or new_w > w_scene or new_h > h_scene:
+                    continue
+                resized = cv2.resize(t_gray, (new_w, new_h))
+                result = cv2.matchTemplate(scene_gray, resized, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                if max_val > best_val:
+                    best_val = max_val
+                    best_loc = max_loc
+                    best_scale = scale
+
+            # Only accept matches above threshold
+            if best_val > 0.3:
+                bw = int(tw * best_scale)
+                bh = int(th * best_scale)
+                ep_objects.append({
+                    "name": tmpl["name"],
+                    "bbox": [best_loc[0], best_loc[1], best_loc[0] + bw, best_loc[1] + bh],
+                    "confidence": round(float(best_val), 3),
+                    "scale": round(best_scale, 2),
+                })
+
+        # Encode frame as base64 for display
+        _, buf = cv2.imencode(".jpg", scene, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        frame_b64 = base64.b64encode(buf).decode()
+
+        results.append({
+            "episode": ep_idx,
+            "objects": ep_objects,
+            "frame_b64": frame_b64,
+            "image_width": w_scene,
+            "image_height": h_scene,
+        })
+        tmp_frame.unlink(missing_ok=True)
+
+    elapsed = round(time.time() - t0, 2)
+
+    return {
+        "ok": True,
+        "total_episodes": len(results),
+        "results": results,
+        "elapsed": elapsed,
+    }
+
+
 @app.post("/api/datasets/combine")
 async def combine_datasets(request: Request):
     """Combine multiple datasets into a new one."""

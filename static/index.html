@@ -2093,6 +2093,21 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <div class="collapse-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="cursor:pointer;font-size:0.8rem;color:#1a73e8;user-select:none">Gemini Raw Output &#9660;</div>
             <pre id="odGeminiRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
           </div>
+
+          <!-- Detect All Episodes button -->
+          <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e0e0e0">
+            <button class="btn" id="odDetectAllBtn" style="display:none" onclick="odDetectAllEpisodes()">Detect All Episodes (Template Matching)</button>
+            <span id="odDetectAllStatus" style="margin-left:12px;font-size:0.85rem;color:#888"></span>
+            <div style="margin-top:4px;font-size:0.75rem;color:#999">Uses crops from Gemini detection as templates — no API calls</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- All Episodes Results -->
+      <div id="odAllResults" style="display:none">
+        <div class="config-card">
+          <h3>All Episodes Detection</h3>
+          <div id="odAllResultsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px"></div>
         </div>
       </div>
     </div><!-- /inner-sim-objdet -->
@@ -9904,6 +9919,7 @@ const OD = {
   taskText: '',
   videoEl: null,
   frameCanvas: null,
+  templates: [],  // crop templates from Gemini detection for template matching
 };
 
 function odResetPrompt() {
@@ -10094,6 +10110,7 @@ document.getElementById('odDetectBtn').addEventListener('click', async function(
 });
 
 function odDrawResults(data) {
+  OD.templates = []; // clear previous templates
   const resultsDiv = document.getElementById('odResults');
   resultsDiv.style.display = 'block';
 
@@ -10137,16 +10154,24 @@ function odDrawResults(data) {
       cropCanvas.getContext('2d').drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
 
       const card = document.createElement('div');
+      const cropB64 = cropCanvas.toDataURL('image/jpeg', 0.9);
       card.style.cssText = 'text-align:center;border:2px solid ' + color + ';border-radius:8px;padding:8px;background:#fff;min-width:100px';
       card.innerHTML = `
-        <img src="${cropCanvas.toDataURL()}" style="max-width:150px;max-height:120px;border-radius:4px;display:block;margin:0 auto 6px">
+        <img src="${cropB64}" style="max-width:150px;max-height:120px;border-radius:4px;display:block;margin:0 auto 6px">
         <div style="font-size:0.82rem;font-weight:600;color:${color}">${obj.name}</div>
         <div style="font-size:0.72rem;color:#888">${(conf * 100).toFixed(0)}% conf</div>
         <div style="font-size:0.68rem;color:#aaa">px [${x1},${y1},${x2},${y2}]</div>
         <div style="font-size:0.65rem;color:#ccc">raw ${JSON.stringify(obj.bbox_raw||[])}</div>
       `;
       cropsDiv.appendChild(card);
+
+      // Store crop for template matching
+      OD.templates.push({ name: obj.name, image_b64: cropB64, bbox: bbox });
     });
+
+    // Show Detect All button
+    document.getElementById('odDetectAllBtn').style.display = 'inline-block';
+    document.getElementById('odAllResults').style.display = 'none';
 
     // Update task text if returned
     if (data.task_text) {
@@ -10159,6 +10184,107 @@ function odDrawResults(data) {
   // Show Gemini raw output
   const rawEl = document.getElementById('odGeminiRaw');
   rawEl.textContent = data.gemini_raw || '';
+}
+
+async function odDetectAllEpisodes() {
+  const dsName = document.getElementById('odDataset').value;
+  if (!dsName || !OD.templates.length) return;
+
+  const btn = document.getElementById('odDetectAllBtn');
+  const status = document.getElementById('odDetectAllStatus');
+  const grid = document.getElementById('odAllResultsGrid');
+  btn.disabled = true;
+  status.textContent = 'Running template matching on all episodes...';
+  grid.innerHTML = '';
+  document.getElementById('odAllResults').style.display = 'block';
+
+  try {
+    const res = await fetch('/api/simulation/detect-all-episodes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        dataset: dsName,
+        templates: OD.templates,
+      }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      status.textContent = data.error || 'Failed';
+      btn.disabled = false;
+      return;
+    }
+
+    status.textContent = `Done: ${data.total_episodes} episodes in ${data.elapsed}s`;
+
+    // Render results grid
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
+
+    data.results.forEach(ep => {
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#fff';
+
+      // Draw annotated frame
+      const canvas = document.createElement('canvas');
+      const headerHtml = `<div style="padding:6px 10px;background:#f5f5f5;font-size:0.78rem;font-weight:600;border-bottom:1px solid #e0e0e0">
+        Episode ${ep.episode} — ${ep.objects.length} objects
+      </div>`;
+
+      if (ep.frame_b64) {
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          // Draw bboxes
+          ep.objects.forEach((obj, i) => {
+            const [x1, y1, x2, y2] = obj.bbox;
+            const color = colors[i % colors.length];
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+            ctx.font = 'bold 12px sans-serif';
+            const lbl = `${obj.name} ${(obj.confidence * 100).toFixed(0)}%`;
+            const tw = ctx.measureText(lbl).width;
+            ctx.fillStyle = color;
+            ctx.fillRect(x1, y1 - 16, tw + 6, 16);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(lbl, x1 + 3, y1 - 3);
+          });
+        };
+        img.src = 'data:image/jpeg;base64,' + ep.frame_b64;
+      }
+
+      card.innerHTML = headerHtml;
+      canvas.style.cssText = 'width:100%;display:block';
+      card.appendChild(canvas);
+
+      // Object list below image
+      if (ep.objects.length) {
+        const listDiv = document.createElement('div');
+        listDiv.style.cssText = 'padding:6px 10px;font-size:0.72rem;color:#666';
+        ep.objects.forEach((obj, i) => {
+          const color = colors[i % colors.length];
+          listDiv.innerHTML += `<span style="color:${color};font-weight:600">${obj.name}</span> ${(obj.confidence*100).toFixed(0)}% (s${obj.scale}) &nbsp;`;
+        });
+        card.appendChild(listDiv);
+      } else {
+        const noDiv = document.createElement('div');
+        noDiv.style.cssText = 'padding:10px;text-align:center;color:#aaa;font-size:0.78rem';
+        noDiv.textContent = ep.error || 'No objects detected';
+        card.appendChild(noDiv);
+      }
+
+      grid.appendChild(card);
+    });
+
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
 }
 
 </script>
