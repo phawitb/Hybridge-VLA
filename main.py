@@ -1931,7 +1931,7 @@ async def sim_detect_all_episodes(request: Request):
         scene_gray = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
         h_scene, w_scene = scene_gray.shape[:2]
 
-        # Multi-scale template matching + color verification
+        # Color-first detection + template verification
         ep_objects = []
         scene_hsv = cv2.cvtColor(scene, cv2.COLOR_BGR2HSV)
 
@@ -1941,55 +1941,102 @@ async def sim_detect_all_episodes(request: Request):
             t_hsv = cv2.cvtColor(t_img, cv2.COLOR_BGR2HSV)
             th, tw = t_gray.shape[:2]
 
-            # Compute template color histogram (H and S channels)
+            # --- Step 1: Find color-matching regions ---
+            # Extract dominant color range from template
+            h_vals = t_hsv[:, :, 0].flatten()
+            s_vals = t_hsv[:, :, 1].flatten()
+            # Use median ± range for robust color bounds
+            h_med = np.median(h_vals)
+            s_med = np.median(s_vals)
+            h_std = max(np.std(h_vals), 8)
+            s_std = max(np.std(s_vals), 25)
+
+            h_lo = max(0, int(h_med - h_std * 2))
+            h_hi = min(180, int(h_med + h_std * 2))
+            s_lo = max(20, int(s_med - s_std * 2))
+            s_hi = min(256, int(s_med + s_std * 2))
+
+            # Create color mask
+            if h_lo <= h_hi:
+                color_mask = cv2.inRange(scene_hsv, (h_lo, s_lo, 30), (h_hi, s_hi, 255))
+            else:
+                # Wrap around for red/pink hues
+                mask1 = cv2.inRange(scene_hsv, (h_lo, s_lo, 30), (180, s_hi, 255))
+                mask2 = cv2.inRange(scene_hsv, (0, s_lo, 30), (h_hi, s_hi, 255))
+                color_mask = cv2.bitwise_or(mask1, mask2)
+
+            # Dilate to connect nearby regions
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(tw, th) // 2, max(tw, th) // 2))
+            color_mask_dilated = cv2.dilate(color_mask, kernel, iterations=1)
+
+            # Find contours of color regions
+            contours, _ = cv2.findContours(color_mask_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Filter contours by size (at least 25% of template area, at most 400%)
+            min_area = (tw * th) * 0.15
+            max_area = (tw * th) * 5.0
+            color_regions = []
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if min_area < area < max_area:
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    # Expand region to give template matching some room
+                    pad = max(tw, th)
+                    rx1 = max(0, x - pad)
+                    ry1 = max(0, y - pad)
+                    rx2 = min(w_scene, x + w + pad)
+                    ry2 = min(h_scene, y + h + pad)
+                    color_regions.append((rx1, ry1, rx2, ry2, area))
+
+            # --- Step 2: Template match within color regions ---
+            # Also add full-image search as fallback (for objects with neutral colors)
+            if not color_regions:
+                color_regions = [(0, 0, w_scene, h_scene, w_scene * h_scene)]
+
+            # Template color histogram for verification
             t_hist = cv2.calcHist([t_hsv], [0, 1], None, [30, 32], [0, 180, 0, 256])
             cv2.normalize(t_hist, t_hist, 0, 1, cv2.NORM_MINMAX)
 
-            # Collect top-N candidates across scales
-            candidates = []
-            for scale in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5]:
-                new_w = int(tw * scale)
-                new_h = int(th * scale)
-                if new_w < 10 or new_h < 10 or new_w > w_scene or new_h > h_scene:
-                    continue
-                resized = cv2.resize(t_gray, (new_w, new_h))
-                result = cv2.matchTemplate(scene_gray, resized, cv2.TM_CCOEFF_NORMED)
-
-                # Get top 3 locations per scale (avoid overlapping detections)
-                for _ in range(3):
-                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                    if max_val < 0.3:
-                        break
-                    candidates.append((max_val, max_loc, scale, new_w, new_h))
-                    # Suppress this location
-                    cx, cy = max_loc
-                    y1s = max(0, cy - new_h // 2)
-                    y2s = min(result.shape[0], cy + new_h // 2 + 1)
-                    x1s = max(0, cx - new_w // 2)
-                    x2s = min(result.shape[1], cx + new_w // 2 + 1)
-                    result[y1s:y2s, x1s:x2s] = -1
-
-            # Score each candidate with color histogram correlation
             best_combined = -1
             best_candidate = None
-            for (tmatch, loc, sc, bw, bh) in candidates:
-                x1c, y1c = loc
-                x2c = min(x1c + bw, w_scene)
-                y2c = min(y1c + bh, h_scene)
-                roi_hsv = scene_hsv[y1c:y2c, x1c:x2c]
-                if roi_hsv.size == 0:
-                    continue
-                roi_hist = cv2.calcHist([roi_hsv], [0, 1], None, [30, 32], [0, 180, 0, 256])
-                cv2.normalize(roi_hist, roi_hist, 0, 1, cv2.NORM_MINMAX)
-                color_score = cv2.compareHist(t_hist, roi_hist, cv2.HISTCMP_CORREL)
 
-                # Combined: 40% template match + 60% color similarity
-                combined = 0.4 * tmatch + 0.6 * max(0, color_score)
-                if combined > best_combined:
-                    best_combined = combined
-                    best_candidate = (tmatch, color_score, loc, sc, bw, bh)
+            for (rx1, ry1, rx2, ry2, _) in color_regions:
+                roi_gray = scene_gray[ry1:ry2, rx1:rx2]
+                roi_hsv_region = scene_hsv[ry1:ry2, rx1:rx2]
+                rh, rw = roi_gray.shape[:2]
 
-            if best_candidate and best_combined > 0.3:
+                for scale in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5]:
+                    new_w = int(tw * scale)
+                    new_h = int(th * scale)
+                    if new_w < 10 or new_h < 10 or new_w > rw or new_h > rh:
+                        continue
+                    resized = cv2.resize(t_gray, (new_w, new_h))
+                    result = cv2.matchTemplate(roi_gray, resized, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+                    if max_val < 0.25:
+                        continue
+
+                    # Convert local coords to scene coords
+                    abs_x = rx1 + max_loc[0]
+                    abs_y = ry1 + max_loc[1]
+
+                    # Color histogram of matched region
+                    mx2 = min(abs_x + new_w, w_scene)
+                    my2 = min(abs_y + new_h, h_scene)
+                    match_hsv = scene_hsv[abs_y:my2, abs_x:mx2]
+                    if match_hsv.size == 0:
+                        continue
+                    m_hist = cv2.calcHist([match_hsv], [0, 1], None, [30, 32], [0, 180, 0, 256])
+                    cv2.normalize(m_hist, m_hist, 0, 1, cv2.NORM_MINMAX)
+                    cscore = cv2.compareHist(t_hist, m_hist, cv2.HISTCMP_CORREL)
+
+                    combined = 0.35 * max_val + 0.65 * max(0, cscore)
+                    if combined > best_combined:
+                        best_combined = combined
+                        best_candidate = (max_val, cscore, (abs_x, abs_y), scale, new_w, new_h)
+
+            if best_candidate and best_combined > 0.25:
                 tmatch, cscore, loc, sc, bw, bh = best_candidate
                 ep_objects.append({
                     "name": tmpl["name"],
