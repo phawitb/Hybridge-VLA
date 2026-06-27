@@ -2071,6 +2071,16 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         </div>
       </div>
 
+      <!-- Gemini Prompt Editor -->
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Gemini Prompt</h3>
+        <textarea id="odPrompt" rows="10" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-family:monospace;font-size:0.82rem;resize:vertical;box-sizing:border-box"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+          <button class="btn btn-sm btn-outline" onclick="odResetPrompt()">Reset to Default</button>
+          <span style="font-size:0.75rem;color:#999">{task_text} and {img_w}x{img_h} will be replaced automatically</span>
+        </div>
+      </div>
+
       <!-- Detection results -->
       <div id="odResults" style="display:none">
         <div class="config-card" style="margin-bottom:16px">
@@ -9876,6 +9886,19 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // ══ Object Detection subtab
 // ════════════════════════════════════════════════════
 
+const OD_DEFAULT_PROMPT = `This is a top-down camera view of a robot workspace.
+The robot is performing the task: "{task_text}"
+Detect ONLY the objects mentioned or implied in this task instruction.
+
+For each object, return:
+- "name": short descriptive name (e.g. "pink bow", "green bowl")
+- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates (image is {img_w}x{img_h})
+- "color_hex": color as hex (e.g. "#ff69b4")
+- "confidence": 0.0 to 1.0
+
+Return ONLY valid JSON: {"objects": [...]}
+No explanations, no markdown.`;
+
 const OD = {
   datasets: [],
   fps: 30,
@@ -9884,11 +9907,19 @@ const OD = {
   videoPath: null,
   videoOffset: 0,
   taskText: '',
-  videoEl: null,      // hidden video element for frame extraction
-  frameCanvas: null,   // off-screen canvas for frame capture
+  videoEl: null,
+  frameCanvas: null,
 };
 
+function odResetPrompt() {
+  document.getElementById('odPrompt').value = OD_DEFAULT_PROMPT;
+}
+
 async function odLoadDatasets() {
+  // Initialize prompt if empty
+  const promptEl = document.getElementById('odPrompt');
+  if (!promptEl.value) promptEl.value = OD_DEFAULT_PROMPT;
+
   try {
     const res = await fetch('/api/datasets');
     const data = await res.json();
@@ -10048,6 +10079,7 @@ document.getElementById('odDetectBtn').addEventListener('click', async function(
         dataset: dsName,
         episode: parseInt(epIdx),
         frame_index: OD.currentFrame,
+        prompt: document.getElementById('odPrompt').value || '',
       }),
     });
     const data = await res.json();

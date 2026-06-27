@@ -1647,6 +1647,7 @@ async def sim_detect_frame_objects(request: Request):
     dataset = body.get("dataset", "")
     episode = body.get("episode", 0)
     frame_index = body.get("frame_index", 0)
+    custom_prompt = body.get("prompt", "")
 
     ds_dir = ROOT / "data" / dataset
     if not ds_dir.exists():
@@ -1751,13 +1752,17 @@ async def sim_detect_frame_objects(request: Request):
         model = cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-        task_clause = ""
-        if task_text:
-            task_clause = f'\nThe robot is performing the task: "{task_text}"\nDetect ONLY the objects mentioned or implied in this task instruction.'
+        if custom_prompt:
+            # Use custom prompt with placeholder replacements
+            prompt = custom_prompt.replace("{task_text}", task_text).replace("{img_w}", str(img_w)).replace("{img_h}", str(img_h))
         else:
-            task_clause = "\nDetect all objects on the workspace (exclude the robot arm, cables, desk)."
+            task_clause = ""
+            if task_text:
+                task_clause = f'\nThe robot is performing the task: "{task_text}"\nDetect ONLY the objects mentioned or implied in this task instruction.'
+            else:
+                task_clause = "\nDetect all objects on the workspace (exclude the robot arm, cables, desk)."
 
-        prompt = f"""This is a top-down camera view of a robot workspace.{task_clause}
+            prompt = f"""This is a top-down camera view of a robot workspace.{task_clause}
 
 For each object, return:
 - "name": short descriptive name (e.g. "pink bow", "green bowl")
@@ -1794,6 +1799,7 @@ No explanations, no markdown."""
     return {
         "ok": True,
         "task_text": task_text,
+        "prompt_used": prompt if api_key else "",
         "frame_image_b64": b64,
         "image_width": img_w,
         "image_height": img_h,
