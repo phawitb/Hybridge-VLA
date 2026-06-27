@@ -1944,6 +1944,12 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
   <div class="page" id="page-simulation">
     <div class="page-title"><span>Simulation</span></div>
 
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="sim-3d">3D Simulation</button>
+      <button class="inner-tab" data-inner="sim-objdet">Object Detection</button>
+    </div>
+
+    <div class="inner-page active" id="inner-sim-3d">
     <div class="config-card" style="margin-bottom:16px">
       <h3>Dataset</h3>
       <div class="two-col">
@@ -2019,6 +2025,68 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         <span id="simTotalLabel">0:00.000</span>
       </div>
     </div>
+    </div><!-- /inner-sim-3d -->
+
+    <!-- ── Object Detection subtab ── -->
+    <div class="inner-page" id="inner-sim-objdet">
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Dataset & Episode</h3>
+        <div class="two-col">
+          <div class="form-group">
+            <label class="form-label">Dataset</label>
+            <select id="odDataset" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+              <option value="">-- Select dataset --</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Episode</label>
+            <select id="odEpisode" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px" disabled>
+              <option value="">-- Select episode --</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" id="odLoadBtn" disabled style="margin-top:8px">Load Episode</button>
+        <span id="odStatus" style="margin-left:12px;font-size:0.85rem;color:#888"></span>
+        <div id="odTaskText" style="margin-top:8px;font-size:0.85rem;color:#555;display:none">
+          <strong>Task:</strong> <span id="odTaskContent"></span>
+        </div>
+      </div>
+
+      <!-- Video player with canvas overlay -->
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Camera Feed</h3>
+        <div style="position:relative;display:inline-block;max-width:100%">
+          <canvas id="odCanvas" style="max-width:100%;display:block;background:#000;border-radius:8px"></canvas>
+        </div>
+        <div style="margin-top:8px">
+          <input type="range" id="odScrubber" min="0" max="0" value="0" style="width:100%" disabled>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+            <span id="odFrameLabel" style="font-size:0.78rem;color:#888">Frame 0 / 0</span>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm btn-outline" id="odPrevBtn" disabled>&#9664; Prev</button>
+              <button class="btn btn-sm btn-outline" id="odNextBtn" disabled>&#9654; Next</button>
+              <button class="btn btn-sm" id="odDetectBtn" disabled>Detect Objects</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detection results -->
+      <div id="odResults" style="display:none">
+        <div class="config-card" style="margin-bottom:16px">
+          <h3>Detected Objects</h3>
+          <div id="odAnnotatedWrap" style="margin-bottom:12px;position:relative;display:inline-block;max-width:100%">
+            <canvas id="odAnnotatedCanvas" style="max-width:100%;border-radius:8px;display:block"></canvas>
+          </div>
+          <div id="odCrops" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px"></div>
+          <div style="margin-top:12px">
+            <div class="collapse-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="cursor:pointer;font-size:0.8rem;color:#1a73e8;user-select:none">Gemini Raw Output &#9660;</div>
+            <pre id="odGeminiRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+          </div>
+        </div>
+      </div>
+    </div><!-- /inner-sim-objdet -->
+
   </div><!-- /page-simulation -->
 
   <!-- ==================== Fake Camera ==================== -->
@@ -3076,6 +3144,7 @@ function setupEvents() {
       document.getElementById('inner-'+el.dataset.inner).classList.add('active');
       if (el.dataset.inner === 'cfg-history') loadResults();
       if (el.dataset.inner === 'train-history') trainLoadHistory();
+      if (el.dataset.inner === 'sim-objdet') odLoadDatasets();
     });
   });
   // Image
@@ -9428,7 +9497,8 @@ function simAddObjectToScene(obj) {
   const wx = pos[0], wz = pos[2];
 
   const sz = obj.estimated_size_cm || [3, 3, 3];
-  const sw = sz[0] / 100, sd = sz[1] / 100, sh = sz[2] / 100;
+  // Ensure minimum size so objects don't sink into the mat
+  const sw = Math.max(sz[0], 2) / 100, sd = Math.max(sz[1], 2) / 100, sh = Math.max(sz[2], 2) / 100;
 
   const color = parseInt(obj.color_hex.replace('#', ''), 16) || 0x888888;
   const mat = new THREE.MeshPhongMaterial({ color, shininess: 40, specular: 0x222222 });
@@ -9546,25 +9616,37 @@ function simUpdatePhysics() {
   // Get gripper center (joints already applied in simUpdateDisplay)
   const gripperPos = simGetGripperCenter();
 
-  const GRAB_DIST = 0.04; // 4cm proximity threshold
+  const GRAB_DIST = 0.06; // 6cm horizontal proximity threshold
   const GRAVITY = 9.81;
   const dt = 1 / (SIM.fps || 30);
 
   // Gripper just closed → try to grab nearest ground/falling object
+  // Use horizontal (XZ) distance only — gripper approaches from above
   if (!isOpen && SIM.prevGripperOpen) {
     let nearest = null, nearestDist = Infinity;
     for (const po of SIM.physicsObjects) {
       if (po.state === 'held') continue;
-      const d = gripperPos.distanceTo(po.mesh.position);
-      if (d < GRAB_DIST && d < nearestDist) {
+      const dx = gripperPos.x - po.mesh.position.x;
+      const dz = gripperPos.z - po.mesh.position.z;
+      const dXZ = Math.sqrt(dx * dx + dz * dz);
+      if (dXZ < GRAB_DIST && dXZ < nearestDist) {
         nearest = po;
-        nearestDist = d;
+        nearestDist = dXZ;
       }
     }
     if (nearest) {
       nearest.state = 'held';
       nearest.velocity = 0;
-      nearest.grabOffset = nearest.mesh.position.clone().sub(gripperPos);
+      nearest.grabOffset = new THREE.Vector3(0, nearest.mesh.position.y - gripperPos.y, 0);
+      console.log(`[Physics] GRABBED "${nearest.mesh.userData.objectName}" at frame ${SIM.currentFrame}, dist=${nearestDist.toFixed(4)}m`);
+    } else {
+      // Log distances for debugging
+      for (const po of SIM.physicsObjects) {
+        const dx = gripperPos.x - po.mesh.position.x;
+        const dz = gripperPos.z - po.mesh.position.z;
+        const dXZ = Math.sqrt(dx * dx + dz * dz);
+        console.log(`[Physics] Gripper closed at frame ${SIM.currentFrame} — "${po.mesh.userData.objectName}" XZ dist=${dXZ.toFixed(4)}m (threshold=${GRAB_DIST}), gripper=(${gripperPos.x.toFixed(3)},${gripperPos.y.toFixed(3)},${gripperPos.z.toFixed(3)}), obj=(${po.mesh.position.x.toFixed(3)},${po.mesh.position.y.toFixed(3)},${po.mesh.position.z.toFixed(3)})`);
+      }
     }
   }
 
@@ -9574,6 +9656,7 @@ function simUpdatePhysics() {
       if (po.state === 'held') {
         po.state = 'falling';
         po.velocity = 0;
+        console.log(`[Physics] RELEASED "${po.mesh.userData.objectName}" at frame ${SIM.currentFrame}, pos=(${po.mesh.position.x.toFixed(3)},${po.mesh.position.y.toFixed(3)},${po.mesh.position.z.toFixed(3)})`);
       }
     }
   }
@@ -9776,7 +9859,6 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (item.dataset.tab === 'simulation') {
       simLoadDatasets();
       if (SIM.inited) {
-        // Resize canvas on tab switch
         setTimeout(() => {
           const canvas = document.getElementById('simCanvas');
           SIM.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
@@ -9787,6 +9869,265 @@ document.querySelectorAll('.nav-item').forEach(item => {
     }
   });
 });
+
+// ════════════════════════════════════════════════════
+// ══ Object Detection subtab
+// ════════════════════════════════════════════════════
+
+const OD = {
+  datasets: [],
+  fps: 30,
+  totalFrames: 0,
+  currentFrame: 0,
+  videoPath: null,
+  videoOffset: 0,
+  taskText: '',
+  videoEl: null,      // hidden video element for frame extraction
+  frameCanvas: null,   // off-screen canvas for frame capture
+};
+
+async function odLoadDatasets() {
+  try {
+    const res = await fetch('/api/datasets');
+    const data = await res.json();
+    OD.datasets = data.datasets || [];
+    const sel = document.getElementById('odDataset');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">-- Select dataset --</option>';
+    OD.datasets.forEach(ds => {
+      sel.innerHTML += `<option value="${ds.name}" ${ds.name === cur ? 'selected' : ''}>${ds.name} (${ds.total_episodes} eps)</option>`;
+    });
+  } catch (e) {}
+}
+
+document.getElementById('odDataset').addEventListener('change', async function() {
+  const name = this.value;
+  const epSel = document.getElementById('odEpisode');
+  epSel.innerHTML = '<option value="">-- Select episode --</option>';
+  epSel.disabled = true;
+  document.getElementById('odLoadBtn').disabled = true;
+  if (!name) return;
+
+  // Show task text
+  const ds = OD.datasets.find(d => d.name === name);
+  if (ds && ds.tasks && ds.tasks.length) {
+    document.getElementById('odTaskText').style.display = 'block';
+    document.getElementById('odTaskContent').textContent = ds.tasks.join(', ');
+    OD.taskText = ds.tasks[0];
+  } else {
+    document.getElementById('odTaskText').style.display = 'none';
+    OD.taskText = '';
+  }
+
+  try {
+    const res = await fetch(`/api/datasets/${name}/episodes`);
+    const data = await res.json();
+    if (data.ok && data.episodes) {
+      data.episodes.forEach(ep => {
+        epSel.innerHTML += `<option value="${ep.episode_index}">Episode ${ep.episode_index} (${ep.num_frames} frames)</option>`;
+      });
+      epSel.disabled = false;
+    }
+  } catch (e) {}
+});
+
+document.getElementById('odEpisode').addEventListener('change', function() {
+  document.getElementById('odLoadBtn').disabled = !this.value;
+});
+
+document.getElementById('odLoadBtn').addEventListener('click', async function() {
+  const dsName = document.getElementById('odDataset').value;
+  const epIdx = document.getElementById('odEpisode').value;
+  if (!dsName || epIdx === '') return;
+
+  const status = document.getElementById('odStatus');
+  status.textContent = 'Loading episode...';
+  this.disabled = true;
+
+  try {
+    const res = await fetch(`/api/datasets/${dsName}/episode/${epIdx}`);
+    const data = await res.json();
+    if (!data.ok) { status.textContent = data.error; this.disabled = false; return; }
+
+    OD.fps = data.fps || 30;
+    OD.totalFrames = data.frames.length;
+    OD.currentFrame = 0;
+
+    // Get video info
+    const topVideo = data.videos ? data.videos['observation.images.top'] : null;
+    if (topVideo) {
+      OD.videoPath = topVideo.path;
+      OD.videoOffset = topVideo.from_timestamp || 0;
+    }
+
+    // Setup hidden video element for frame extraction
+    if (!OD.videoEl) {
+      OD.videoEl = document.createElement('video');
+      OD.videoEl.muted = true;
+      OD.videoEl.playsInline = true;
+      OD.videoEl.crossOrigin = 'anonymous';
+      OD.videoEl.preload = 'auto';
+    }
+    if (OD.videoPath) {
+      OD.videoEl.src = OD.videoPath;
+      await new Promise((resolve, reject) => {
+        OD.videoEl.onloadeddata = resolve;
+        OD.videoEl.onerror = reject;
+        setTimeout(reject, 5000);
+      }).catch(() => {});
+    }
+
+    // Setup scrubber
+    const scrubber = document.getElementById('odScrubber');
+    scrubber.max = OD.totalFrames - 1;
+    scrubber.value = 0;
+    scrubber.disabled = false;
+
+    // Enable buttons
+    document.getElementById('odPrevBtn').disabled = false;
+    document.getElementById('odNextBtn').disabled = false;
+    document.getElementById('odDetectBtn').disabled = false;
+
+    // Show first frame
+    odShowFrame(0);
+    status.textContent = `Loaded ${OD.totalFrames} frames at ${OD.fps} fps`;
+    document.getElementById('odResults').style.display = 'none';
+  } catch (e) {
+    status.textContent = 'Failed to load episode';
+  }
+  this.disabled = false;
+});
+
+function odShowFrame(frameIdx) {
+  OD.currentFrame = Math.max(0, Math.min(OD.totalFrames - 1, frameIdx));
+  document.getElementById('odScrubber').value = OD.currentFrame;
+  document.getElementById('odFrameLabel').textContent = `Frame ${OD.currentFrame + 1} / ${OD.totalFrames}`;
+
+  if (OD.videoEl && OD.videoEl.readyState >= 2) {
+    const t = OD.videoOffset + OD.currentFrame / OD.fps;
+    OD.videoEl.currentTime = t;
+
+    // Draw frame to canvas once seeked
+    OD.videoEl.onseeked = () => {
+      const canvas = document.getElementById('odCanvas');
+      const vw = OD.videoEl.videoWidth || 640;
+      const vh = OD.videoEl.videoHeight || 480;
+      canvas.width = vw;
+      canvas.height = vh;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(OD.videoEl, 0, 0, vw, vh);
+    };
+  }
+}
+
+document.getElementById('odScrubber').addEventListener('input', function() {
+  odShowFrame(parseInt(this.value));
+});
+document.getElementById('odPrevBtn').addEventListener('click', () => odShowFrame(OD.currentFrame - 1));
+document.getElementById('odNextBtn').addEventListener('click', () => odShowFrame(OD.currentFrame + 1));
+
+document.getElementById('odDetectBtn').addEventListener('click', async function() {
+  const dsName = document.getElementById('odDataset').value;
+  const epIdx = document.getElementById('odEpisode').value;
+  if (!dsName || epIdx === '') return;
+
+  const btn = this;
+  const status = document.getElementById('odStatus');
+  btn.disabled = true;
+  status.textContent = 'Detecting objects via Gemini...';
+
+  try {
+    const res = await fetch('/api/simulation/detect-frame-objects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        dataset: dsName,
+        episode: parseInt(epIdx),
+        frame_index: OD.currentFrame,
+      }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      status.textContent = data.error || 'Detection failed';
+      btn.disabled = false;
+      return;
+    }
+
+    odDrawResults(data);
+    status.textContent = `Found ${data.objects.length} objects (${data.elapsed}s)`;
+  } catch (e) {
+    status.textContent = 'Detection failed: ' + e.message;
+  }
+  btn.disabled = false;
+});
+
+function odDrawResults(data) {
+  const resultsDiv = document.getElementById('odResults');
+  resultsDiv.style.display = 'block';
+
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('odAnnotatedCanvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF8C42', '#6BCB77'];
+    const cropsDiv = document.getElementById('odCrops');
+    cropsDiv.innerHTML = '';
+
+    (data.objects || []).forEach((obj, i) => {
+      const bbox = obj.bbox || [0, 0, 0, 0];
+      const [x1, y1, x2, y2] = bbox;
+      const color = obj.color_hex || colors[i % colors.length];
+      const conf = obj.confidence != null ? obj.confidence : 1;
+
+      // Draw bbox
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+      // Draw label background
+      ctx.font = 'bold 14px sans-serif';
+      const label = `${obj.name} ${(conf * 100).toFixed(0)}%`;
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, y1 - 22, tw + 10, 22);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, x1 + 5, y1 - 6);
+
+      // Create crop card
+      const cw = Math.max(1, x2 - x1), ch = Math.max(1, y2 - y1);
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = cw;
+      cropCanvas.height = ch;
+      cropCanvas.getContext('2d').drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
+
+      const card = document.createElement('div');
+      card.style.cssText = 'text-align:center;border:2px solid ' + color + ';border-radius:8px;padding:8px;background:#fff;min-width:100px';
+      card.innerHTML = `
+        <img src="${cropCanvas.toDataURL()}" style="max-width:150px;max-height:120px;border-radius:4px;display:block;margin:0 auto 6px">
+        <div style="font-size:0.82rem;font-weight:600;color:${color}">${obj.name}</div>
+        <div style="font-size:0.72rem;color:#888">${(conf * 100).toFixed(0)}% conf</div>
+        <div style="font-size:0.68rem;color:#aaa">[${x1},${y1},${x2},${y2}]</div>
+      `;
+      cropsDiv.appendChild(card);
+    });
+
+    // Update task text if returned
+    if (data.task_text) {
+      document.getElementById('odTaskText').style.display = 'block';
+      document.getElementById('odTaskContent').textContent = data.task_text;
+    }
+  };
+  img.src = 'data:image/jpeg;base64,' + data.frame_image_b64;
+
+  // Show Gemini raw output
+  const rawEl = document.getElementById('odGeminiRaw');
+  rawEl.textContent = data.gemini_raw || '';
+}
 
 </script>
 

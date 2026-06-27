@@ -1637,6 +1637,172 @@ No explanations, no markdown."""
     }
 
 
+@app.post("/api/simulation/detect-frame-objects")
+async def sim_detect_frame_objects(request: Request):
+    """Detect objects in a specific video frame using Gemini, filtered by task instruction."""
+    import pyarrow.parquet as pq
+    import subprocess
+
+    body = await request.json()
+    dataset = body.get("dataset", "")
+    episode = body.get("episode", 0)
+    frame_index = body.get("frame_index", 0)
+
+    ds_dir = ROOT / "data" / dataset
+    if not ds_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    # Get task text
+    task_text = ""
+    tasks_path = ds_dir / "meta" / "tasks.parquet"
+    if tasks_path.exists():
+        try:
+            tbl = pq.read_table(str(tasks_path))
+            td = tbl.to_pydict()
+            all_tasks = td.get("task", [])
+            # Get task_index for this episode from data parquet
+            task_idx = 0
+            data_dir = ds_dir / "data"
+            if data_dir.exists():
+                for chunk_dir in sorted(data_dir.iterdir()):
+                    if chunk_dir.is_dir():
+                        for pf in sorted(chunk_dir.glob("*.parquet")):
+                            try:
+                                tbl2 = pq.read_table(str(pf))
+                                d2 = tbl2.to_pydict()
+                                for i in range(len(d2.get("episode_index", []))):
+                                    if d2["episode_index"][i] == episode:
+                                        task_idx = d2.get("task_index", [0])[i]
+                                        break
+                            except Exception:
+                                pass
+            if task_idx < len(all_tasks):
+                task_text = all_tasks[task_idx]
+        except Exception:
+            pass
+
+    # Get video path and timestamps for this episode
+    ep_dir = ds_dir / "meta" / "episodes"
+    video_path = None
+    video_offset = 0.0
+    fps = 30
+    if ep_dir.exists():
+        for chunk_dir in sorted(ep_dir.iterdir()):
+            if chunk_dir.is_dir():
+                for pf in sorted(chunk_dir.glob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                        d = tbl.to_pydict()
+                        for idx in range(len(d.get("episode_index", []))):
+                            if d["episode_index"][idx] == episode:
+                                cam = "observation.images.top"
+                                ck = f"videos/{cam}/chunk_index"
+                                fk = f"videos/{cam}/file_index"
+                                ft = f"videos/{cam}/from_timestamp"
+                                if ck in d and fk in d:
+                                    ci, fi = d[ck][idx], d[fk][idx]
+                                    video_path = ds_dir / "videos" / cam / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                                    video_offset = d[ft][idx] if ft in d else 0
+                                break
+                    except Exception:
+                        pass
+
+    # Read fps from info.json
+    info_path = ds_dir / "meta" / "info.json"
+    if info_path.exists():
+        try:
+            info = json.loads(info_path.read_text())
+            fps = info.get("fps", 30)
+        except Exception:
+            pass
+
+    if not video_path or not video_path.exists():
+        return {"ok": False, "error": "Video not found"}
+
+    # Extract the specific frame
+    timestamp = video_offset + frame_index / fps
+    tmp_frame = ROOT / "data" / "images" / f"od_frame_{uuid.uuid4().hex[:8]}.jpg"
+    tmp_frame.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", str(timestamp), "-i", str(video_path),
+         "-frames:v", "1", "-q:v", "2", str(tmp_frame)],
+        capture_output=True, timeout=10,
+    )
+
+    if not tmp_frame.exists():
+        return {"ok": False, "error": "Failed to extract frame"}
+
+    frame_bytes = tmp_frame.read_bytes()
+    b64 = base64.b64encode(frame_bytes).decode()
+
+    # Get image dimensions
+    pil_img = Image.open(tmp_frame)
+    img_w, img_h = pil_img.size
+    pil_img.close()
+
+    # Call Gemini
+    gemini_objects = []
+    gemini_raw = ""
+    elapsed = 0
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if api_key:
+        cfg = load_config()
+        model = cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+        task_clause = ""
+        if task_text:
+            task_clause = f'\nThe robot is performing the task: "{task_text}"\nDetect ONLY the objects mentioned or implied in this task instruction.'
+        else:
+            task_clause = "\nDetect all objects on the workspace (exclude the robot arm, cables, desk)."
+
+        prompt = f"""This is a top-down camera view of a robot workspace.{task_clause}
+
+For each object, return:
+- "name": short descriptive name (e.g. "pink bow", "green bowl")
+- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates (image is {img_w}x{img_h})
+- "color_hex": color as hex (e.g. "#ff69b4")
+- "confidence": 0.0 to 1.0
+
+Return ONLY valid JSON: {{"objects": [...]}}
+No explanations, no markdown."""
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                data, elapsed, status_code = await call_gemini(client, url, b64, "image/jpeg", prompt)
+            if status_code == 200:
+                gemini_raw = extract_text(data)
+                parsed = parse_json_response(gemini_raw)
+                if parsed and "objects" in parsed:
+                    gemini_objects = parsed["objects"]
+                    # Normalize bbox coordinates if Gemini returns 0-1000 range
+                    for obj in gemini_objects:
+                        bbox = obj.get("bbox", [0, 0, 0, 0])
+                        if len(bbox) == 4 and all(0 <= v <= 1000 for v in bbox):
+                            if max(bbox) > img_w and max(bbox) > img_h:
+                                # Likely 0-1000 normalized
+                                obj["bbox"] = [
+                                    int(bbox[0] * img_w / 1000),
+                                    int(bbox[1] * img_h / 1000),
+                                    int(bbox[2] * img_w / 1000),
+                                    int(bbox[3] * img_h / 1000),
+                                ]
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "task_text": task_text,
+        "frame_image_b64": b64,
+        "image_width": img_w,
+        "image_height": img_h,
+        "objects": gemini_objects,
+        "gemini_raw": gemini_raw,
+        "elapsed": elapsed,
+    }
+
+
 @app.post("/api/datasets/combine")
 async def combine_datasets(request: Request):
     """Combine multiple datasets into a new one."""
