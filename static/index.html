@@ -1961,7 +1961,13 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         </div>
       </div>
       <button class="btn" id="simLoadBtn" disabled onclick="simLoadEpisode()" style="margin-top:8px">Load Episode</button>
+      <button class="btn btn-outline" id="simDetectBtn" disabled onclick="simDetectObjects()" style="margin-top:8px;margin-left:8px">Detect Objects</button>
       <span id="simLoadStatus" style="margin-left:12px;font-size:0.85rem;color:#888"></span>
+      <div id="simDetectedList" style="margin-top:10px"></div>
+      <div id="simGeminiRawWrap" style="display:none;margin-top:8px">
+        <div class="collapse-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="cursor:pointer;font-size:0.8rem;color:#1a73e8;user-select:none">Gemini Raw Output &#9660;</div>
+        <pre id="simGeminiRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+      </div>
     </div>
 
     <!-- 3D Viewport + Camera Views -->
@@ -9097,7 +9103,9 @@ function simApplyJoints(robot, jointValues) {
     let angle = jointValues[i] * deg;
     // For gripper (index 5): map 0-100 range to URDF jaw range (-0.17 to 1.75 rad)
     if (i === 5) {
-      angle = (jointValues[5] / 100.0) * 1.74533;
+      // URDF Jaw limits: lower=-0.174533 upper=1.74533
+      // gripper=0 (closed) → -0.174533, gripper=100 (open) → 1.74533
+      angle = -0.174533 + (jointValues[5] / 100.0) * (1.74533 + 0.174533);
     }
     // Apply: initial URDF rotation * joint rotation around Z
     const jointRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
@@ -9378,6 +9386,7 @@ async function simLoadEpisode() {
     // Enable controls
     document.getElementById('simPlayBtn').disabled = false;
     document.getElementById('simPlayBtn').innerHTML = '&#9654; Play';
+    document.getElementById('simDetectBtn').disabled = false;
     document.getElementById('simPrevBtn').disabled = false;
     document.getElementById('simNextBtn').disabled = false;
     document.getElementById('simScrubber').disabled = false;
@@ -9392,6 +9401,250 @@ async function simLoadEpisode() {
     status.textContent = 'Error: ' + e.message;
     loadBtn.disabled = false;
   }
+}
+
+// ── Detect Objects ──
+
+SIM.sceneObjects = []; // track added 3D objects for cleanup
+
+function simClearSceneObjects() {
+  SIM.sceneObjects.forEach(obj => SIM.scene.remove(obj));
+  SIM.sceneObjects = [];
+}
+
+function simAddObjectToScene(obj) {
+  // obj: {name, color_hex, shape_3d, estimated_size_cm, position_3d, event}
+  // position_3d is computed from FK in URDF→Three.js Y-up coordinates
+  const pos = obj.position_3d || [0, 0, 0];
+  const wx = pos[0], wz = pos[2];
+
+  const sz = obj.estimated_size_cm || [3, 3, 3];
+  const sw = sz[0] / 100, sd = sz[1] / 100, sh = sz[2] / 100;
+
+  const color = parseInt(obj.color_hex.replace('#', ''), 16) || 0x888888;
+  const mat = new THREE.MeshPhongMaterial({ color, shininess: 40, specular: 0x222222 });
+
+  let mesh;
+  if (obj.shape_3d === 'cylinder') {
+    const geo = new THREE.CylinderGeometry(sw / 2, sw / 2, sh, 24);
+    mesh = new THREE.Mesh(geo, mat);
+  } else if (obj.shape_3d === 'sphere') {
+    const r = Math.max(sw, sd, sh) / 2;
+    const geo = new THREE.SphereGeometry(r, 16, 16);
+    mesh = new THREE.Mesh(geo, mat);
+  } else {
+    const geo = new THREE.BoxGeometry(sw, sh, sd);
+    mesh = new THREE.Mesh(geo, mat);
+  }
+
+  mesh.position.set(wx, sh / 2, wz);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.objectName = obj.name;
+
+  SIM.scene.add(mesh);
+  SIM.sceneObjects.push(mesh);
+
+  // Add label sprite
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.roundRect(0, 0, 256, 64, 8);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(obj.name, 128, 42);
+  const tex = new THREE.CanvasTexture(canvas);
+  const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(0.08, 0.02, 1);
+  sprite.position.set(wx, sh + 0.015, wz);
+  SIM.scene.add(sprite);
+  SIM.sceneObjects.push(sprite);
+
+  return mesh;
+}
+
+function simGetGripperWorldPos(jointValues) {
+  // Apply joint values to robot, then read gripper world position from Three.js scene graph
+  // This guarantees the position matches exactly what's rendered on screen
+  simApplyJoints(SIM.robot, jointValues);
+  // Force scene graph world matrix update
+  SIM.robot.updateMatrixWorld(true);
+  // Get world positions of gripper link (joint4) and jaw (joint5)
+  // The center of the grip is the midpoint between them
+  const gripperJoint = SIM.robot.userData.jointTransforms[4];
+  const jawJoint = SIM.robot.userData.jointTransforms[5];
+  const gripperPos = new THREE.Vector3();
+  const jawPos = new THREE.Vector3();
+  gripperJoint.getWorldPosition(gripperPos);
+  jawJoint.getWorldPosition(jawPos);
+  // Return the midpoint = center of gripper
+  return gripperPos.lerp(jawPos, 0.5);
+}
+
+function simFindGripperEvents() {
+  // Analyze frames to find grasp/release events and compute positions from Three.js
+  if (!SIM.frames.length || !SIM.robot) return [];
+
+  const OPEN_THRESH = 15;
+  const grips = SIM.frames.map(f => f.state[5]);
+  let state = grips[0] < OPEN_THRESH ? 'closed' : 'open';
+  const events = [];
+
+  for (let i = 1; i < grips.length; i++) {
+    if (state === 'closed' && grips[i] >= OPEN_THRESH) {
+      state = 'open';
+      events.push({ type: 'open', frame: i, joints: SIM.frames[i].state });
+    } else if (state === 'open' && grips[i] < OPEN_THRESH) {
+      state = 'closed';
+      events.push({ type: 'close', frame: i, joints: SIM.frames[i].state });
+    }
+  }
+
+  // For each event, get the gripper position from Three.js scene graph
+  const positions = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    const pos = simGetGripperWorldPos(ev.joints);
+
+    if (ev.type === 'close') {
+      // Grasp — where the source object is
+      positions.push({
+        event: 'grasp', frame: ev.frame,
+        position_3d: [pos.x, pos.y, pos.z],
+      });
+    } else if (ev.type === 'open' && i > 0 && events[i-1].type === 'close') {
+      // Release after grasp — where the target is
+      positions.push({
+        event: 'release', frame: ev.frame,
+        position_3d: [pos.x, pos.y, pos.z],
+      });
+    }
+  }
+
+  // Restore current frame display
+  simApplyJoints(SIM.robot, SIM.frames[SIM.currentFrame].state);
+
+  return positions;
+}
+
+async function simDetectObjects() {
+  const dsName = document.getElementById('simDataset').value;
+  const epIdx = document.getElementById('simEpisode').value;
+  if (!dsName || epIdx === '') return;
+
+  const btn = document.getElementById('simDetectBtn');
+  const status = document.getElementById('simLoadStatus');
+  const listEl = document.getElementById('simDetectedList');
+  btn.disabled = true;
+  listEl.innerHTML = '';
+
+  // Step 1: Find gripper events and positions from Three.js scene graph
+  status.textContent = 'Analyzing gripper events...';
+  const gripperPositions = simFindGripperEvents();
+
+  if (gripperPositions.length === 0) {
+    status.textContent = 'No grasp/release events found in this episode';
+    btn.disabled = false;
+    return;
+  }
+
+  // Step 2: Call Gemini for object appearance
+  status.textContent = 'Calling Gemini for object identification...';
+  let geminiObjects = [];
+  let geminiRaw = '';
+  let elapsed = 0;
+
+  try {
+    const res = await fetch('/api/simulation/detect-objects', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ dataset: dsName, episode: parseInt(epIdx) }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      geminiObjects = data.objects || [];
+      geminiRaw = data.gemini_raw || '';
+      elapsed = data.elapsed || 0;
+    }
+  } catch (e) { /* Gemini failed, continue with default appearance */ }
+
+  // Step 3: Merge — match Gemini appearance to FK positions
+  const sources = geminiObjects.filter(o => o.event === 'grasp' || o.role === 'source');
+  const targets = geminiObjects.filter(o => o.event === 'release' || o.role === 'target');
+  const others = geminiObjects.filter(o => !o.role && o.event !== 'grasp' && o.event !== 'release');
+
+  const finalObjects = gripperPositions.map(pos => {
+    let gem;
+    if (pos.event === 'grasp' && sources.length) gem = sources.shift();
+    else if (pos.event === 'release' && targets.length) gem = targets.shift();
+    else if (others.length) gem = others.shift();
+    else gem = {};
+
+    return {
+      ...pos,
+      name: gem.name || (pos.event === 'grasp' ? 'pickup object' : 'target'),
+      color_hex: gem.color_hex || (pos.event === 'grasp' ? '#ff69b4' : '#66bb6a'),
+      shape_3d: gem.shape_3d || (pos.event === 'release' ? 'cylinder' : 'box'),
+      estimated_size_cm: gem.estimated_size_cm || [3, 3, 3],
+    };
+  });
+
+  // Step 4: Render in scene
+  simClearSceneObjects();
+
+  // Workspace mat
+  const matGeo = new THREE.BoxGeometry(0.60, 0.003, 0.50);
+  const matMesh = new THREE.Mesh(matGeo, new THREE.MeshPhongMaterial({ color: 0x222222 }));
+  matMesh.position.set(0.0, 0.0015, 0.15);
+  matMesh.receiveShadow = true;
+  SIM.scene.add(matMesh);
+  SIM.sceneObjects.push(matMesh);
+
+  // Add debug markers at gripper positions (small red spheres)
+  gripperPositions.forEach(pos => {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.005, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff0000 })
+    );
+    marker.position.set(pos.position_3d[0], pos.position_3d[1], pos.position_3d[2]);
+    SIM.scene.add(marker);
+    SIM.sceneObjects.push(marker);
+  });
+
+  // Add objects at ground level below gripper positions
+  finalObjects.forEach(obj => {
+    // Place object at XZ from gripper, but Y on the ground
+    obj.position_3d = [obj.position_3d[0], 0, obj.position_3d[2]];
+    simAddObjectToScene(obj);
+  });
+
+  // Show detected objects list
+  let html = `<div style="font-size:0.82rem;color:#666;margin-bottom:4px">${finalObjects.length} objects from ${gripperPositions.length} gripper events`;
+  if (elapsed) html += ` (Gemini: ${elapsed}s)`;
+  html += '</div>';
+  finalObjects.forEach(obj => {
+    const p = obj.position_3d;
+    html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;margin:2px;border-radius:12px;background:#f0f0f0;font-size:0.8rem">`;
+    html += `<span style="width:10px;height:10px;border-radius:50%;background:${obj.color_hex};display:inline-block"></span>`;
+    const evLabel = obj.event === 'grasp' ? ' pickup' : ' target';
+    html += `${obj.name} <span style="color:#999">(f${obj.frame}${evLabel} x:${p[0].toFixed(3)} z:${p[2].toFixed(3)})</span></span>`;
+  });
+  listEl.innerHTML = html;
+
+  status.textContent = `Detected ${finalObjects.length} objects`;
+
+  // Show Gemini raw output
+  if (geminiRaw) {
+    document.getElementById('simGeminiRawWrap').style.display = 'block';
+    document.getElementById('simGeminiRaw').textContent = geminiRaw;
+  } else {
+    document.getElementById('simGeminiRawWrap').style.display = 'none';
+  }
+  btn.disabled = false;
 }
 
 // Load datasets when simulation tab is shown

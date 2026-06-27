@@ -1384,6 +1384,259 @@ async def get_episode_data(name: str, ep_idx: int):
     return {"ok": True, "fps": fps, "total_frames": len(frames), "frames": frames, "videos": videos}
 
 
+def _so101_fk(joint_degs):
+    """Compute SO-101 gripper tip position using URDF forward kinematics.
+    Returns position in URDF frame (Z-up)."""
+
+    def rpy_to_mat(r, p, y):
+        cr, sr = math.cos(r), math.sin(r)
+        cp, sp = math.cos(p), math.sin(p)
+        cy, sy = math.cos(y), math.sin(y)
+        return np.array([
+            [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+            [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+            [-sp,   cp*sr,            cp*cr],
+        ])
+
+    def make_tf(xyz, rpy):
+        T = np.eye(4)
+        T[:3, :3] = rpy_to_mat(*rpy)
+        T[:3, 3] = xyz
+        return T
+
+    def rot_z(a):
+        c, s = math.cos(a), math.sin(a)
+        T = np.eye(4)
+        T[:3, :3] = [[c, -s, 0], [s, c, 0], [0, 0, 1]]
+        return T
+
+    urdf_joints = [
+        ([0.0207909, -0.0230745, 0.0948817], [-math.pi, 0, math.pi / 2]),
+        ([-0.0303992, -0.0182778, -0.0542], [-math.pi / 2, -math.pi / 2, 0]),
+        ([-0.11257, -0.028, 0], [0, 0, math.pi / 2]),
+        ([-0.1349, 0.0052, 0], [0, 0, -math.pi / 2]),
+        ([0, -0.0611, 0.0181], [math.pi / 2, 0, math.pi]),
+    ]
+    jaw_tf = make_tf([0.0202, 0.0188, -0.0234], [math.pi / 2, 0, 0])
+
+    T = np.eye(4)
+    for i, (xyz, rpy) in enumerate(urdf_joints):
+        T = T @ make_tf(xyz, rpy) @ rot_z(math.radians(joint_degs[i]))
+    T = T @ jaw_tf
+    return T[:3, 3]
+
+
+def _urdf_to_threejs(pos):
+    """Convert URDF Z-up coords to Three.js Y-up: (x, z, -y)"""
+    return [float(pos[0]), float(pos[2]), float(-pos[1])]
+
+
+@app.post("/api/simulation/detect-objects")
+async def sim_detect_objects(request: Request):
+    """Detect objects by analyzing gripper events (FK) + Gemini for appearance."""
+    import pyarrow.parquet as pq
+    import subprocess
+
+    body = await request.json()
+    dataset = body.get("dataset", "")
+    episode = body.get("episode", 0)
+    frames_data = body.get("frames", [])  # optional: pass frames from frontend
+
+    ds_dir = ROOT / "data" / dataset
+    if not ds_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    # Load episode frame data if not passed
+    if not frames_data:
+        data_dir = ds_dir / "data"
+        for chunk_dir in sorted(data_dir.iterdir()):
+            if chunk_dir.is_dir():
+                for pf in sorted(chunk_dir.glob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                        d = tbl.to_pydict()
+                        for i in range(len(d.get("episode_index", []))):
+                            if d["episode_index"][i] == episode:
+                                frames_data.append({
+                                    "state": d["observation.state"][i],
+                                    "action": d["action"][i],
+                                    "frame_index": d["frame_index"][i],
+                                })
+                    except Exception:
+                        pass
+        frames_data.sort(key=lambda f: f["frame_index"])
+
+    if not frames_data:
+        return {"ok": False, "error": "No frame data found"}
+
+    # --- Analyze gripper events ---
+    # Gripper is joint index 5. Detect open/close transitions.
+    OPEN_THRESH = 15  # above = open
+    events = []
+    grips = [f["state"][5] for f in frames_data]
+    state = "closed" if grips[0] < OPEN_THRESH else "open"
+
+    for i in range(1, len(grips)):
+        if state == "closed" and grips[i] >= OPEN_THRESH:
+            state = "open"
+            events.append({"type": "open", "frame": i, "joints": frames_data[i]["state"][:5]})
+        elif state == "open" and grips[i] < OPEN_THRESH:
+            state = "closed"
+            events.append({"type": "close", "frame": i, "joints": frames_data[i]["state"][:5]})
+
+    # Compute FK positions for all events
+    for ev in events:
+        pos_urdf = _so101_fk(ev["joints"])
+        ev["position_3d"] = _urdf_to_threejs(pos_urdf)
+
+    # Identify object locations from gripper events:
+    # Pattern: open → close = GRASP (pickup location = source object)
+    #          close → open = RELEASE (drop location = target object)
+    object_positions = []
+    for i, ev in enumerate(events):
+        if ev["type"] == "close":
+            # Grasp event — this is where the source object is
+            object_positions.append({
+                "event": "grasp",
+                "frame": ev["frame"],
+                "position_3d": ev["position_3d"],
+            })
+        elif ev["type"] == "open" and i > 0 and events[i - 1]["type"] == "close":
+            # Release after grasp — target location
+            object_positions.append({
+                "event": "release",
+                "frame": ev["frame"],
+                "position_3d": ev["position_3d"],
+            })
+
+    # --- Get video frame for Gemini to identify objects ---
+    ep_dir = ds_dir / "meta" / "episodes"
+    video_path = None
+    video_offset = 0.0
+    if ep_dir.exists():
+        for chunk_dir in sorted(ep_dir.iterdir()):
+            if chunk_dir.is_dir():
+                for pf in sorted(chunk_dir.glob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                        d = tbl.to_pydict()
+                        for idx in range(len(d.get("episode_index", []))):
+                            if d["episode_index"][idx] == episode:
+                                cam = "observation.images.top"
+                                ck = f"videos/{cam}/chunk_index"
+                                fk = f"videos/{cam}/file_index"
+                                ft = f"videos/{cam}/from_timestamp"
+                                if ck in d and fk in d:
+                                    ci, fi = d[ck][idx], d[fk][idx]
+                                    video_path = ds_dir / "videos" / cam / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                                    video_offset = d[ft][idx] if ft in d else 0
+                                break
+                    except Exception:
+                        pass
+
+    gemini_objects = []
+    gemini_raw = ""
+    frame_url = ""
+    elapsed = 0
+
+    if video_path and video_path.exists():
+        # Extract first frame of the episode
+        tmp_frame = ROOT / "data" / "images" / f"sim_detect_{uuid.uuid4().hex[:8]}.jpg"
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(video_offset + 0.1), "-i", str(video_path),
+             "-frames:v", "1", "-q:v", "2", str(tmp_frame)],
+            capture_output=True, timeout=10,
+        )
+
+        if tmp_frame.exists():
+            frame_bytes = tmp_frame.read_bytes()
+            b64 = base64.b64encode(frame_bytes).decode()
+            frame_url = f"/data/images/{tmp_frame.name}"
+
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+            if api_key:
+                cfg = load_config()
+                model = cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+                n_objects = len(object_positions)
+                prompt = f"""This is a top-down camera view of a robot workspace.
+I detected {n_objects} key locations from robot motion analysis.
+Identify ALL objects on the workspace (exclude the robot arm, cables, desk).
+
+For each object, return:
+- "name": short name (e.g. "pink bow", "green bowl")
+- "color_hex": color as hex (e.g. "#ff69b4")
+- "shape_3d": "cylinder", "box", or "sphere"
+- "estimated_size_cm": [width, depth, height] in cm
+- "role": "source" if it's the object being picked up, "target" if it's the destination
+
+Return ONLY valid JSON: {{"objects": [...]}}
+No explanations, no markdown."""
+
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        data, elapsed, status_code = await call_gemini(client, url, b64, "image/jpeg", prompt)
+                    if status_code == 200:
+                        gemini_raw = extract_text(data)
+                        parsed = parse_json_response(gemini_raw)
+                        if parsed and "objects" in parsed:
+                            gemini_objects = parsed["objects"]
+                except Exception:
+                    pass
+
+    # --- Merge: assign Gemini appearance info to FK positions ---
+    result_objects = []
+    sources = [o for o in gemini_objects if o.get("role") == "source"]
+    targets = [o for o in gemini_objects if o.get("role") == "target"]
+    others = [o for o in gemini_objects if o.get("role") not in ("source", "target")]
+
+    for pos_info in object_positions:
+        obj = {
+            "position_3d": pos_info["position_3d"],
+            "event": pos_info["event"],
+            "frame": pos_info["frame"],
+        }
+        # Match with Gemini data
+        if pos_info["event"] == "grasp" and sources:
+            gem = sources.pop(0)
+        elif pos_info["event"] == "release" and targets:
+            gem = targets.pop(0)
+        elif others:
+            gem = others.pop(0)
+        elif gemini_objects:
+            gem = gemini_objects.pop(0)
+        else:
+            gem = {}
+
+        obj["name"] = gem.get("name", f"object ({pos_info['event']})")
+        obj["color_hex"] = gem.get("color_hex", "#888888")
+        obj["shape_3d"] = gem.get("shape_3d", "box")
+        obj["estimated_size_cm"] = gem.get("estimated_size_cm", [3, 3, 3])
+        result_objects.append(obj)
+
+    # Add remaining Gemini objects without FK position (placed roughly)
+    for gem in sources + targets + others:
+        result_objects.append({
+            "position_3d": [0, 0, 0],
+            "event": "unknown",
+            "frame": 0,
+            "name": gem.get("name", "unknown"),
+            "color_hex": gem.get("color_hex", "#888888"),
+            "shape_3d": gem.get("shape_3d", "box"),
+            "estimated_size_cm": gem.get("estimated_size_cm", [3, 3, 3]),
+        })
+
+    return {
+        "ok": True,
+        "objects": result_objects,
+        "events": events,
+        "frame_url": frame_url,
+        "elapsed": elapsed,
+        "gemini_raw": gemini_raw,
+    }
+
+
 @app.post("/api/datasets/combine")
 async def combine_datasets(request: Request):
     """Combine multiple datasets into a new one."""
