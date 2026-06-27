@@ -1281,6 +1281,109 @@ async def list_datasets():
     return {"ok": True, "datasets": datasets}
 
 
+@app.get("/api/datasets/{name}/episodes")
+async def list_dataset_episodes(name: str):
+    """List episodes in a dataset with frame counts."""
+    import pyarrow.parquet as pq
+
+    ds_dir = ROOT / "data" / name
+    info_path = ds_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    info = json.loads(info_path.read_text())
+    fps = info.get("fps", 30)
+
+    # Read episode metadata
+    episodes = []
+    ep_dir = ds_dir / "meta" / "episodes"
+    if ep_dir.exists():
+        for chunk_dir in sorted(ep_dir.iterdir()):
+            if chunk_dir.is_dir():
+                for pf in sorted(chunk_dir.glob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                        d = tbl.to_pydict()
+                        for i in range(len(d.get("episode_index", []))):
+                            episodes.append({
+                                "index": d["episode_index"][i],
+                                "length": d["length"][i] if "length" in d and i < len(d["length"]) else 0,
+                            })
+                    except Exception:
+                        pass
+
+    return {"ok": True, "fps": fps, "total_episodes": info.get("total_episodes", 0), "episodes": episodes}
+
+
+@app.get("/api/datasets/{name}/episode/{ep_idx}")
+async def get_episode_data(name: str, ep_idx: int):
+    """Get all frame data (state + action) for a specific episode."""
+    import pyarrow.parquet as pq
+
+    ds_dir = ROOT / "data" / name
+    data_dir = ds_dir / "data"
+    if not data_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    info = json.loads((ds_dir / "meta" / "info.json").read_text())
+    fps = info.get("fps", 30)
+
+    # Read all data parquet files and filter by episode_index
+    frames = []
+    for chunk_dir in sorted(data_dir.iterdir()):
+        if chunk_dir.is_dir():
+            for pf in sorted(chunk_dir.glob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                    d = tbl.to_pydict()
+                    for i in range(len(d.get("episode_index", []))):
+                        if d["episode_index"][i] == ep_idx:
+                            frames.append({
+                                "state": d["observation.state"][i],
+                                "action": d["action"][i],
+                                "frame_index": d["frame_index"][i],
+                                "timestamp": d.get("timestamp", [0])[i],
+                            })
+                except Exception:
+                    pass
+
+    if not frames:
+        return {"ok": False, "error": f"Episode {ep_idx} not found"}
+
+    frames.sort(key=lambda f: f["frame_index"])
+
+    # Get video info for this episode from episode metadata
+    videos = {}
+    ep_dir = ds_dir / "meta" / "episodes"
+    if ep_dir.exists():
+        for chunk_dir in sorted(ep_dir.iterdir()):
+            if chunk_dir.is_dir():
+                for pf in sorted(chunk_dir.glob("*.parquet")):
+                    try:
+                        tbl = pq.read_table(str(pf))
+                        d = tbl.to_pydict()
+                        for i in range(len(d.get("episode_index", []))):
+                            if d["episode_index"][i] == ep_idx:
+                                for cam in ["observation.images.top", "observation.images.wrist"]:
+                                    ck = f"videos/{cam}/chunk_index"
+                                    fk = f"videos/{cam}/file_index"
+                                    ft = f"videos/{cam}/from_timestamp"
+                                    tt = f"videos/{cam}/to_timestamp"
+                                    if ck in d and fk in d:
+                                        ci = d[ck][i]
+                                        fi = d[fk][i]
+                                        videos[cam] = {
+                                            "path": f"/data/{name}/videos/{cam}/chunk-{ci:03d}/file-{fi:03d}.mp4",
+                                            "from_timestamp": d[ft][i] if ft in d else 0,
+                                            "to_timestamp": d[tt][i] if tt in d else 0,
+                                        }
+                                break
+                    except Exception:
+                        pass
+
+    return {"ok": True, "fps": fps, "total_frames": len(frames), "frames": frames, "videos": videos}
+
+
 @app.post("/api/datasets/combine")
 async def combine_datasets(request: Request):
     """Combine multiple datasets into a new one."""
@@ -2381,6 +2484,20 @@ async def training_kill_all():
     return {"ok": True, **results}
 
 
+@app.patch("/api/training/history/{job_id}")
+async def update_job_history(job_id: str, request: Request):
+    """Manually update a job's status."""
+    body = await request.json()
+    job_path = TRAIN_LOG_DIR / f"{job_id}.json"
+    if not job_path.exists():
+        return {"ok": False, "error": "Not found"}
+    new_status = body.get("status")
+    if not new_status:
+        return {"ok": False, "error": "No status provided"}
+    _save_job_local(job_id, {"status": new_status})
+    return {"ok": True, "status": new_status}
+
+
 @app.delete("/api/training/history/{job_id}")
 async def delete_job_history(job_id: str):
     """Delete a local job history entry."""
@@ -2545,6 +2662,8 @@ async def list_hf_models():
                 "matched_dataset": matched_ds,
                 "local_exists": local_exists,
             })
+        # Sort by last_modified descending (newest first)
+        result.sort(key=lambda x: x["last_modified"] or "", reverse=True)
         return {"ok": True, "models": result, "hf_user": hf_user}
     except ImportError:
         return {"ok": False, "error": "huggingface_hub not installed"}
@@ -2630,6 +2749,70 @@ async def model_download(request: Request):
         return {"ok": False, "error": "Missing repo_id or model_name"}
     threading.Thread(target=_run_model_download, args=(repo_id, model_name), daemon=True).start()
     return {"ok": True}
+
+
+@app.post("/api/model-download-batch")
+async def model_download_batch(request: Request):
+    """Download multiple models from HuggingFace sequentially."""
+    if model_download_state["running"]:
+        return {"ok": False, "error": "Download already in progress"}
+    body = await request.json()
+    models = body.get("models", [])
+    if not models:
+        return {"ok": False, "error": "No models specified"}
+
+    def _run_batch(model_list):
+        state = model_download_state
+        state["running"] = True
+        state["error"] = None
+        state["log_lines"] = []
+        total = len(model_list)
+        for i, m in enumerate(model_list, 1):
+            repo_id = m["repo_id"]
+            model_name = m["model_name"]
+            state["model_name"] = model_name
+            state["status"] = f"[{i}/{total}] Downloading {model_name}..."
+            state["log_lines"].append(f"[{i}/{total}] Downloading {repo_id}...")
+            model_dir = ROOT / "models" / model_name
+            try:
+                script = f"""
+import sys, os
+from huggingface_hub import snapshot_download
+repo_id = {repr(repo_id)}
+local_dir = {repr(str(model_dir))}
+print(f"Downloading {{repo_id}} to {{local_dir}}", flush=True)
+snapshot_download(repo_id=repo_id, repo_type="model", local_dir=local_dir)
+print("DONE", flush=True)
+"""
+                lerobot_python = "/opt/miniconda3/envs/lerobot/bin/python"
+                if not Path(lerobot_python).exists():
+                    lerobot_python = "python3"
+                sub_env = dict(os.environ)
+                hf_token = _read_env().get("HF_TOKEN", "")
+                if hf_token:
+                    sub_env["HF_TOKEN"] = hf_token
+                proc = subprocess.Popen(
+                    [lerobot_python, "-c", script],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, env=sub_env,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        state["status"] = f"[{i}/{total}] {line}"
+                        state["log_lines"].append(line)
+                proc.wait()
+                if proc.returncode != 0:
+                    state["log_lines"].append(f"[{i}/{total}] Failed: {model_name}")
+                else:
+                    state["log_lines"].append(f"[{i}/{total}] Done: {model_name}")
+            except Exception as e:
+                state["log_lines"].append(f"[{i}/{total}] Error: {model_name} - {e}")
+        state["status"] = f"Batch complete ({total} models)"
+        state["running"] = False
+
+    threading.Thread(target=_run_batch, args=(models,), daemon=True).start()
+    return {"ok": True, "count": len(models)}
 
 
 @app.get("/api/model-download/status")

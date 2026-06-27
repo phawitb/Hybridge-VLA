@@ -342,6 +342,9 @@
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 </head>
 <body>
 
@@ -361,6 +364,7 @@
     <div class="nav-item" data-tab="calibrate">Camera Calibrate</div>
     <div class="nav-item" data-tab="run">Run</div>
     <div class="nav-section">Others</div>
+    <div class="nav-item" data-tab="simulation">Simulation</div>
     <div class="nav-item" data-tab="fakecam">Fake Camera</div>
   </div>
 </div>
@@ -1936,6 +1940,81 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
 
   </div><!-- /page-inference -->
 
+  <!-- ==================== Simulation ==================== -->
+  <div class="page" id="page-simulation">
+    <div class="page-title"><span>Simulation</span></div>
+
+    <div class="config-card" style="margin-bottom:16px">
+      <h3>Dataset</h3>
+      <div class="two-col">
+        <div class="form-group">
+          <label class="form-label">Dataset</label>
+          <select id="simDataset" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px">
+            <option value="">-- Select dataset --</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Episode</label>
+          <select id="simEpisode" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px" disabled>
+            <option value="">-- Select episode --</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn" id="simLoadBtn" disabled onclick="simLoadEpisode()" style="margin-top:8px">Load Episode</button>
+      <span id="simLoadStatus" style="margin-left:12px;font-size:0.85rem;color:#888"></span>
+    </div>
+
+    <!-- 3D Viewport + Camera Views -->
+    <div style="display:flex;gap:12px;margin-bottom:16px">
+      <!-- 3D Viewport -->
+      <div style="flex:1;min-width:0;position:relative;background:#1a1a2e;border-radius:10px;overflow:hidden">
+        <canvas id="simCanvas" style="width:100%;height:480px;display:block"></canvas>
+        <div id="simJointInfo" style="position:absolute;top:12px;right:12px;background:rgba(0,0,0,0.7);color:#fff;padding:10px 14px;border-radius:8px;font-size:0.78rem;font-family:monospace;line-height:1.6;pointer-events:none"></div>
+        <div id="simFrameInfo" style="position:absolute;top:12px;left:12px;background:rgba(0,0,0,0.7);color:#fff;padding:8px 14px;border-radius:8px;font-size:0.82rem;pointer-events:none"></div>
+      </div>
+      <!-- Camera Views -->
+      <div style="width:240px;flex-shrink:0;display:flex;flex-direction:column;gap:8px">
+        <div style="background:#1a1a2e;border-radius:8px;overflow:hidden">
+          <div style="padding:6px 10px;background:rgba(255,255,255,0.08);font-size:0.75rem;font-weight:600;color:#aab">Top Camera</div>
+          <video id="simVideoTop" muted playsinline style="width:100%;display:block;background:#000"></video>
+          <div id="simVideoTopNone" style="padding:32px 0;text-align:center;font-size:0.78rem;color:#556">No video</div>
+        </div>
+        <div style="background:#1a1a2e;border-radius:8px;overflow:hidden">
+          <div style="padding:6px 10px;background:rgba(255,255,255,0.08);font-size:0.75rem;font-weight:600;color:#aab">Wrist Camera</div>
+          <video id="simVideoWrist" muted playsinline style="width:100%;display:block;background:#000"></video>
+          <div id="simVideoWristNone" style="padding:32px 0;text-align:center;font-size:0.78rem;color:#556">No video</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Playback Controls -->
+    <div class="config-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <button class="btn btn-sm" id="simPlayBtn" onclick="simTogglePlay()" disabled>&#9654; Play</button>
+        <button class="btn btn-sm btn-outline" onclick="simStepFrame(-1)" id="simPrevBtn" disabled>&#9664; Prev</button>
+        <button class="btn btn-sm btn-outline" onclick="simStepFrame(1)" id="simNextBtn" disabled>&#9654; Next</button>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <label class="form-label" style="margin:0;font-size:0.82rem">Speed</label>
+          <select id="simSpeed" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.82rem">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+          </select>
+          <label style="margin:0;font-size:0.82rem;display:flex;align-items:center;gap:4px;margin-left:12px;cursor:pointer">
+            <input type="checkbox" id="simShowAction" checked style="cursor:pointer"> Show Action
+          </label>
+        </div>
+      </div>
+      <input type="range" id="simScrubber" min="0" max="0" value="0" style="width:100%" disabled oninput="simScrub(this.value)">
+      <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:#888;margin-top:4px">
+        <span id="simTimeLabel">0:00.000</span>
+        <span id="simTotalLabel">0:00.000</span>
+      </div>
+    </div>
+  </div><!-- /page-simulation -->
+
   <!-- ==================== Fake Camera ==================== -->
   <div class="page" id="page-fakecam">
     <div class="page-title"><span>Fake</span> Camera</div>
@@ -2324,6 +2403,7 @@ conda run -n lerobot uvicorn train_api:app \
               <option value="">-- Select model --</option>
             </select>
             <button class="btn btn-sm" onclick="evalLoadModels()" style="background:#1a73e8">Refresh</button>
+            <button class="btn btn-sm" id="evalLoadAllBtn" onclick="evalShowLoadAllModels()" style="background:#607d8b;display:none">Load All Models from HF</button>
             <span id="evalModelStatus" style="font-size:0.82rem;color:#888"></span>
           </div>
           <div id="evalModelDownloadSection" style="display:none;margin-top:8px;padding:10px 14px;background:#fff3e0;border-radius:8px;border:1px solid #ffe0b2">
@@ -2963,7 +3043,7 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate';
+        const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate' || el.dataset.tab === 'simulation';
         rp.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
@@ -6116,8 +6196,11 @@ async function historyLoadJobDetail(jobId) {
     } else {
       actionBtn = `<button class="btn btn-sm btn-danger" onclick="historyDeleteJob('${jobId}')" style="font-size:0.72rem;padding:3px 10px">Delete</button>`;
     }
+    const allStatuses = ['running','queued','completed','success','failed','stopped','cancelled'];
+    const statusSelectHtml = (!isActive && !isQueued) ? `<select onchange="historyUpdateStatus('${jobId}',this.value)" style="font-size:0.72rem;border:1px solid #ddd;border-radius:4px;padding:2px 6px;color:#555;background:#fff;cursor:pointer">${allStatuses.map(s => `<option value="${s}" ${s===status?'selected':''}>${s.toUpperCase()}</option>`).join('')}</select>` : '';
     const buttonsHtml = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
       <span style="font-size:0.78rem;padding:2px 10px;border-radius:10px;background:${(statusColors[status]||'#888')}22;color:${statusColors[status]||'#888'};font-weight:600">${status.toUpperCase()}</span>
+      ${statusSelectHtml}
       <div style="flex:1"></div>
       ${actionBtn}
       <button class="btn btn-sm" onclick="historyLoadJobDetail('${jobId}')" style="background:#1a73e8;font-size:0.72rem;padding:3px 10px">Refresh</button>
@@ -6157,6 +6240,18 @@ async function historyCancelQueued(jobId) {
     trainCurrentJobId = null;
     trainLoadHistory();
     trainLoadQueue();
+  } catch(e) {}
+}
+
+async function historyUpdateStatus(jobId, newStatus) {
+  try {
+    await fetch(`/api/training/history/${jobId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({status: newStatus}),
+    });
+    historyLoadJobDetail(jobId);
+    trainLoadHistory();
   } catch(e) {}
 }
 
@@ -7589,6 +7684,8 @@ async function evalLoadModels() {
       sel.appendChild(o);
     });
     st.textContent = evalModels.length + ' models';
+    // Show "Load All Models from HF" if models loaded
+    document.getElementById('evalLoadAllBtn').style.display = evalModels.length ? '' : 'none';
   } catch(e) { st.textContent = 'Error: ' + e.message; }
 }
 
@@ -8642,6 +8739,104 @@ async function evalDeleteSession(sessionId) {
   } catch(e) {}
 }
 
+async function evalShowLoadAllModels() {
+  const st = document.getElementById('evalModelStatus');
+  st.textContent = 'Loading models...';
+  st.style.color = '#1a73e8';
+  // Re-fetch models
+  try {
+    const r = await fetch('/api/hf-models');
+    const d = await r.json();
+    if (!d.ok || !d.models || !d.models.length) {
+      st.textContent = 'No models found'; st.style.color = '#d93025'; return;
+    }
+    evalModels = d.models;
+    st.textContent = '';
+  } catch(e) { st.textContent = 'Error: ' + e.message; st.style.color = '#d93025'; return; }
+
+  // Build modal content
+  const body = document.getElementById('modalBody');
+  let rows = evalModels.map((m, i) => {
+    const status = m.local_exists
+      ? '<span style="color:#34a853;font-size:0.78rem">✓ Local</span>'
+      : '<span style="color:#e65100;font-size:0.78rem">Remote only</span>';
+    const date = m.last_modified ? new Date(m.last_modified).toLocaleString() : '—';
+    return `<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;transition:background 0.15s" onmouseenter="this.style.background='#f5f5f5'" onmouseleave="this.style.background=''">
+      <input type="checkbox" class="batchModelCb" value="${i}" checked style="width:18px;height:18px;cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500;font-size:0.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.name}</div>
+        <div style="font-size:0.75rem;color:#888">${date}</div>
+      </div>
+      ${status}
+    </label>`;
+  }).join('');
+
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:4px">Load / Update Models from HF</h3>
+    <p style="margin-bottom:12px;font-size:0.85rem;color:#666">Select models to download or update locally. Already downloaded models will be updated to the latest version.</p>
+    <div style="display:flex;gap:10px;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="document.querySelectorAll('.batchModelCb').forEach(c=>c.checked=true)" style="background:#888;font-size:0.75rem;padding:3px 10px">Select All</button>
+      <button class="btn btn-sm" onclick="document.querySelectorAll('.batchModelCb').forEach(c=>c.checked=false)" style="background:#888;font-size:0.75rem;padding:3px 10px">Deselect All</button>
+    </div>
+    <div style="max-height:400px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;margin-bottom:14px">
+      ${rows}
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="btn" id="batchDownloadConfirmBtn" onclick="evalBatchDownload()" style="background:#1a73e8;padding:8px 24px">Download Selected</button>
+      <button class="btn" onclick="closeModal()" style="background:#888;padding:8px 18px">Cancel</button>
+      <span id="batchDownloadStatus" style="font-size:0.82rem;color:#888"></span>
+    </div>
+    <pre id="batchDownloadLog" style="display:none;font-family:'SF Mono','Menlo',monospace;font-size:0.72rem;background:#1e1e1e;color:#d4d4d4;border-radius:6px;padding:8px 10px;max-height:200px;overflow-y:auto;white-space:pre-wrap;line-height:1.5;margin:10px 0 0"></pre>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+}
+
+let batchDownloadPollTimer = null;
+async function evalBatchDownload() {
+  const checkboxes = document.querySelectorAll('.batchModelCb:checked');
+  if (!checkboxes.length) return;
+  const models = Array.from(checkboxes).map(cb => {
+    const m = evalModels[parseInt(cb.value)];
+    return { repo_id: m.id, model_name: m.name };
+  });
+  const btn = document.getElementById('batchDownloadConfirmBtn');
+  const st = document.getElementById('batchDownloadStatus');
+  const logEl = document.getElementById('batchDownloadLog');
+  btn.disabled = true;
+  st.textContent = `Starting download of ${models.length} model(s)...`;
+  logEl.style.display = '';
+  logEl.textContent = '';
+  // Disable checkboxes
+  document.querySelectorAll('.batchModelCb').forEach(c => c.disabled = true);
+  try {
+    const r = await fetch('/api/model-download-batch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ models }),
+    });
+    const d = await r.json();
+    if (!d.ok) { st.textContent = 'Error: ' + d.error; btn.disabled = false; return; }
+    batchDownloadPollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch('/api/model-download/status');
+        const sd = await sr.json();
+        st.textContent = sd.status || 'Downloading...';
+        if (sd.log_lines && sd.log_lines.length) {
+          logEl.textContent = sd.log_lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (!sd.running) {
+          clearInterval(batchDownloadPollTimer);
+          st.innerHTML = '<span style="color:#34a853;font-weight:600">All downloads complete!</span>';
+          btn.disabled = false;
+          btn.textContent = 'Done';
+          btn.onclick = () => { closeModal(); evalLoadModels(); };
+        }
+      } catch(e) {}
+    }, 1500);
+  } catch(e) { st.textContent = 'Error: ' + e.message; btn.disabled = false; }
+}
+
 async function evalLoadSession(sessionId) {
   try {
     const r = await fetch(`/api/eval/sessions/${sessionId}`);
@@ -8700,6 +8895,522 @@ async function evalLoadSession(sessionId) {
     }
   } catch(e) {}
 }
+
+// ══════════ Simulation ══════════
+
+const SIM = {
+  scene: null, camera: null, renderer: null, controls: null,
+  frames: [], fps: 30, currentFrame: 0, playing: false, animId: null,
+  lastFrameTime: 0, robot: null, actionGhost: null, inited: false,
+  meshesLoaded: false,
+};
+
+// SO-101 URDF structure from MuammerBay/SO-ARM_ROS2_URDF
+// Joint chain: base → shoulder → upper_arm → lower_arm → wrist → gripper → jaw
+// All joints rotate around local Z axis in URDF frame
+
+const URDF_JOINTS = [
+  { name: 'Rotation',    parent: 'base',      child: 'shoulder',  xyz: [0.0207909, -0.0230745, 0.0948817], rpy: [-Math.PI, 0, Math.PI/2] },
+  { name: 'Pitch',       parent: 'shoulder',  child: 'upper_arm', xyz: [-0.0303992, -0.0182778, -0.0542],  rpy: [-Math.PI/2, -Math.PI/2, 0] },
+  { name: 'Elbow',       parent: 'upper_arm', child: 'lower_arm', xyz: [-0.11257, -0.028, 0],              rpy: [0, 0, Math.PI/2] },
+  { name: 'Wrist_Pitch', parent: 'lower_arm', child: 'wrist',     xyz: [-0.1349, 0.0052, 0],               rpy: [0, 0, -Math.PI/2] },
+  { name: 'Wrist_Roll',  parent: 'wrist',     child: 'gripper',   xyz: [0, -0.0611, 0.0181],               rpy: [Math.PI/2, 0, Math.PI] },
+  { name: 'Jaw',         parent: 'gripper',   child: 'jaw',       xyz: [0.0202, 0.0188, -0.0234],          rpy: [Math.PI/2, 0, 0] },
+];
+
+// Visual meshes per link: [{file, xyz, rpy}]
+const URDF_VISUALS = {
+  base: [
+    { file: 'base_motor_holder_so101_v1.stl', xyz: [0.0206915, 0.0221255, 0.0300817], rpy: [Math.PI/2, 0, 0] },
+    { file: 'base_so101_v2.stl', xyz: [0.0207909, 0.0221255, 0.0300817], rpy: [Math.PI/2, 0, 0] },
+    { file: 'sts3215_03a_v1.stl', xyz: [0.0207909, -0.0105745, 0.0761817], rpy: [0, 0, -Math.PI/2] },
+    { file: 'waveshare_mounting_plate_so101_v2.stl', xyz: [0.0205915, 0.0467435, 0.0798817], rpy: [Math.PI/2, 0, 0] },
+  ],
+  shoulder: [
+    { file: 'sts3215_03a_v1.stl', xyz: [-0.0303992, 0.000422241, -0.0417], rpy: [Math.PI/2, Math.PI/2, 0] },
+    { file: 'motor_holder_so101_base_v1.stl', xyz: [-0.0675992, -0.000177759, 0.0158499], rpy: [Math.PI/2, -Math.PI/2, 0] },
+    { file: 'rotation_pitch_so101_v1.stl', xyz: [0.0122008, 2.22413e-05, 0.0464], rpy: [-Math.PI/2, 0, 0] },
+  ],
+  upper_arm: [
+    { file: 'sts3215_03a_v1.stl', xyz: [-0.11257, -0.0155, 0.0187], rpy: [-Math.PI, 0, -Math.PI/2] },
+    { file: 'upper_arm_so101_v1.stl', xyz: [-0.065085, 0.012, 0.0182], rpy: [Math.PI, 0, 0] },
+  ],
+  lower_arm: [
+    { file: 'under_arm_so101_v1.stl', xyz: [-0.0648499, -0.032, 0.0182], rpy: [-Math.PI, 0, 0] },
+    { file: 'motor_holder_so101_wrist_v1.stl', xyz: [-0.0648499, -0.032, 0.018], rpy: [-Math.PI, 0, 0] },
+    { file: 'sts3215_03a_v1.stl', xyz: [-0.1224, 0.0052, 0.0187], rpy: [-Math.PI, 0, -Math.PI] },
+  ],
+  wrist: [
+    { file: 'sts3215_03a_no_horn_v1.stl', xyz: [0, -0.0424, 0.0306], rpy: [Math.PI/2, Math.PI/2, 0] },
+    { file: 'wrist_roll_pitch_so101_v2.stl', xyz: [0, -0.028, 0.0181], rpy: [-Math.PI/2, -Math.PI/2, 0] },
+  ],
+  gripper: [
+    { file: 'sts3215_03a_v1.stl', xyz: [0.0077, 0.0001, -0.0234], rpy: [-Math.PI/2, 0, 0] },
+    { file: 'wrist_roll_follower_so101_v1.stl', xyz: [0, -0.000218214, 0.000949706], rpy: [-Math.PI, 0, 0] },
+  ],
+  jaw: [
+    { file: 'moving_jaw_so101_v1.stl', xyz: [0, 0, 0.0189], rpy: [0, 0, 0] },
+  ],
+};
+
+function simRpyToEuler(rpy) {
+  // URDF RPY = roll(X), pitch(Y), yaw(Z) — applied as Z*Y*X
+  const e = new THREE.Euler(rpy[0], rpy[1], rpy[2], 'ZYX');
+  return e;
+}
+
+function simLoadMeshesForLink(linkName, parentGroup, material) {
+  const loader = new THREE.STLLoader();
+  const visuals = URDF_VISUALS[linkName] || [];
+  visuals.forEach(v => {
+    loader.load('/static/meshes/' + v.file, function(geometry) {
+      geometry.computeVertexNormals();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(v.xyz[0], v.xyz[1], v.xyz[2]);
+      mesh.setRotationFromEuler(simRpyToEuler(v.rpy));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      parentGroup.add(mesh);
+    });
+  });
+}
+
+function simCreateRobotArm(mainColor, opacity) {
+  const printedMat = new THREE.MeshPhongMaterial({
+    color: mainColor, transparent: opacity < 1, opacity,
+    shininess: 30, specular: 0x222222,
+  });
+  const servoMat = new THREE.MeshPhongMaterial({
+    color: 0x1a1a1a, transparent: opacity < 1, opacity,
+    shininess: 60, specular: 0x444444,
+  });
+
+  const group = new THREE.Group();
+
+  // base link (static)
+  const baseGroup = new THREE.Group();
+  group.add(baseGroup);
+  simLoadMeshesForLink('base', baseGroup, printedMat);
+
+  // Joint 0: Rotation (shoulder_pan) — base → shoulder
+  const j0 = URDF_JOINTS[0];
+  const joint0 = new THREE.Group();
+  joint0.position.set(j0.xyz[0], j0.xyz[1], j0.xyz[2]);
+  joint0.setRotationFromEuler(simRpyToEuler(j0.rpy));
+  baseGroup.add(joint0);
+
+  // shoulder link visuals inside joint0's rotatable child
+  const shoulder = new THREE.Group();
+  joint0.add(shoulder);
+  simLoadMeshesForLink('shoulder', shoulder, printedMat);
+
+  // Joint 1: Pitch (shoulder_lift) — shoulder → upper_arm
+  const j1 = URDF_JOINTS[1];
+  const joint1 = new THREE.Group();
+  joint1.position.set(j1.xyz[0], j1.xyz[1], j1.xyz[2]);
+  joint1.setRotationFromEuler(simRpyToEuler(j1.rpy));
+  shoulder.add(joint1);
+
+  const upperArm = new THREE.Group();
+  joint1.add(upperArm);
+  simLoadMeshesForLink('upper_arm', upperArm, printedMat);
+
+  // Joint 2: Elbow — upper_arm → lower_arm
+  const j2 = URDF_JOINTS[2];
+  const joint2 = new THREE.Group();
+  joint2.position.set(j2.xyz[0], j2.xyz[1], j2.xyz[2]);
+  joint2.setRotationFromEuler(simRpyToEuler(j2.rpy));
+  upperArm.add(joint2);
+
+  const lowerArm = new THREE.Group();
+  joint2.add(lowerArm);
+  simLoadMeshesForLink('lower_arm', lowerArm, printedMat);
+
+  // Joint 3: Wrist_Pitch — lower_arm → wrist
+  const j3 = URDF_JOINTS[3];
+  const joint3 = new THREE.Group();
+  joint3.position.set(j3.xyz[0], j3.xyz[1], j3.xyz[2]);
+  joint3.setRotationFromEuler(simRpyToEuler(j3.rpy));
+  lowerArm.add(joint3);
+
+  const wristGroup = new THREE.Group();
+  joint3.add(wristGroup);
+  simLoadMeshesForLink('wrist', wristGroup, printedMat);
+
+  // Joint 4: Wrist_Roll — wrist → gripper
+  const j4 = URDF_JOINTS[4];
+  const joint4 = new THREE.Group();
+  joint4.position.set(j4.xyz[0], j4.xyz[1], j4.xyz[2]);
+  joint4.setRotationFromEuler(simRpyToEuler(j4.rpy));
+  wristGroup.add(joint4);
+
+  const gripperGroup = new THREE.Group();
+  joint4.add(gripperGroup);
+  simLoadMeshesForLink('gripper', gripperGroup, printedMat);
+
+  // Joint 5: Jaw — gripper → jaw
+  const j5 = URDF_JOINTS[5];
+  const joint5 = new THREE.Group();
+  joint5.position.set(j5.xyz[0], j5.xyz[1], j5.xyz[2]);
+  joint5.setRotationFromEuler(simRpyToEuler(j5.rpy));
+  gripperGroup.add(joint5);
+
+  const jawGroup = new THREE.Group();
+  joint5.add(jawGroup);
+  simLoadMeshesForLink('jaw', jawGroup, printedMat);
+
+  // Store references for joint rotation
+  // Each URDF joint rotates around its local Z axis
+  // We store the parent transform group to apply rotation on Z
+  // The structure is: parentLink → jointTransform (fixed origin) → childGroup
+  // Rotation goes on the jointTransform's Z
+  group.userData = {
+    // jointTransforms[i] is the group whose local Z we rotate
+    jointTransforms: [joint0, joint1, joint2, joint3, joint4, joint5],
+    // Store initial rotations (from URDF rpy) so we can compose with joint angle
+    initialQuats: [],
+  };
+
+  // Save initial quaternions
+  [joint0, joint1, joint2, joint3, joint4, joint5].forEach(jt => {
+    group.userData.initialQuats.push(jt.quaternion.clone());
+  });
+
+  return group;
+}
+
+function simApplyJoints(robot, jointValues) {
+  if (!robot || !jointValues || jointValues.length < 6) return;
+  const jts = robot.userData.jointTransforms;
+  const initQ = robot.userData.initialQuats;
+  const deg = Math.PI / 180;
+
+  // Map dataset joints to URDF joints:
+  // dataset[0]=shoulder_pan  → URDF Rotation (joint0)
+  // dataset[1]=shoulder_lift → URDF Pitch (joint1)
+  // dataset[2]=elbow_flex    → URDF Elbow (joint2)
+  // dataset[3]=wrist_flex    → URDF Wrist_Pitch (joint3)
+  // dataset[4]=wrist_roll    → URDF Wrist_Roll (joint4)
+  // dataset[5]=gripper       → URDF Jaw (joint5)
+
+  for (let i = 0; i < 6; i++) {
+    let angle = jointValues[i] * deg;
+    // For gripper (index 5): map 0-100 range to URDF jaw range (-0.17 to 1.75 rad)
+    if (i === 5) {
+      angle = (jointValues[5] / 100.0) * 1.74533;
+    }
+    // Apply: initial URDF rotation * joint rotation around Z
+    const jointRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+    jts[i].quaternion.copy(initQ[i]).multiply(jointRot);
+  }
+}
+
+function simInit() {
+  if (SIM.inited) return;
+  const canvas = document.getElementById('simCanvas');
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+
+  SIM.scene = new THREE.Scene();
+  SIM.scene.background = new THREE.Color(0x1a1a2e);
+
+  SIM.camera = new THREE.PerspectiveCamera(45, w / h, 0.005, 10);
+  SIM.camera.position.set(0.35, 0.30, 0.35);
+  SIM.camera.lookAt(0, 0.12, 0);
+
+  SIM.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  SIM.renderer.setSize(w, h);
+  SIM.renderer.setPixelRatio(window.devicePixelRatio);
+  SIM.renderer.shadowMap.enabled = true;
+
+  SIM.controls = new THREE.OrbitControls(SIM.camera, canvas);
+  SIM.controls.target.set(0, 0.12, 0);
+  SIM.controls.enableDamping = true;
+  SIM.controls.dampingFactor = 0.1;
+
+  // Lights
+  SIM.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(0.5, 1, 0.5);
+  dirLight.castShadow = true;
+  SIM.scene.add(dirLight);
+  const fillLight = new THREE.DirectionalLight(0x8899cc, 0.35);
+  fillLight.position.set(-0.5, 0.3, -0.5);
+  SIM.scene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0xffffff, 0.2);
+  rimLight.position.set(0, 0.5, -1);
+  SIM.scene.add(rimLight);
+
+  // Ground grid
+  const grid = new THREE.GridHelper(0.6, 24, 0x444466, 0x2a2a44);
+  SIM.scene.add(grid);
+
+  // Ground plane
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.8, 0.8),
+    new THREE.MeshPhongMaterial({ color: 0x222240, transparent: true, opacity: 0.6 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.001;
+  ground.receiveShadow = true;
+  SIM.scene.add(ground);
+
+  // Axes helper
+  const axes = new THREE.AxesHelper(0.06);
+  axes.position.y = 0.001;
+  SIM.scene.add(axes);
+
+  // Create robot (state = blue-ish)
+  // URDF uses Z-up, Three.js uses Y-up → rotate -90° around X
+  SIM.robot = simCreateRobotArm(0x4488bb, 1.0);
+  SIM.robot.rotation.x = -Math.PI / 2;
+  SIM.scene.add(SIM.robot);
+
+  // Create action ghost (semi-transparent orange)
+  SIM.actionGhost = simCreateRobotArm(0xdd6633, 0.3);
+  SIM.actionGhost.rotation.x = -Math.PI / 2;
+  SIM.scene.add(SIM.actionGhost);
+
+  SIM.inited = true;
+
+  // Render loop
+  function renderLoop() {
+    requestAnimationFrame(renderLoop);
+    SIM.controls.update();
+    SIM.renderer.render(SIM.scene, SIM.camera);
+  }
+  renderLoop();
+
+  // Resize handler
+  const ro = new ResizeObserver(() => {
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    SIM.renderer.setSize(cw, ch);
+    SIM.camera.aspect = cw / ch;
+    SIM.camera.updateProjectionMatrix();
+  });
+  ro.observe(canvas);
+}
+
+function simFormatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(3)}`;
+}
+
+const JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper'];
+
+function simUpdateDisplay() {
+  const f = SIM.frames[SIM.currentFrame];
+  if (!f) return;
+
+  simApplyJoints(SIM.robot, f.state);
+  const showAction = document.getElementById('simShowAction').checked;
+  SIM.actionGhost.visible = showAction;
+  if (showAction) simApplyJoints(SIM.actionGhost, f.action);
+
+  document.getElementById('simScrubber').value = SIM.currentFrame;
+  document.getElementById('simTimeLabel').textContent = simFormatTime(SIM.currentFrame / SIM.fps);
+
+  // Joint info overlay
+  let html = '<b>State</b><br>';
+  f.state.forEach((v, i) => { html += `${JOINT_NAMES[i]}: ${v.toFixed(1)}&deg;<br>`; });
+  if (showAction) {
+    html += '<br><b style="color:#ff6666">Action</b><br>';
+    f.action.forEach((v, i) => { html += `${JOINT_NAMES[i]}: ${v.toFixed(1)}&deg;<br>`; });
+  }
+  document.getElementById('simJointInfo').innerHTML = html;
+  document.getElementById('simFrameInfo').textContent = `Frame ${SIM.currentFrame + 1} / ${SIM.frames.length}`;
+
+  // Sync camera videos
+  simSyncVideos();
+}
+
+function simTogglePlay() {
+  if (SIM.frames.length === 0) return;
+  SIM.playing = !SIM.playing;
+  document.getElementById('simPlayBtn').innerHTML = SIM.playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
+  if (SIM.playing) {
+    SIM.lastFrameTime = performance.now();
+    simPlayLoop();
+  }
+}
+
+function simPlayLoop() {
+  if (!SIM.playing) return;
+  const now = performance.now();
+  const speed = parseFloat(document.getElementById('simSpeed').value) || 1;
+  const frameInterval = 1000 / (SIM.fps * speed);
+
+  if (now - SIM.lastFrameTime >= frameInterval) {
+    SIM.currentFrame++;
+    if (SIM.currentFrame >= SIM.frames.length) {
+      SIM.currentFrame = 0; // loop
+    }
+    SIM.lastFrameTime = now;
+    simUpdateDisplay();
+  }
+  SIM.animId = requestAnimationFrame(simPlayLoop);
+}
+
+function simStepFrame(delta) {
+  if (SIM.frames.length === 0) return;
+  SIM.playing = false;
+  document.getElementById('simPlayBtn').innerHTML = '&#9654; Play';
+  SIM.currentFrame = Math.max(0, Math.min(SIM.frames.length - 1, SIM.currentFrame + delta));
+  simUpdateDisplay();
+}
+
+function simScrub(val) {
+  SIM.currentFrame = parseInt(val);
+  simUpdateDisplay();
+}
+
+async function simLoadDatasets() {
+  try {
+    const res = await fetch('/api/datasets');
+    const data = await res.json();
+    const sel = document.getElementById('simDataset');
+    sel.innerHTML = '<option value="">-- Select dataset --</option>';
+    (data.datasets || []).forEach(ds => {
+      sel.innerHTML += `<option value="${ds.name}">${ds.name} (${ds.total_episodes} eps, ${ds.total_frames} frames)</option>`;
+    });
+  } catch (e) {}
+}
+
+document.getElementById('simDataset').addEventListener('change', async function() {
+  const name = this.value;
+  const epSel = document.getElementById('simEpisode');
+  const loadBtn = document.getElementById('simLoadBtn');
+  epSel.innerHTML = '<option value="">-- Select episode --</option>';
+  epSel.disabled = true;
+  loadBtn.disabled = true;
+  if (!name) return;
+
+  document.getElementById('simLoadStatus').textContent = 'Loading episodes...';
+  try {
+    const res = await fetch(`/api/datasets/${encodeURIComponent(name)}/episodes`);
+    const data = await res.json();
+    if (!data.ok) { document.getElementById('simLoadStatus').textContent = data.error; return; }
+    SIM.fps = data.fps || 30;
+    const eps = data.episodes || [];
+    if (eps.length === 0) {
+      // Fallback: use total_episodes count
+      for (let i = 0; i < data.total_episodes; i++) {
+        epSel.innerHTML += `<option value="${i}">Episode ${i}</option>`;
+      }
+    } else {
+      eps.forEach(ep => {
+        epSel.innerHTML += `<option value="${ep.index}">Episode ${ep.index} (${ep.length} frames)</option>`;
+      });
+    }
+    epSel.disabled = false;
+    document.getElementById('simLoadStatus').textContent = `${eps.length || data.total_episodes} episodes`;
+  } catch (e) {
+    document.getElementById('simLoadStatus').textContent = 'Error loading episodes';
+  }
+});
+
+document.getElementById('simEpisode').addEventListener('change', function() {
+  document.getElementById('simLoadBtn').disabled = !this.value;
+});
+
+function simSetupVideo(videoEl, noneEl, videoInfo) {
+  if (!videoInfo || !videoInfo.path) {
+    videoEl.style.display = 'none';
+    noneEl.style.display = 'block';
+    videoEl.removeAttribute('src');
+    return;
+  }
+  noneEl.style.display = 'none';
+  videoEl.style.display = 'block';
+  videoEl.src = videoInfo.path;
+  videoEl.currentTime = videoInfo.from_timestamp || 0;
+  videoEl.load();
+}
+
+function simSyncVideos() {
+  if (!SIM.videos) return;
+  const t = SIM.currentFrame / SIM.fps;
+  const topV = document.getElementById('simVideoTop');
+  const wristV = document.getElementById('simVideoWrist');
+  if (SIM.videos['observation.images.top']) {
+    topV.currentTime = (SIM.videos['observation.images.top'].from_timestamp || 0) + t;
+  }
+  if (SIM.videos['observation.images.wrist']) {
+    wristV.currentTime = (SIM.videos['observation.images.wrist'].from_timestamp || 0) + t;
+  }
+}
+
+async function simLoadEpisode() {
+  const dsName = document.getElementById('simDataset').value;
+  const epIdx = document.getElementById('simEpisode').value;
+  if (!dsName || epIdx === '') return;
+
+  const status = document.getElementById('simLoadStatus');
+  const loadBtn = document.getElementById('simLoadBtn');
+  loadBtn.disabled = true;
+  status.textContent = 'Loading frame data...';
+
+  try {
+    const res = await fetch(`/api/datasets/${encodeURIComponent(dsName)}/episode/${epIdx}`);
+    const data = await res.json();
+    if (!data.ok) { status.textContent = data.error; loadBtn.disabled = false; return; }
+
+    SIM.frames = data.frames;
+    SIM.fps = data.fps || 30;
+    SIM.currentFrame = 0;
+    SIM.playing = false;
+    SIM.videos = data.videos || {};
+
+    simInit();
+
+    // Setup camera videos
+    simSetupVideo(
+      document.getElementById('simVideoTop'),
+      document.getElementById('simVideoTopNone'),
+      SIM.videos['observation.images.top']
+    );
+    simSetupVideo(
+      document.getElementById('simVideoWrist'),
+      document.getElementById('simVideoWristNone'),
+      SIM.videos['observation.images.wrist']
+    );
+
+    // Enable controls
+    document.getElementById('simPlayBtn').disabled = false;
+    document.getElementById('simPlayBtn').innerHTML = '&#9654; Play';
+    document.getElementById('simPrevBtn').disabled = false;
+    document.getElementById('simNextBtn').disabled = false;
+    document.getElementById('simScrubber').disabled = false;
+    document.getElementById('simScrubber').max = SIM.frames.length - 1;
+    document.getElementById('simScrubber').value = 0;
+    document.getElementById('simTotalLabel').textContent = simFormatTime(SIM.frames.length / SIM.fps);
+
+    simUpdateDisplay();
+    status.textContent = `Loaded ${SIM.frames.length} frames @ ${SIM.fps} fps`;
+    loadBtn.disabled = false;
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    loadBtn.disabled = false;
+  }
+}
+
+// Load datasets when simulation tab is shown
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    if (item.dataset.tab === 'simulation') {
+      simLoadDatasets();
+      if (SIM.inited) {
+        // Resize canvas on tab switch
+        setTimeout(() => {
+          const canvas = document.getElementById('simCanvas');
+          SIM.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+          SIM.camera.aspect = canvas.clientWidth / canvas.clientHeight;
+          SIM.camera.updateProjectionMatrix();
+        }, 50);
+      }
+    }
+  });
+});
 
 </script>
 
