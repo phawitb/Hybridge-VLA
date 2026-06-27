@@ -9379,7 +9379,9 @@ document.getElementById('simDataset').addEventListener('change', async function(
       }
     } else {
       eps.forEach(ep => {
-        epSel.innerHTML += `<option value="${ep.index}">Episode ${ep.index} (${ep.length} frames)</option>`;
+        const epIdx = ep.episode_index ?? ep.index ?? 0;
+        const epLen = ep.length ?? ep.num_frames ?? '?';
+        epSel.innerHTML += `<option value="${epIdx}">Episode ${epIdx} (${epLen} frames)</option>`;
       });
     }
     epSel.disabled = false;
@@ -9924,7 +9926,9 @@ document.getElementById('odDataset').addEventListener('change', async function()
     const data = await res.json();
     if (data.ok && data.episodes) {
       data.episodes.forEach(ep => {
-        epSel.innerHTML += `<option value="${ep.episode_index}">Episode ${ep.episode_index} (${ep.num_frames} frames)</option>`;
+        const epIdx = ep.episode_index ?? ep.index ?? i;
+        const epLen = ep.length ?? ep.num_frames ?? '?';
+        epSel.innerHTML += `<option value="${epIdx}">Episode ${epIdx} (${epLen} frames)</option>`;
       });
       epSel.disabled = false;
     }
