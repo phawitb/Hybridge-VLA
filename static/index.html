@@ -10094,6 +10094,7 @@ document.getElementById('odDetectBtn').addEventListener('click', async function(
       }),
     });
     const data = await res.json();
+    console.log('[OD] Backend response:', { ok: data.ok, objects: data.objects?.length, has_image: !!data.frame_image_b64, raw_snippet: data.gemini_raw?.substring(0, 200) });
 
     if (!data.ok) {
       status.textContent = data.error || 'Detection failed';
@@ -10110,12 +10111,30 @@ document.getElementById('odDetectBtn').addEventListener('click', async function(
 });
 
 function odDrawResults(data) {
-  OD.templates = []; // clear previous templates
+  OD.templates = [];
+  console.log('[OD] odDrawResults called, objects:', data.objects?.length, 'image_b64 length:', data.frame_image_b64?.length);
+
   const resultsDiv = document.getElementById('odResults');
   resultsDiv.style.display = 'block';
 
+  // Show Gemini raw output immediately (outside img.onload)
+  document.getElementById('odGeminiRaw').textContent = data.gemini_raw || '';
+
+  // Update task text
+  if (data.task_text) {
+    document.getElementById('odTaskText').style.display = 'block';
+    document.getElementById('odTaskContent').textContent = data.task_text;
+  }
+
+  if (!data.frame_image_b64) {
+    console.error('[OD] No frame_image_b64 in response');
+    return;
+  }
+
   const img = new Image();
+  img.onerror = (e) => console.error('[OD] Image load failed:', e);
   img.onload = () => {
+    console.log('[OD] Image loaded:', img.width, 'x', img.height);
     const canvas = document.getElementById('odAnnotatedCanvas');
     canvas.width = img.width;
     canvas.height = img.height;
@@ -10126,64 +10145,65 @@ function odDrawResults(data) {
     const cropsDiv = document.getElementById('odCrops');
     cropsDiv.innerHTML = '';
 
-    (data.objects || []).forEach((obj, i) => {
+    const objects = data.objects || [];
+    console.log('[OD] Drawing', objects.length, 'objects');
+
+    if (objects.length === 0) {
+      cropsDiv.innerHTML = '<div style="color:#999;font-size:0.85rem">No objects detected. Try adjusting the prompt.</div>';
+    }
+
+    objects.forEach((obj, i) => {
       const bbox = obj.bbox || [0, 0, 0, 0];
       const [x1, y1, x2, y2] = bbox;
       const color = obj.color_hex || colors[i % colors.length];
       const conf = obj.confidence != null ? obj.confidence : 1;
+      console.log(`[OD] Object ${i}: "${obj.name}" bbox=[${x1},${y1},${x2},${y2}] raw=${JSON.stringify(obj.bbox_raw)} conf=${conf}`);
 
       // Draw bbox
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-      // Draw label background
+      // Draw label
       ctx.font = 'bold 14px sans-serif';
       const label = `${obj.name} ${(conf * 100).toFixed(0)}%`;
       const tw = ctx.measureText(label).width;
       ctx.fillStyle = color;
-      ctx.fillRect(x1, y1 - 22, tw + 10, 22);
+      ctx.fillRect(x1, Math.max(0, y1 - 22), tw + 10, 22);
       ctx.fillStyle = '#fff';
-      ctx.fillText(label, x1 + 5, y1 - 6);
+      ctx.fillText(label, x1 + 5, Math.max(16, y1 - 6));
 
-      // Create crop card
-      const cw = Math.max(1, x2 - x1), ch = Math.max(1, y2 - y1);
+      // Create crop
+      const cw = Math.max(10, x2 - x1), ch = Math.max(10, y2 - y1);
+      const cx = Math.max(0, Math.min(x1, img.width - cw));
+      const cy = Math.max(0, Math.min(y1, img.height - ch));
       const cropCanvas = document.createElement('canvas');
       cropCanvas.width = cw;
       cropCanvas.height = ch;
-      cropCanvas.getContext('2d').drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
+      cropCanvas.getContext('2d').drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch);
 
-      const card = document.createElement('div');
       const cropB64 = cropCanvas.toDataURL('image/jpeg', 0.9);
-      card.style.cssText = 'text-align:center;border:2px solid ' + color + ';border-radius:8px;padding:8px;background:#fff;min-width:100px';
+      const card = document.createElement('div');
+      card.style.cssText = 'text-align:center;border:2px solid ' + color + ';border-radius:8px;padding:8px;background:#fff;min-width:120px';
       card.innerHTML = `
-        <img src="${cropB64}" style="max-width:150px;max-height:120px;border-radius:4px;display:block;margin:0 auto 6px">
-        <div style="font-size:0.82rem;font-weight:600;color:${color}">${obj.name}</div>
-        <div style="font-size:0.72rem;color:#888">${(conf * 100).toFixed(0)}% conf</div>
-        <div style="font-size:0.68rem;color:#aaa">px [${x1},${y1},${x2},${y2}]</div>
+        <img src="${cropB64}" style="max-width:180px;max-height:140px;border-radius:4px;display:block;margin:0 auto 6px">
+        <div style="font-size:0.85rem;font-weight:600;color:${color}">${obj.name}</div>
+        <div style="font-size:0.75rem;color:#888">${(conf * 100).toFixed(0)}% conf</div>
+        <div style="font-size:0.7rem;color:#aaa">px [${x1},${y1},${x2},${y2}]</div>
         <div style="font-size:0.65rem;color:#ccc">raw ${JSON.stringify(obj.bbox_raw||[])}</div>
       `;
       cropsDiv.appendChild(card);
 
-      // Store crop for template matching
       OD.templates.push({ name: obj.name, image_b64: cropB64, bbox: bbox });
     });
 
     // Show Detect All button
-    document.getElementById('odDetectAllBtn').style.display = 'inline-block';
-    document.getElementById('odAllResults').style.display = 'none';
-
-    // Update task text if returned
-    if (data.task_text) {
-      document.getElementById('odTaskText').style.display = 'block';
-      document.getElementById('odTaskContent').textContent = data.task_text;
+    if (objects.length > 0) {
+      document.getElementById('odDetectAllBtn').style.display = 'inline-block';
     }
+    document.getElementById('odAllResults').style.display = 'none';
   };
   img.src = 'data:image/jpeg;base64,' + data.frame_image_b64;
-
-  // Show Gemini raw output
-  const rawEl = document.getElementById('odGeminiRaw');
-  rawEl.textContent = data.gemini_raw || '';
 }
 
 async function odDetectAllEpisodes() {
