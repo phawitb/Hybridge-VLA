@@ -1,12 +1,31 @@
 {
-  "rotation": 0,
-  "translate_x": 0,
-  "translate_y": 0,
-  "scale": 1,
-  "shear": 0,
-  "brightness": 1,
-  "contrast": 1,
-  "saturation": 1,
-  "noise": 0,
-  "blur": 0
+  "bbox_overlay": {
+    "boxes": [
+      {
+        "name": "pink",
+        "bbox": [
+          162,
+          66,
+          201,
+          92
+        ],
+        "color_hex": "#FF6B6B"
+      },
+      {
+        "name": "green",
+        "bbox": [
+          210,
+          10,
+          273,
+          70
+        ],
+        "color_hex": "#4ECDC4"
+      }
+    ],
+    "line_width": 2,
+    "show_label": false,
+    "frame_width": 320,
+    "frame_height": 240,
+    "cam_index": 1
+  }
 }

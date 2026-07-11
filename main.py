@@ -532,6 +532,17 @@ async def fakecam_save_params(request: Request):
     return {"ok": True, "path": str(path)}
 
 
+@app.get("/api/fakecam/read-params-file")
+async def fakecam_read_params_file():
+    """Read current fakecam_params.json from disk."""
+    path = ROOT / "fakecam_params.json"
+    if not path.exists():
+        return {"ok": False, "error": "fakecam_params.json not found"}
+    with open(path) as f:
+        params = json.load(f)
+    return {"ok": True, "params": params}
+
+
 @app.get("/api/fakecam/status")
 async def fakecam_status():
     return {
@@ -1283,7 +1294,11 @@ async def list_datasets():
 
 @app.get("/api/datasets/{name}/episodes")
 async def list_dataset_episodes(name: str):
-    """List episodes in a dataset with frame counts."""
+    """List episodes in a dataset with full metadata.
+
+    The Datasets player needs the video timestamp/chunk/file fields for
+    synced playback. Keep index/length aliases for older Simulation UI code.
+    """
     import pyarrow.parquet as pq
 
     ds_dir = ROOT / "data" / name
@@ -1305,12 +1320,18 @@ async def list_dataset_episodes(name: str):
                         tbl = pq.read_table(str(pf))
                         d = tbl.to_pydict()
                         for i in range(len(d.get("episode_index", []))):
-                            episodes.append({
-                                "index": d["episode_index"][i],
-                                "length": d["length"][i] if "length" in d and i < len(d["length"]) else 0,
-                            })
+                            row = {}
+                            for k, v in d.items():
+                                val = v[i]
+                                if hasattr(val, "tolist"):
+                                    val = val.tolist()
+                                row[k] = val
+                            row.setdefault("index", row.get("episode_index", len(episodes)))
+                            row.setdefault("length", row.get("num_frames", 0))
+                            episodes.append(row)
                     except Exception:
                         pass
+    episodes.sort(key=lambda r: r.get("episode_index", r.get("index", 0)))
 
     return {"ok": True, "fps": fps, "total_episodes": info.get("total_episodes", 0), "episodes": episodes}
 
@@ -2105,7 +2126,6 @@ async def combine_datasets(request: Request):
 
         # Use first source as template for info.json structure
         base_info = dict(sources[0]["info"])
-        fps = base_info.get("fps", 30)
 
         # Collect all tasks (deduplicate)
         all_tasks = []
@@ -2214,7 +2234,10 @@ async def combine_datasets(request: Request):
                 new_meta["dataset_from_index"] = ep_global_start
                 new_meta["dataset_to_index"] = global_frame_idx
 
-                # Video timestamps — reference original video files
+                # Video timestamps — preserve original from/to timestamps.
+                # The player handles video-data alignment using to_ts - data_dur
+                # as the effective video start, which correctly handles recordings
+                # where from_timestamp includes pre-roll (idle) time.
                 for cam in ["observation.images.top", "observation.images.wrist"]:
                     cam_key = f"videos/{cam}"
                     if ep_meta:
@@ -2540,6 +2563,96 @@ async def delete_dataset(name: str):
         shutil.rmtree(dataset_dir)
         print(f"[Dataset] Deleted dataset: {name}")
         return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/datasets/{name}/update-task")
+async def update_dataset_task(name: str, request: Request):
+    """Update the task instruction. If 'episodes' list provided, only update those episodes."""
+    data = await request.json()
+    new_task = data.get("task", "").strip()
+    if not new_task:
+        return {"ok": False, "error": "Task instruction is required"}
+    dataset_dir = ROOT / "data" / name
+    if not dataset_dir.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    tasks_path = dataset_dir / "meta" / "tasks.parquet"
+    if not tasks_path.exists():
+        return {"ok": False, "error": "tasks.parquet not found"}
+    selected_episodes = data.get("episodes", None)  # None = all, list = specific
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow as pa
+
+        # Read current tasks
+        tbl = pq.read_table(str(tasks_path))
+        td = tbl.to_pydict()
+        old_tasks = td.get("task", [])
+        old_task = old_tasks[0] if old_tasks else ""
+
+        # Helper: update tasks column in an episode parquet file
+        def _update_ep_file(pf, ep_filter=None):
+            ep_tbl = pq.read_table(str(pf))
+            ep_d = ep_tbl.to_pydict()
+            if "tasks" not in ep_d or "episode_index" not in ep_d:
+                return 0
+            count = 0
+            indices = ep_d["episode_index"]
+            new_tasks_col = []
+            for j, task_list in enumerate(ep_d["tasks"]):
+                should_update = ep_filter is None or indices[j] in ep_filter
+                if should_update:
+                    if isinstance(task_list, list):
+                        new_tasks_col.append([new_task] * len(task_list))
+                    else:
+                        new_tasks_col.append(new_task)
+                    count += 1
+                else:
+                    new_tasks_col.append(task_list)
+            if count > 0:
+                ep_d["tasks"] = new_tasks_col
+                pq.write_table(pa.table(ep_d), str(pf))
+            return count
+
+        ep_filter = set(selected_episodes) if selected_episodes is not None else None
+        updated_eps = 0
+
+        # Update episode parquet files (meta/episodes/chunk-*/file-*.parquet)
+        ep_dir = dataset_dir / "meta" / "episodes"
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                updated_eps += _update_ep_file(pf, ep_filter)
+
+        # Legacy episodes.parquet
+        legacy_ep = dataset_dir / "meta" / "episodes.parquet"
+        if legacy_ep.exists():
+            _update_ep_file(legacy_ep, ep_filter)
+
+        # Update tasks.parquet: add new_task if not already present
+        all_tasks_set = set(old_tasks)
+        all_tasks_set.add(new_task)
+        # Rebuild tasks.parquet: collect all unique tasks from episode files
+        unique_tasks = set()
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                ep_tbl = pq.read_table(str(pf))
+                ep_d = ep_tbl.to_pydict()
+                for task_list in ep_d.get("tasks", []):
+                    if isinstance(task_list, list):
+                        unique_tasks.update(task_list)
+                    else:
+                        unique_tasks.add(task_list)
+        if not unique_tasks:
+            unique_tasks = all_tasks_set
+        unique_tasks_list = sorted(unique_tasks)
+        td["task"] = unique_tasks_list
+        td["task_index"] = list(range(len(unique_tasks_list)))
+        pq.write_table(pa.table(td), str(tasks_path))
+
+        scope = f"{updated_eps} episodes" if selected_episodes else "all episodes"
+        print(f"[Dataset] Updated task for {name}: -> '{new_task}' ({scope})")
+        return {"ok": True, "task": new_task, "updated_episodes": updated_eps}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -3781,10 +3894,8 @@ async def delete_episodes(name: str, request: Request):
         info["splits"] = {"train": f"0:{new_total_episodes}"}
         info_path.write_text(json.dumps(info, indent=4))
 
-        # --- 6. Delete stats.json (will be regenerated on next train) ---
-        stats_path = dataset_dir / "meta" / "stats.json"
-        if stats_path.exists():
-            stats_path.unlink()
+        # --- 6. Regenerate stats.json ---
+        _compute_stats_json(all_data_rows, dataset_dir)
 
         # Note: video files are left as-is — timestamps in episode metadata
         # still point to the correct segments within the shared mp4 files.
@@ -3796,6 +3907,215 @@ async def delete_episodes(name: str, request: Request):
             "deleted": deleted_count,
             "remaining_episodes": new_total_episodes,
             "remaining_frames": new_total_frames,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/datasets/{name}/remove-idle")
+async def remove_idle(name: str, request: Request):
+    """Remove idle frames from start/end of each episode.
+
+    Idle = frames where all joint velocities are below a threshold.
+    Trims leading and trailing idle frames from each episode.
+    """
+    import numpy as np
+    import pyarrow.parquet as pq
+    import pyarrow as pa
+
+    body = await request.json()
+    threshold = body.get("threshold", 0.5)  # velocity threshold
+    min_idle_frames = body.get("min_idle_frames", 5)  # minimum consecutive idle frames to trim
+
+    dataset_dir = ROOT / "data" / name
+    info_path = dataset_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    try:
+        info = json.loads(info_path.read_text())
+
+        # --- 1. Read all data rows ---
+        data_dir = dataset_dir / "data"
+        all_rows = []
+        if data_dir.exists():
+            for pf in sorted(data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    all_rows.append(row)
+
+        if not all_rows:
+            return {"ok": False, "error": "No data found"}
+
+        # --- 2. Group by episode and detect idle ---
+        episodes = {}
+        for row in all_rows:
+            ep = row["episode_index"]
+            episodes.setdefault(ep, []).append(row)
+
+        total_trimmed = 0
+        kept_rows = []
+        fps = info.get("fps", 30)
+        # Track trim offsets per episode for updating video timestamps
+        ep_trim_offsets = {}  # ep_idx -> (start_trimmed, end_trimmed)
+
+        for ep_idx in sorted(episodes.keys()):
+            ep_rows = sorted(episodes[ep_idx], key=lambda r: r["frame_index"])
+            n = len(ep_rows)
+
+            # Compute velocity (diff of action/state) for arm joints only (exclude gripper)
+            actions = [r.get("action", r.get("observation.state", [0]*6)) for r in ep_rows]
+            joint_count = min(len(actions[0]) - 1, 5)  # exclude gripper (last joint)
+            velocities = np.zeros(n)
+            for i in range(1, n):
+                diff = sum(abs(actions[i][j] - actions[i-1][j]) for j in range(joint_count))
+                velocities[i] = diff
+
+            # Smooth velocity
+            hw = 3
+            smoothed = np.zeros(n)
+            for i in range(n):
+                lo, hi = max(0, i - hw), min(n - 1, i + hw)
+                smoothed[i] = np.mean(velocities[lo:hi + 1])
+
+            # Find first non-idle from start
+            start = 0
+            idle_count = 0
+            for i in range(n):
+                if smoothed[i] < threshold:
+                    idle_count += 1
+                else:
+                    break
+            if idle_count >= min_idle_frames:
+                start = idle_count
+
+            # Find first non-idle from end
+            end = n
+            idle_count = 0
+            for i in range(n - 1, -1, -1):
+                if smoothed[i] < threshold:
+                    idle_count += 1
+                else:
+                    break
+            if idle_count >= min_idle_frames:
+                end = n - idle_count
+
+            # Ensure at least some frames remain
+            if end <= start:
+                start = 0
+                end = n
+
+            trimmed = n - (end - start)
+            total_trimmed += trimmed
+            ep_trim_offsets[ep_idx] = (start, n - end)
+            kept_rows.extend(ep_rows[start:end])
+
+        if total_trimmed == 0:
+            return {"ok": True, "trimmed_frames": 0, "message": "No idle frames detected"}
+
+        # --- 3. Re-index ---
+        # Re-assign frame_index per episode and global index
+        ep_groups = {}
+        for row in kept_rows:
+            ep_groups.setdefault(row["episode_index"], []).append(row)
+
+        final_rows = []
+        global_idx = 0
+        for ep_idx in sorted(ep_groups.keys()):
+            ep_rows = sorted(ep_groups[ep_idx], key=lambda r: r["frame_index"])
+            for fi, row in enumerate(ep_rows):
+                row["frame_index"] = fi
+                row["index"] = global_idx
+                row["timestamp"] = fi / info.get("fps", 30)
+                global_idx += 1
+            final_rows.extend(ep_rows)
+
+        # --- 4. Update episode metadata ---
+        ep_dir = dataset_dir / "meta" / "episodes"
+        all_ep_rows = []
+        if ep_dir.exists():
+            for pf in sorted(ep_dir.rglob("*.parquet")):
+                try:
+                    tbl2 = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d2 = tbl2.to_pydict()
+                for i in range(len(d2.get("episode_index", []))):
+                    all_ep_rows.append({k: v[i] for k, v in d2.items()})
+
+        # Recalculate frame ranges
+        ep_frame_ranges = {}
+        for row in final_rows:
+            ep = row["episode_index"]
+            gidx = row["index"]
+            if ep not in ep_frame_ranges:
+                ep_frame_ranges[ep] = [gidx, gidx]
+            else:
+                ep_frame_ranges[ep][0] = min(ep_frame_ranges[ep][0], gidx)
+                ep_frame_ranges[ep][1] = max(ep_frame_ranges[ep][1], gidx)
+
+        for row in all_ep_rows:
+            ep = row["episode_index"]
+            if ep in ep_frame_ranges:
+                row["dataset_from_index"] = ep_frame_ranges[ep][0]
+                row["dataset_to_index"] = ep_frame_ranges[ep][1] + 1
+                row["length"] = ep_frame_ranges[ep][1] - ep_frame_ranges[ep][0] + 1
+
+            # Update video timestamps to reflect trimmed frames
+            if ep in ep_trim_offsets:
+                start_trimmed, end_trimmed = ep_trim_offsets[ep]
+                if start_trimmed > 0 or end_trimmed > 0:
+                    for cam in ["observation.images.top", "observation.images.wrist"]:
+                        ck = f"videos/{cam}"
+                        ft_key = f"{ck}/from_timestamp"
+                        tt_key = f"{ck}/to_timestamp"
+                        if ft_key in row and tt_key in row:
+                            row[ft_key] = row[ft_key] + start_trimmed / fps
+                            row[tt_key] = row[tt_key] - end_trimmed / fps
+
+        # --- 5. Write data ---
+        import shutil
+        if data_dir.exists():
+            shutil.rmtree(data_dir)
+        data_out = data_dir / "chunk-000"
+        data_out.mkdir(parents=True, exist_ok=True)
+        if final_rows:
+            cols = {k: [r[k] for r in final_rows] for k in final_rows[0]}
+            pq.write_table(pa.table(cols), str(data_out / "file-000.parquet"))
+
+        # Write episode metadata
+        if ep_dir.exists():
+            shutil.rmtree(ep_dir)
+        ep_out = ep_dir / "chunk-000"
+        ep_out.mkdir(parents=True, exist_ok=True)
+        if all_ep_rows:
+            cols = {k: [r[k] for r in all_ep_rows] for k in all_ep_rows[0]}
+            pq.write_table(pa.table(cols), str(ep_out / "file-000.parquet"))
+
+        # --- 6. Update info.json ---
+        info["total_frames"] = len(final_rows)
+        info_path.write_text(json.dumps(info, indent=4))
+
+        # --- 7. Regenerate stats.json ---
+        _compute_stats_json(final_rows, dataset_dir)
+
+        print(f"[Dataset] Removed {total_trimmed} idle frames from {name}")
+        return {
+            "ok": True,
+            "trimmed_frames": total_trimmed,
+            "remaining_frames": len(final_rows),
         }
     except Exception as e:
         import traceback
@@ -4181,20 +4501,19 @@ def _compute_stats_json(data_rows, new_dir):
             "q90": np.quantile(arr, 0.90, axis=0).tolist(),
             "q99": np.quantile(arr, 0.99, axis=0).tolist(),
         }
-    # Image stats: use placeholder [0..255] range (actual pixel stats require decoding all frames)
+    # Image stats: use placeholder values in (c,1,1) format as expected by LeRobot
     for cam in ["observation.images.top", "observation.images.wrist"]:
-        n_pixels = 240 * 320 * 3
         stats[cam] = {
-            "min": [0.0] * 3,
-            "max": [255.0] * 3,
-            "mean": [127.5] * 3,
-            "std": [73.9] * 3,
+            "min": [[[0.0]], [[0.0]], [[0.0]]],
+            "max": [[[1.0]], [[1.0]], [[1.0]]],
+            "mean": [[[0.485]], [[0.456]], [[0.406]]],
+            "std": [[[0.229]], [[0.224]], [[0.225]]],
             "count": [len(data_rows)],
-            "q01": [0.0] * 3,
-            "q10": [25.5] * 3,
-            "q50": [127.5] * 3,
-            "q90": [229.5] * 3,
-            "q99": [255.0] * 3,
+            "q01": [[[0.01]], [[0.01]], [[0.01]]],
+            "q10": [[[0.1]], [[0.1]], [[0.1]]],
+            "q50": [[[0.5]], [[0.5]], [[0.5]]],
+            "q90": [[[0.9]], [[0.9]], [[0.9]]],
+            "q99": [[[0.99]], [[0.99]], [[0.99]]],
         }
     (new_dir / "meta" / "stats.json").write_text(json.dumps(stats, indent=2))
 
@@ -5341,6 +5660,414 @@ async def calibrate_move_to(request: Request):
     }
 
 
+# ══════════ Generate 3D calibration + image-to-world mapping ══════════
+
+G3D_CALIB_FILE = ROOT / "data" / "generate3d_calibration.json"
+
+g3d_calib_state = {
+    "points": [],
+    "model": None,
+    "last_image_size": None,
+}
+
+
+def load_g3d_calibration():
+    global g3d_calib_state
+    if G3D_CALIB_FILE.exists():
+        try:
+            g3d_calib_state = json.loads(G3D_CALIB_FILE.read_text())
+            g3d_calib_state.setdefault("points", [])
+            g3d_calib_state.setdefault("model", None)
+            g3d_calib_state.setdefault("last_image_size", None)
+        except Exception:
+            pass
+
+
+def save_g3d_calibration():
+    G3D_CALIB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    G3D_CALIB_FILE.write_text(json.dumps(g3d_calib_state, indent=2))
+
+
+load_g3d_calibration()
+
+
+def _g3d_image_size(image_size=None):
+    if image_size and len(image_size) >= 2:
+        return [max(float(image_size[0]), 1.0), max(float(image_size[1]), 1.0)]
+    stored = g3d_calib_state.get("last_image_size")
+    if stored and len(stored) >= 2:
+        return [max(float(stored[0]), 1.0), max(float(stored[1]), 1.0)]
+    model = g3d_calib_state.get("model") or {}
+    stored = model.get("image_size")
+    if stored and len(stored) >= 2:
+        return [max(float(stored[0]), 1.0), max(float(stored[1]), 1.0)]
+    return [640.0, 480.0]
+
+
+def _g3d_basis(pixel, image_size, model_type):
+    w, h = _g3d_image_size(image_size)
+    u = float(pixel[0]) / w
+    v = float(pixel[1]) / h
+    if model_type == "quadratic":
+        return np.array([1.0, u, v, u * v, u * u, v * v], dtype=np.float64)
+    return np.array([1.0, u, v], dtype=np.float64)
+
+
+def _g3d_position_from_joints(joints):
+    joint_degs = [float(joints.get(j, 0.0)) for j in ROBOT_JOINTS[:5]]
+    pos = _urdf_to_threejs(_so101_fk(joint_degs))
+    return [round(float(pos[0]), 5), round(float(pos[1]), 5), round(float(pos[2]), 5)]
+
+
+def _g3d_fit_model(points, model_type="auto", image_size=None):
+    if model_type not in ("auto", "affine", "quadratic"):
+        model_type = "auto"
+    if model_type == "auto":
+        model_type = "quadratic" if len(points) >= 6 else "affine"
+    required = 6 if model_type == "quadratic" else 3
+    if len(points) < required:
+        return None, f"Need at least {required} points for {model_type} model"
+
+    image_size = _g3d_image_size(image_size)
+    X = np.vstack([_g3d_basis(p["pixel"], image_size, model_type) for p in points])
+    if np.linalg.matrix_rank(X) < X.shape[1]:
+        return None, "Calibration points are degenerate; spread them across the workspace"
+
+    world = np.array([[p["position_3d"][0], p["position_3d"][2]] for p in points], dtype=np.float64)
+    joints = np.array([[p["joints"][j] for j in ROBOT_JOINTS] for p in points], dtype=np.float64)
+
+    world_coeff, *_ = np.linalg.lstsq(X, world, rcond=None)
+    joint_coeff, *_ = np.linalg.lstsq(X, joints, rcond=None)
+
+    pred_world = X @ world_coeff
+    err = pred_world - world
+    rmse_m = float(np.sqrt(np.mean(np.sum(err * err, axis=1))))
+
+    pred_joints = X @ joint_coeff
+    joint_err = pred_joints - joints
+    joint_rmse = {}
+    for idx, name in enumerate(ROBOT_JOINTS):
+        joint_rmse[name] = round(float(np.sqrt(np.mean(joint_err[:, idx] ** 2))), 3)
+
+    return {
+        "type": model_type,
+        "image_size": [int(image_size[0]), int(image_size[1])],
+        "world_coeff": world_coeff.tolist(),
+        "joint_coeff": joint_coeff.tolist(),
+        "rmse_m": round(rmse_m, 5),
+        "joint_rmse": joint_rmse,
+        "point_count": len(points),
+    }, None
+
+
+def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
+    model = g3d_calib_state.get("model")
+    if not model:
+        return None
+    image_size = _g3d_image_size(image_size)
+    basis = _g3d_basis(pixel, image_size, model.get("type", "affine"))
+    world_xz = basis @ np.array(model["world_coeff"], dtype=np.float64)
+    joint_values = basis @ np.array(model["joint_coeff"], dtype=np.float64)
+
+    joints = {}
+    for idx, name in enumerate(ROBOT_JOINTS):
+        joints[name] = round(float(joint_values[idx]), 2)
+
+    if height_cm > 0:
+        h = float(height_cm) / 100.0
+        arm_len = 0.25
+        offset_deg = math.degrees(math.atan2(h, arm_len))
+        joints["shoulder_lift"] = round(joints["shoulder_lift"] - offset_deg, 2)
+
+    return {
+        "position_3d": [round(float(world_xz[0]), 5), 0.0, round(float(world_xz[1]), 5)],
+        "joints": joints,
+    }
+
+
+def _g3d_normalize_bbox(obj, img_w, img_h):
+    is_box_2d = "box_2d" in obj
+    raw_box = obj.pop("box_2d", None) or obj.get("bbox") or obj.get("box") or [0, 0, 0, 0]
+    obj["bbox_raw"] = list(raw_box) if isinstance(raw_box, (list, tuple)) else []
+    if not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+        return [0, 0, 0, 0]
+
+    vals = [float(v) for v in raw_box]
+    if is_box_2d or max(vals) > max(img_w, img_h):
+        y1, x1, y2, x2 = vals
+        bbox = [
+            int(x1 * img_w / 1000),
+            int(y1 * img_h / 1000),
+            int(x2 * img_w / 1000),
+            int(y2 * img_h / 1000),
+        ]
+    elif max(vals) <= 1.0:
+        x1, y1, x2, y2 = vals
+        bbox = [int(x1 * img_w), int(y1 * img_h), int(x2 * img_w), int(y2 * img_h)]
+    else:
+        bbox = [int(v) for v in vals]
+
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(img_w - 1, x1))
+    y1 = max(0, min(img_h - 1, y1))
+    x2 = max(x1 + 1, min(img_w, x2))
+    y2 = max(y1 + 1, min(img_h, y2))
+    return [x1, y1, x2, y2]
+
+
+@app.get("/api/generate3d/calibration/status")
+async def generate3d_calibration_status():
+    return {
+        "ok": True,
+        "points": g3d_calib_state.get("points", []),
+        "model": g3d_calib_state.get("model"),
+        "calibrated": g3d_calib_state.get("model") is not None,
+        "last_image_size": g3d_calib_state.get("last_image_size"),
+    }
+
+
+@app.post("/api/generate3d/calibration/capture")
+async def generate3d_calibration_capture():
+    import cv2
+    st = cam_state.get("top")
+    if not st:
+        return {"ok": False, "error": "Top camera not available"}
+    with st["lock"]:
+        f = st["frame"]
+    if f is None:
+        return {"ok": False, "error": "No frame available"}
+    h, w = f.shape[:2]
+    g3d_calib_state["last_image_size"] = [int(w), int(h)]
+    save_g3d_calibration()
+    _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+    return {"ok": True, "image": b64, "image_width": w, "image_height": h}
+
+
+@app.post("/api/generate3d/calibration/save-point")
+async def generate3d_calibration_save_point(request: Request):
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+    data = await request.json()
+    pixel = data.get("pixel")
+    if not pixel or len(pixel) < 2:
+        return {"ok": False, "error": "No pixel coordinate"}
+
+    image_size = data.get("image_size")
+    if image_size:
+        g3d_calib_state["last_image_size"] = [int(image_size[0]), int(image_size[1])]
+
+    joints = robot_get_positions()
+    position_3d = _g3d_position_from_joints(joints)
+    point = {
+        "pixel": [round(float(pixel[0]), 2), round(float(pixel[1]), 2)],
+        "joints": joints,
+        "position_3d": position_3d,
+        "label": data.get("label") or f"P{len(g3d_calib_state.get('points', [])) + 1}",
+    }
+    g3d_calib_state.setdefault("points", []).append(point)
+    g3d_calib_state["model"] = None
+    save_g3d_calibration()
+    return {"ok": True, "point": point, "points": g3d_calib_state["points"]}
+
+
+@app.post("/api/generate3d/calibration/delete-point")
+async def generate3d_calibration_delete_point(request: Request):
+    data = await request.json()
+    idx = int(data.get("index", -1))
+    points = g3d_calib_state.get("points", [])
+    if idx < 0 or idx >= len(points):
+        return {"ok": False, "error": "Invalid point index"}
+    points.pop(idx)
+    g3d_calib_state["model"] = None
+    save_g3d_calibration()
+    return {"ok": True, "points": points}
+
+
+@app.post("/api/generate3d/calibration/compute")
+async def generate3d_calibration_compute(request: Request):
+    data = await request.json()
+    points = g3d_calib_state.get("points", [])
+    model, error = _g3d_fit_model(
+        points,
+        model_type=data.get("model_type", "auto"),
+        image_size=data.get("image_size"),
+    )
+    if error:
+        return {"ok": False, "error": error}
+    g3d_calib_state["model"] = model
+    save_g3d_calibration()
+    return {"ok": True, "model": model}
+
+
+@app.post("/api/generate3d/calibration/reset")
+async def generate3d_calibration_reset():
+    g3d_calib_state["points"] = []
+    g3d_calib_state["model"] = None
+    save_g3d_calibration()
+    return {"ok": True}
+
+
+@app.post("/api/generate3d/calibration/move-to")
+async def generate3d_calibration_move_to(request: Request):
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+    if not g3d_calib_state.get("model"):
+        return {"ok": False, "error": "Generate 3D calibration is not computed"}
+
+    data = await request.json()
+    pixel = data.get("pixel")
+    if not pixel:
+        return {"ok": False, "error": "No pixel coordinate"}
+
+    height_cm = float(data.get("height_cm", 0.0))
+    safety_cm = float(data.get("safety_height_cm", 0.0))
+    n_steps = int(data.get("n_steps", 15))
+    image_size = data.get("image_size")
+
+    pred = _g3d_predict_from_pixel(pixel, image_size=image_size, height_cm=height_cm)
+    if not pred:
+        return {"ok": False, "error": "Prediction failed"}
+
+    target = pred["joints"]
+    current = robot_get_positions()
+    target["gripper"] = current["gripper"]
+
+    safe_pred = _g3d_predict_from_pixel(pixel, image_size=image_size, height_cm=safety_cm)
+    sl_safe = safe_pred["joints"]["shoulder_lift"] if safe_pred else target["shoulder_lift"]
+    sl_start = current["shoulder_lift"]
+    sl_end = target["shoulder_lift"]
+    path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
+
+    if path_safe:
+        robot_send_positions(target)
+        return {
+            "ok": True, "pixel": pixel, "position_3d": pred["position_3d"],
+            "target_joints": target, "path": "direct", "safety_height_cm": safety_cm,
+        }
+
+    sl_max = max(sl_start, sl_end)
+    overshoot = max(0.0, sl_max - sl_safe)
+    bump_height = min(overshoot + 2.0, 10.0)
+    joint_names = list(current.keys())
+    for i in range(1, n_steps + 1):
+        t = i / n_steps
+        wp = {}
+        for j in joint_names:
+            wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
+        bump = bump_height * math.sin(math.pi * t)
+        wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
+        robot_send_positions(wp)
+        await asyncio.sleep(0.04)
+    robot_send_positions(target)
+
+    return {
+        "ok": True, "pixel": pixel, "position_3d": pred["position_3d"],
+        "target_joints": target, "path": "arc", "n_steps": n_steps,
+        "bump_height": round(bump_height, 2), "safety_height_cm": safety_cm,
+    }
+
+
+@app.get("/api/generate3d/current-state")
+async def generate3d_current_state():
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
+    joints = robot_get_positions()
+    return {"ok": True, "joints": joints, "position_3d": _g3d_position_from_joints(joints)}
+
+
+@app.post("/api/generate3d/detect-image")
+async def generate3d_detect_image(
+    image: UploadFile = File(...),
+    prompt: str = Form(""),
+    model: str = Form(""),
+):
+    if not g3d_calib_state.get("model"):
+        return {"ok": False, "error": "Generate 3D calibration is not computed"}
+
+    image_bytes = await image.read()
+    pil_img = Image.open(io.BytesIO(image_bytes))
+    img_w, img_h = pil_img.size
+    pil_img.close()
+    b64 = base64.b64encode(image_bytes).decode()
+    mime = image.content_type or "image/jpeg"
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "error": "GEMINI_API_KEY not set"}
+
+    cfg = load_config()
+    gemini_model = model or cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={api_key}"
+    if not prompt:
+        prompt = f"""This is a top-down camera image of a robot workspace.
+Detect every movable object on the workspace. Exclude the robot arm, cables, shadows, hands, and desk texture.
+
+For each object return:
+- "name": short descriptive name
+- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates for an image sized {img_w}x{img_h}
+- "color_hex": dominant object color
+- "shape_3d": one of "box", "cylinder", "sphere"
+- "estimated_size_cm": [width, depth, height] in centimeters
+- "confidence": 0.0 to 1.0
+
+Return ONLY valid JSON: {{"objects": [...]}}
+No explanations, no markdown."""
+
+    gemini_objects = []
+    gemini_raw = ""
+    elapsed = 0
+    async with httpx.AsyncClient(timeout=45) as client:
+        data, elapsed, status_code = await call_gemini(client, url, b64, mime, prompt)
+    if status_code != 200:
+        err = data.get("error", {}).get("message", "Gemini request failed")
+        return {"ok": False, "error": err}
+
+    gemini_raw = extract_text(data)
+    parsed = parse_json_response(gemini_raw)
+    if parsed and "objects" in parsed and isinstance(parsed["objects"], list):
+        gemini_objects = parsed["objects"]
+
+    objects = []
+    for idx, obj in enumerate(gemini_objects):
+        if not isinstance(obj, dict):
+            continue
+        if "label" in obj and "name" not in obj:
+            obj["name"] = obj.pop("label")
+        bbox = _g3d_normalize_bbox(obj, img_w, img_h)
+        x1, y1, x2, y2 = bbox
+        center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
+        pred = _g3d_predict_from_pixel(center, image_size=[img_w, img_h])
+        if not pred:
+            continue
+        size = obj.get("estimated_size_cm") or [3, 3, 3]
+        if not isinstance(size, list) or len(size) < 3:
+            size = [3, 3, 3]
+        objects.append({
+            "name": obj.get("name") or f"object {idx + 1}",
+            "bbox": bbox,
+            "bbox_raw": obj.get("bbox_raw", []),
+            "center_pixel": [round(center[0], 2), round(center[1], 2)],
+            "position_3d": pred["position_3d"],
+            "predicted_joints": pred["joints"],
+            "color_hex": obj.get("color_hex", "#888888"),
+            "shape_3d": obj.get("shape_3d", "box"),
+            "estimated_size_cm": size[:3],
+            "confidence": float(obj.get("confidence", 1.0)),
+        })
+
+    return {
+        "ok": True,
+        "image_width": img_w,
+        "image_height": img_h,
+        "frame_image_b64": b64,
+        "objects": objects,
+        "gemini_raw": gemini_raw,
+        "elapsed": elapsed,
+        "model": g3d_calib_state.get("model"),
+    }
+
+
 # ── Evaluate ──
 
 EVAL_DIR = ROOT / "data" / "eval_sessions"
@@ -5366,6 +6093,142 @@ async def eval_save_config(request: Request):
     return {"ok": True}
 
 eval_state = {"running": False, "process": None, "log_lines": [], "session_id": None}
+
+# ── Eval video recording ──
+EVAL_VIDEOS_DIR = ROOT / "data" / "eval_videos"
+EVAL_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+eval_video_state = {"recording": False, "stop_event": None, "video_path": None}
+
+
+def _eval_build_bbox_drawer_cv2(bbox_data):
+    """Build a bbox drawing function for video recording (same as fakecam_inject)."""
+    import cv2
+
+    if not bbox_data or not bbox_data.get("boxes"):
+        return None
+
+    boxes = bbox_data["boxes"]
+    line_width = int(bbox_data.get("line_width", 2))
+    show_label = bbox_data.get("show_label", True)
+    src_w = int(bbox_data.get("frame_width", 0))
+    src_h = int(bbox_data.get("frame_height", 0))
+
+    def _hex_to_bgr(hex_color):
+        hex_color = hex_color.lstrip('#')
+        if len(hex_color) == 6:
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            return (b, g, r)
+        return (0, 0, 255)
+
+    def draw(frame):
+        h, w = frame.shape[:2]
+        sx = w / src_w if src_w > 0 else 1.0
+        sy = h / src_h if src_h > 0 else 1.0
+        scale_factor = min(sx, sy) if src_w > 0 else 1.0
+        scaled_lw = max(1, round(line_width * scale_factor))
+        scaled_font = max(0.25, 0.5 * scale_factor)
+        scaled_thickness = max(1, round(scale_factor))
+        for box in boxes:
+            x1, y1, x2, y2 = box["bbox"]
+            x1, y1, x2, y2 = int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)
+            color_bgr = _hex_to_bgr(box.get("color_hex", "#FF0000"))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color_bgr, scaled_lw)
+            if show_label and box.get("name"):
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                text = box["name"]
+                (tw, th), baseline = cv2.getTextSize(text, font, scaled_font, scaled_thickness)
+                cv2.rectangle(frame, (x1, max(0, y1 - th - baseline - 4)),
+                              (x1 + tw + 4, y1), color_bgr, -1)
+                cv2.putText(frame, text, (x1 + 2, max(th + 2, y1 - baseline - 2)),
+                            font, scaled_font, (255, 255, 255), scaled_thickness, cv2.LINE_AA)
+        return frame
+
+    return draw
+
+
+def _eval_video_record_thread(cam_indices: list, video_path: str, stop_event: threading.Event,
+                               width: int, height: int, fps: int, cam_names: list,
+                               bbox_data: dict = None, top_cam_index: int = None):
+    """Record video from all cameras side-by-side in a background thread.
+    Draws bbox overlay on top camera frames only."""
+    import cv2
+
+    caps = []
+    valid_names = []
+    valid_indices = []
+    for idx, name in zip(cam_indices, cam_names):
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            caps.append(cap)
+            valid_names.append(name)
+            valid_indices.append(idx)
+        else:
+            print(f"[EvalVideo] Cannot open camera {name} (index {idx})")
+
+    if not caps:
+        eval_video_state["recording"] = False
+        return
+
+    # Build bbox drawer for top camera
+    bbox_draw_fn = _eval_build_bbox_drawer_cv2(bbox_data) if bbox_data else None
+
+    # Side-by-side layout
+    total_w = width * len(caps)
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    out = cv2.VideoWriter(video_path, fourcc, fps, (total_w, height))
+    if not out.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fallback_path = video_path.replace('.mp4', '.avi')
+        out = cv2.VideoWriter(fallback_path, fourcc, fps, (total_w, height))
+        eval_video_state["video_path"] = fallback_path
+        print(f"[EvalVideo] avc1 unavailable, using mp4v → {fallback_path}")
+
+    bbox_info = f", bbox on top cam (index {top_cam_index})" if bbox_draw_fn else ""
+    print(f"[EvalVideo] Recording {len(caps)} cameras: {valid_names}{bbox_info} → {video_path}")
+
+    while not stop_event.is_set():
+        frames = []
+        for cap, idx in zip(caps, valid_indices):
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                frame = np.zeros((height, width, 3), dtype=np.uint8)
+            if frame.shape[1] != width or frame.shape[0] != height:
+                frame = cv2.resize(frame, (width, height))
+            # Draw bbox only on top camera
+            if bbox_draw_fn and idx == top_cam_index:
+                frame = bbox_draw_fn(frame)
+            frames.append(frame)
+        composite = np.hstack(frames)
+        out.write(composite)
+
+    for cap in caps:
+        cap.release()
+    out.release()
+
+    # Post-process with ffmpeg: re-encode to H.264 with moov atom at front (faststart)
+    # OpenCV's avc1 output needs re-encoding for reliable browser playback
+    final_path = eval_video_state.get("video_path", video_path)
+    tmp_path = final_path + ".tmp.mp4"
+    try:
+        cmd = ['ffmpeg', '-y', '-i', final_path, '-c:v', 'libx264',
+               '-preset', 'fast', '-crf', '23', '-movflags', '+faststart', tmp_path]
+        subprocess.run(cmd, capture_output=True, timeout=120)
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.remove(final_path)
+            # Ensure final name ends with .mp4
+            mp4_path = final_path.replace('.avi', '.mp4') if final_path.endswith('.avi') else final_path
+            os.rename(tmp_path, mp4_path)
+            eval_video_state["video_path"] = mp4_path
+            print(f"[EvalVideo] Finalized (faststart): {mp4_path}")
+        else:
+            print(f"[EvalVideo] ffmpeg produced empty output, keeping original")
+    except Exception as e:
+        print(f"[EvalVideo] ffmpeg post-process failed: {e}")
+        # Clean up temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    eval_video_state["recording"] = False
 
 EVAL_RESET_POS_FILE = EVAL_DIR / "reset_position.json"
 
@@ -5531,6 +6394,113 @@ async def eval_fakecam_preview(request: Request):
     return {"ok": True, "cameras": result}
 
 
+@app.get("/api/eval/capture-top-frame")
+async def eval_capture_top_frame(request: Request):
+    """Capture a single frame from the top camera for bbox drawing.
+    Accepts optional width/height query params to match inference resolution."""
+    import cv2
+
+    req_w = request.query_params.get("width")
+    req_h = request.query_params.get("height")
+
+    cfg = load_config()
+    robot_cfg = cfg.get("robot", {})
+    all_cameras = robot_cfg.get("cameras", {})
+    top_cam = all_cameras.get("top", {})
+    idx = top_cam.get("index", 0)
+
+    cap = cv2.VideoCapture(idx)
+    if not cap.isOpened():
+        return {"ok": False, "error": f"Cannot open top camera (index {idx})"}
+
+    # Set capture resolution to match inference if specified
+    if req_w and req_h:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(req_w))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(req_h))
+
+    ret, frame = cap.read()
+    cap.release()
+    if not ret or frame is None:
+        return {"ok": False, "error": "Cannot read from top camera"}
+
+    h, w = frame.shape[:2]
+    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    b64 = base64.b64encode(buf).decode()
+    return {"ok": True, "image_b64": b64, "width": w, "height": h}
+
+
+@app.post("/api/eval/detect-bbox")
+async def eval_detect_bbox(request: Request):
+    """Detect objects in a provided image using Gemini, for bbox overlay on eval frames."""
+    body = await request.json()
+    image_b64 = body.get("image_b64", "")
+    task_text = body.get("task_text", "")
+
+    if not image_b64:
+        return {"ok": False, "error": "No image provided"}
+
+    # Get image dimensions
+    raw = base64.b64decode(image_b64)
+    pil_img = Image.open(io.BytesIO(raw))
+    img_w, img_h = pil_img.size
+    pil_img.close()
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "error": "GEMINI_API_KEY not set"}
+
+    cfg = load_config()
+    model = cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    task_clause = ""
+    if task_text:
+        task_clause = f'\nThe robot is performing the task: "{task_text}"\nDetect ONLY the objects mentioned or implied in this task instruction.'
+    else:
+        task_clause = "\nDetect all objects on the workspace (exclude the robot arm, cables, desk)."
+
+    prompt = f"""This is a top-down camera view of a robot workspace.{task_clause}
+
+For each object, return:
+- "name": short descriptive name (e.g. "pink bow", "green bowl")
+- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates (image is {img_w}x{img_h})
+- "color_hex": color as hex (e.g. "#ff69b4")
+- "confidence": 0.0 to 1.0
+
+Return ONLY valid JSON: {{"objects": [...]}}
+No explanations, no markdown."""
+
+    objects = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            data, elapsed, status_code = await call_gemini(client, url, image_b64, "image/jpeg", prompt)
+        if status_code == 200:
+            gemini_raw = extract_text(data)
+            parsed = parse_json_response(gemini_raw)
+            if parsed and "objects" in parsed:
+                for obj in parsed["objects"]:
+                    if "label" in obj and "name" not in obj:
+                        obj["name"] = obj.pop("label")
+                    if "confidence" not in obj:
+                        obj["confidence"] = 1.0
+                    is_box_2d = "box_2d" in obj
+                    raw_box = obj.pop("box_2d", None) or obj.get("bbox", [0, 0, 0, 0])
+                    if len(raw_box) == 4:
+                        if is_box_2d or max(raw_box) > max(img_w, img_h):
+                            y1, x1, y2, x2 = raw_box
+                            obj["bbox"] = [
+                                int(x1 * img_w / 1000), int(y1 * img_h / 1000),
+                                int(x2 * img_w / 1000), int(y2 * img_h / 1000),
+                            ]
+                        else:
+                            obj["bbox"] = [int(v) for v in raw_box]
+                    objects.append(obj)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    return {"ok": True, "objects": objects, "image_width": img_w, "image_height": img_h}
+
+
 @app.get("/api/eval/camera-snapshot")
 async def eval_camera_snapshot(cam_count: str = "2"):
     """Capture one frame from each camera and return as base64 JPEG (no augmentation)."""
@@ -5580,6 +6550,8 @@ async def eval_start(request: Request):
     fourcc = body.get("fourcc", "").strip()
     cam_select = str(body.get("cam_count", "2"))
     use_fakecam = body.get("use_fakecam", False)
+    use_bbox = body.get("use_bbox", False)
+    bbox_data = body.get("bbox_data")  # {boxes, line_width, show_label, frame_width, frame_height}
     chunk_size = int(body.get("chunk_size", 0))
     n_action_steps = int(body.get("n_action_steps", 0))
 
@@ -5651,9 +6623,27 @@ async def eval_start(request: Request):
     if n_action_steps > 0:
         cmd.append(f"--policy.n_action_steps={n_action_steps}")
 
-    if use_fakecam or black_cam_indices:
-        inject_args = ["python", "fakecam_inject.py"]
+    # Save bbox data to fakecam_params.json if bbox overlay is enabled
+    if use_bbox and bbox_data and bbox_data.get("boxes"):
+        # Include top camera index so fakecam_inject only draws bbox on top camera
+        top_cam_idx = cams.get("top", {}).get("index", 0) if isinstance(cams.get("top"), dict) else 0
+        bbox_data["cam_index"] = top_cam_idx
+        params_path = ROOT / "fakecam_params.json"
         if use_fakecam:
+            # Merge bbox into existing augmentation params
+            try:
+                existing = json.loads(params_path.read_text()) if params_path.exists() else {}
+            except Exception:
+                existing = {}
+            existing["bbox_overlay"] = bbox_data
+        else:
+            # Only bbox — write clean file without augmentation params
+            existing = {"bbox_overlay": bbox_data}
+        params_path.write_text(json.dumps(existing, indent=2))
+
+    if use_fakecam or use_bbox or black_cam_indices:
+        inject_args = ["python", "fakecam_inject.py"]
+        if use_fakecam or use_bbox:
             inject_args += ["--params-file", "fakecam_params.json"]
         if black_cam_indices:
             inject_args += ["--black-cameras", ",".join(str(i) for i in black_cam_indices),
@@ -5666,6 +6656,7 @@ async def eval_start(request: Request):
         eval_state["running"] = True
         eval_state["log_lines"] = []
         threading.Thread(target=_eval_reader, args=(p, eval_state), daemon=True).start()
+
         return {"ok": True, "pid": p.pid, "cmd": " ".join(cmd)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -5698,7 +6689,70 @@ async def eval_stop():
                 except (ProcessLookupError, OSError):
                     pass
     eval_state["running"] = False
-    return {"ok": True}
+
+    # Stop video recording
+    video_filename = None
+    if eval_video_state["recording"] and eval_video_state["stop_event"]:
+        eval_video_state["stop_event"].set()
+        # Wait for recording thread to finish (including possible ffmpeg conversion)
+        for _ in range(100):
+            if not eval_video_state["recording"]:
+                break
+            time.sleep(0.1)
+        # Get final filename (may have changed due to codec fallback/conversion)
+        video_filename = os.path.basename(eval_video_state["video_path"]) if eval_video_state["video_path"] else None
+    eval_video_state["stop_event"] = None
+
+    return {"ok": True, "video_filename": video_filename}
+
+
+@app.post("/api/eval/start-recording")
+async def eval_start_recording(request: Request):
+    """Start video recording for evaluation (called when inference actually begins)."""
+    if eval_video_state["recording"]:
+        return {"ok": False, "error": "Already recording"}
+
+    body = await request.json()
+    cam_width = int(body.get("width", 320))
+    cam_height = int(body.get("height", 240))
+    fps = int(body.get("fps", 30))
+    cam_select = str(body.get("cam_count", "2"))
+    bbox_data = body.get("bbox_data")  # for drawing bbox on top camera in video
+
+    cfg_data = load_config()
+    robot_cfg = cfg_data.get("robot", {})
+    all_cams = robot_cfg.get("cameras", {})
+
+    cam_indices = []
+    cam_names_list = []
+    top_cam_idx = None
+    for cam_name, cam_c in all_cams.items():
+        idx = cam_c.get("index", 0) if isinstance(cam_c, dict) else 0
+        # Skip if this camera is not selected
+        if cam_select == '1-top' and cam_name != 'top':
+            continue
+        if cam_select == '1-wrist' and cam_name != 'wrist':
+            continue
+        cam_indices.append(idx)
+        cam_names_list.append(cam_name)
+        if cam_name == 'top':
+            top_cam_idx = idx
+
+    video_filename = f"eval_{int(time.time())}.mp4"
+    video_path = str(EVAL_VIDEOS_DIR / video_filename)
+    stop_evt = threading.Event()
+    eval_video_state["recording"] = True
+    eval_video_state["stop_event"] = stop_evt
+    eval_video_state["video_path"] = video_path
+
+    threading.Thread(
+        target=_eval_video_record_thread,
+        args=(cam_indices, video_path, stop_evt, cam_width, cam_height, fps, cam_names_list),
+        kwargs={"bbox_data": bbox_data, "top_cam_index": top_cam_idx},
+        daemon=True,
+    ).start()
+
+    return {"ok": True, "video_filename": video_filename}
 
 
 @app.get("/api/eval/status")

@@ -365,6 +365,7 @@
     <div class="nav-item" data-tab="run">Run</div>
     <div class="nav-section">Others</div>
     <div class="nav-item" data-tab="simulation">Simulation</div>
+    <div class="nav-item" data-tab="generate3d">Generate 3D</div>
     <div class="nav-item" data-tab="fakecam">Fake Camera</div>
   </div>
 </div>
@@ -1232,7 +1233,9 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" onclick="vizShowDownloadHf()" style="background:#00897b;color:#fff">Download from HF</button>
       <button class="btn btn-sm" onclick="vizShowCombine()" style="background:#1a73e8">Combine</button>
       <button class="btn btn-sm" id="vizRenameDsBtn" onclick="vizRenameDataset()" style="display:none;background:#607d8b;color:#fff">Edit Name</button>
+      <button class="btn btn-sm" id="vizEditTaskBtn" onclick="vizEditTask()" style="display:none;background:#5c6bc0;color:#fff">Edit Task</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
+      <button class="btn btn-sm" id="vizRemoveIdleBtn" onclick="vizRemoveIdle()" style="display:none;background:#795548;color:#fff">Remove Idle</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
       <button class="btn btn-sm" id="vizTrainBtn" onclick="vizShowTrainGuide()" style="display:none;background:#34a853;color:#fff">Training</button>
@@ -1298,6 +1301,8 @@ bump_height = min(overshoot + 2, 10) degrees
               <span style="font-size:0.82rem;font-weight:700;color:#1a73e8">Episodes</span>
               <div style="display:flex;gap:4px">
                 <button class="btn btn-sm" id="vizSelectModeBtn" onclick="vizToggleSelectMode()" style="font-size:0.72rem;padding:2px 8px;background:#f0f0f0;color:#555;border:1px solid #d0d0d0">Select</button>
+                <button class="btn btn-sm" id="vizSelectAllBtn" onclick="vizSelectAll()" style="font-size:0.72rem;padding:2px 8px;display:none;background:#e8f0fe;color:#1a73e8">All</button>
+                <button class="btn btn-sm" id="vizEditTaskSelBtn" onclick="vizEditTaskSelected()" style="font-size:0.72rem;padding:2px 8px;display:none;background:#5c6bc0;color:#fff">Task</button>
                 <button class="btn btn-sm btn-danger" id="vizDeleteBtn" onclick="vizDeleteSelected()" style="font-size:0.72rem;padding:2px 8px;display:none">Delete</button>
               </div>
             </div>
@@ -2120,6 +2125,107 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
 
   </div><!-- /page-simulation -->
 
+  <!-- ==================== Generate 3D ==================== -->
+  <div class="page" id="page-generate3d">
+    <div class="page-title"><span>Generate</span> 3D</div>
+
+    <div class="inner-tabs">
+      <button class="inner-tab active" data-inner="g3d-calib">Camera Calibrate</button>
+      <button class="inner-tab" data-inner="g3d-sim">3D Simulation</button>
+    </div>
+
+    <div class="inner-page active" id="inner-g3d-calib">
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Top View Calibration</h3>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm" id="g3dCaptureBtn" onclick="g3dCaptureCalib()">Capture Top View</button>
+          <button class="btn btn-sm" id="g3dSavePointBtn" onclick="g3dSavePoint()" disabled>Save Current Position</button>
+          <select id="g3dModelType" style="padding:5px 8px;border:1px solid #ddd;border-radius:6px;font-size:0.82rem">
+            <option value="auto">Auto model</option>
+            <option value="affine">Affine (3+ points)</option>
+            <option value="quadratic">Quadratic (6+ points)</option>
+          </select>
+          <button class="btn btn-sm" id="g3dComputeBtn" onclick="g3dComputeCalibration()" disabled style="background:#34a853">Compute Model</button>
+          <button class="btn btn-sm btn-danger" onclick="g3dResetCalibration()">Reset</button>
+          <span class="cal-status off" id="g3dCalibStatus">Not calibrated</span>
+          <span id="g3dCalibMsg" style="font-size:0.82rem;color:#777"></span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(320px,1fr) 340px;gap:16px;align-items:start">
+        <div class="config-card">
+          <h3>Camera Image</h3>
+          <div class="cb-canvas-wrap" id="g3dCalibWrap" onclick="g3dCalibClick(event)" style="display:none;max-width:100%">
+            <img id="g3dCalibImg" alt="top view calibration">
+            <canvas id="g3dCalibOverlay"></canvas>
+          </div>
+          <div id="g3dCalibPlaceholder" style="background:#f5f5f5;border:1px solid #d0d0d0;border-radius:8px;padding:44px;text-align:center;color:#999;font-size:0.88rem">
+            Capture a top-view image to start.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+            <label style="font-size:0.82rem;font-weight:600;color:#555">Target height</label>
+            <input type="number" id="g3dTargetHeight" value="0" min="0" max="30" step="1" style="width:60px;padding:4px 8px;border:1px solid #d0d0d0;border-radius:6px">
+            <span style="font-size:0.82rem;color:#888">cm</span>
+            <label style="font-size:0.82rem;font-weight:600;color:#555;margin-left:8px">Safety height</label>
+            <input type="number" id="g3dSafetyHeight" value="10" min="0" max="40" step="1" style="width:60px;padding:4px 8px;border:1px solid #d0d0d0;border-radius:6px">
+            <span style="font-size:0.82rem;color:#888">cm</span>
+            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:#555;margin-left:8px;cursor:pointer">
+              <input type="checkbox" id="g3dClickMove"> Click moves robot
+            </label>
+          </div>
+          <div id="g3dMoveStatus" style="font-size:0.82rem;color:#555;margin-top:8px"></div>
+        </div>
+
+        <div>
+          <div class="cb-wizard-step">
+            <h3>Calibration Points</h3>
+            <div id="g3dPointsList"></div>
+            <div id="g3dModelInfo" style="font-size:0.78rem;color:#666;margin-top:8px"></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /inner-g3d-calib -->
+
+    <div class="inner-page" id="inner-g3d-sim">
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Top View Image</h3>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="g3dCaptureSceneImage()">Capture Top View</button>
+          <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">
+            Upload Image
+            <input type="file" id="g3dImageInput" accept="image/*" style="display:none">
+          </label>
+          <button class="btn btn-sm" id="g3dDetectBtn" onclick="g3dDetectObjects()" disabled>Detect & Generate</button>
+          <button class="btn btn-sm btn-outline" onclick="g3dUseCurrentRobotState()">Use Current Robot State</button>
+          <span id="g3dSimStatus" style="font-size:0.82rem;color:#777"></span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(320px,0.9fr) minmax(420px,1.1fr);gap:16px;align-items:start">
+        <div class="config-card">
+          <h3>Detected Objects</h3>
+          <canvas id="g3dImageCanvas" style="width:100%;display:none;border-radius:8px;background:#111"></canvas>
+          <div id="g3dImagePlaceholder" style="background:#f5f5f5;border:1px solid #d0d0d0;border-radius:8px;padding:42px;text-align:center;color:#999;font-size:0.88rem">
+            Capture or upload a top-view image.
+          </div>
+          <div id="g3dObjectsList" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+          <div id="g3dRawWrap" style="display:none;margin-top:10px">
+            <div class="collapse-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="cursor:pointer;font-size:0.8rem;color:#1a73e8;user-select:none">Gemini Raw Output &#9660;</div>
+            <pre id="g3dRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+          </div>
+        </div>
+
+        <div class="config-card">
+          <h3>3D Workspace</h3>
+          <div style="position:relative;background:#1a1a2e;border-radius:8px;overflow:hidden">
+            <canvas id="g3dCanvas" style="width:100%;height:520px;display:block"></canvas>
+            <div id="g3dSceneInfo" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.65);color:#fff;padding:7px 10px;border-radius:7px;font-size:0.78rem;pointer-events:none">No objects</div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /inner-g3d-sim -->
+  </div><!-- /page-generate3d -->
+
   <!-- ==================== Fake Camera ==================== -->
   <div class="page" id="page-fakecam">
     <div class="page-title"><span>Fake</span> Camera</div>
@@ -2665,6 +2771,51 @@ conda run -n lerobot uvicorn train_api:app \
           </div>
         </div>
 
+        <!-- Add BBox on Frame -->
+        <div class="config-card" style="margin-bottom:14px">
+          <h3 style="margin:0">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.95rem">
+              <input type="checkbox" id="evalUseBbox" onchange="evalBboxToggle();evalConfigChanged()"> Add BBox on Frame
+            </label>
+          </h3>
+          <div id="evalBboxSettings" style="display:none;margin-top:12px">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:10px">
+              Draw bounding boxes on camera frames during inference. For models trained with bbox overlays.
+            </div>
+            <!-- Capture + detect buttons -->
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+              <button class="btn btn-sm" onclick="evalBboxCapture()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px">Capture Frame</button>
+              <button class="btn btn-sm" onclick="evalBboxGeminiDetect()" id="evalBboxDetectBtn" style="background:#ff9800;font-size:0.72rem;padding:2px 10px" disabled>Gemini Detect</button>
+              <button class="btn btn-sm btn-outline" onclick="evalBboxToggleDraw()" id="evalBboxDrawBtn" style="background:#fff3e0;border-color:#ff9800;color:#e65100;font-size:0.72rem;padding:2px 10px" disabled>&#9998; Draw BBox</button>
+              <button class="btn btn-sm btn-outline" onclick="evalBboxClearAll()" id="evalBboxClearBtn" style="font-size:0.72rem;padding:2px 10px;display:none">Clear All</button>
+              <span id="evalBboxStatus" style="font-size:0.75rem;color:#888"></span>
+            </div>
+            <!-- Task for Gemini prompt -->
+            <div style="margin-bottom:8px">
+              <label style="font-size:0.72rem;color:#888">Task hint (for Gemini detection)</label>
+              <input type="text" id="evalBboxTask" class="form-input" style="font-size:0.78rem;padding:4px 8px;margin-top:2px" placeholder="e.g. pick up the pink object">
+            </div>
+            <!-- Canvas area -->
+            <div id="evalBboxCanvasWrap" style="position:relative;display:inline-block;max-width:100%;margin-bottom:10px">
+              <canvas id="evalBboxCanvas" style="max-width:100%;display:block;background:#111;border-radius:8px;min-height:120px" width="320" height="240"></canvas>
+              <canvas id="evalBboxDrawCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;display:none;border-radius:8px"></canvas>
+            </div>
+            <div id="evalBboxDrawHint" style="display:none;margin-bottom:8px;font-size:0.78rem;color:#e65100;background:#fff3e0;padding:6px 10px;border-radius:6px">
+              Click and drag on the image to draw a bounding box. You'll be asked for the object name.
+            </div>
+            <!-- Detected objects list -->
+            <div id="evalBboxCrops" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px"></div>
+            <!-- BBox style options -->
+            <div id="evalBboxStylePanel" style="display:none;margin-top:8px">
+              <div style="font-size:0.78rem;font-weight:600;color:#555;margin-bottom:4px">BBox Style</div>
+              <div style="display:flex;gap:16px;flex-wrap:wrap">
+                <div><label style="font-size:0.72rem;color:#888">Line Width</label><input type="number" id="evalBboxLineWidth" value="2" min="1" max="8" style="width:50px;padding:2px 4px;font-size:0.78rem" onchange="evalBboxRedraw();evalConfigChanged()"></div>
+                <label style="font-size:0.72rem;display:flex;align-items:center;gap:4px;color:#888"><input type="checkbox" id="evalBboxShowLabel" checked onchange="evalBboxRedraw();evalConfigChanged()"> Show Labels</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Command preview -->
         <div class="config-card" style="margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2677,6 +2828,14 @@ conda run -n lerobot uvicorn train_api:app \
             </div>
           </div>
           <pre id="evalCmdPreview" style="font-family:'SF Mono','Menlo',monospace;font-size:0.78rem;background:#1e1e1e;color:#d4d4d4;border-radius:8px;padding:12px;white-space:pre-wrap;word-break:break-all;line-height:1.6;margin:0;max-height:160px;overflow-y:auto">Select a model to preview command.</pre>
+          <!-- fakecam_params.json preview -->
+          <div id="evalFakecamParamsWrap" style="display:none;margin-top:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-size:0.72rem;font-weight:600;color:#888">fakecam_params.json</span>
+              <button class="btn btn-sm btn-outline" onclick="evalLoadFakecamParams()" style="font-size:0.65rem;padding:1px 8px">Refresh</button>
+            </div>
+            <pre id="evalFakecamParamsPreview" style="font-family:'SF Mono','Menlo',monospace;font-size:0.72rem;background:#f8f8f8;color:#333;border:1px solid #e0e0e0;border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-all;line-height:1.5;margin:0;max-height:200px;overflow-y:auto"></pre>
+          </div>
         </div>
 
         <!-- Run controls -->
@@ -2685,6 +2844,9 @@ conda run -n lerobot uvicorn train_api:app \
           <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap">
             <button class="btn" id="evalRunBtn" onclick="evalStartEpisode()" style="background:#34a853" disabled>Start Episode</button>
             <button class="btn btn-danger" id="evalStopBtn" onclick="evalStopEpisode()" style="display:none">Stop</button>
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;cursor:pointer">
+              <input type="checkbox" id="evalRecordVideo" onchange="evalConfigChanged()"> Record Video
+            </label>
             <span id="evalRunStatus" style="font-size:0.85rem;color:#888">Select a model first</span>
             <span id="evalCountdown" style="font-size:1.1rem;font-weight:700;font-family:'SF Mono','Menlo',monospace;color:#1a73e8;display:none"></span>
           </div>
@@ -3148,7 +3310,7 @@ function setupEvents() {
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
       if (rp) {
-        const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate' || el.dataset.tab === 'simulation';
+        const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate' || el.dataset.tab === 'simulation' || el.dataset.tab === 'generate3d';
         rp.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
@@ -3161,6 +3323,17 @@ function setupEvents() {
       }
       if (el.dataset.tab === 'evaluate' && !evalInited) {
         evalInit();
+      }
+      if (el.dataset.tab === 'generate3d') {
+        g3dLoadCalibrationStatus();
+        setTimeout(() => {
+          if (G3D.inited) {
+            const canvas = document.getElementById('g3dCanvas');
+            G3D.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+            G3D.camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            G3D.camera.updateProjectionMatrix();
+          }
+        }, 50);
       }
       if (el.dataset.tab === 'data-collecting') dcRefreshCmd();
     });
@@ -3176,6 +3349,15 @@ function setupEvents() {
       if (el.dataset.inner === 'cfg-history') loadResults();
       if (el.dataset.inner === 'train-history') trainLoadHistory();
       if (el.dataset.inner === 'sim-objdet') odLoadDatasets();
+      if (el.dataset.inner === 'g3d-sim') {
+        g3dInitScene();
+        setTimeout(() => {
+          const canvas = document.getElementById('g3dCanvas');
+          G3D.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+          G3D.camera.aspect = canvas.clientWidth / canvas.clientHeight;
+          G3D.camera.updateProjectionMatrix();
+        }, 50);
+      }
     });
   });
   // Image
@@ -4318,6 +4500,7 @@ let vizAnimFrame = null;
 let vizEpStart = 0;  // video start timestamp for current episode
 let vizEpEnd = 0;    // video end timestamp
 let vizFrameCount = 0;
+let vizFps = 30;
 
 async function vizRefreshDatasets() {
   const sel = document.getElementById('vizDatasetSelect');
@@ -4341,7 +4524,9 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   const name = this.value;
   const infoSection = document.getElementById('vizInfoSection');
   document.getElementById('vizRenameDsBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizEditTaskBtn').style.display = name ? '' : 'none';
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizRemoveIdleBtn').style.display = name ? '' : 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
   document.getElementById('vizTrainBtn').style.display = name ? '' : 'none';
@@ -4353,6 +4538,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const d = await r.json();
     if (!d.ok) return;
     const info = d.info;
+    vizFps = info.fps || 30;
     // Info grid
     const grid = document.getElementById('vizInfoGrid');
     const allTasks = d.tasks || [];
@@ -4407,6 +4593,8 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     document.getElementById('vizSelectModeBtn').style.background = '#f0f0f0';
     document.getElementById('vizSelectModeBtn').style.color = '#555';
     document.getElementById('vizDeleteBtn').style.display = 'none';
+    document.getElementById('vizSelectAllBtn').style.display = 'none';
+    document.getElementById('vizEditTaskSelBtn').style.display = 'none';
     // Build task→color map
     const TASK_COLORS = ['#1a73e8','#34a853','#a142f4','#e8710a','#e8453c','#00bcd4','#e91e90','#f9ab00','#8bc34a','#795548'];
     const vizTaskColorMap = {};
@@ -4418,7 +4606,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     for (let i = 0; i < info.total_episodes; i++) {
       const ep = vizEpisodesData[i];
       const len = ep ? ep.length : '?';
-      const dur = ep ? ((ep['videos/observation.images.top/to_timestamp'] || 0) - (ep['videos/observation.images.top/from_timestamp'] || 0)).toFixed(1) : '?';
+      const dur = ep ? (ep.length / vizFps).toFixed(1) : '?';
       // Hidden select option
       const o = document.createElement('option');
       o.value = i;
@@ -4459,17 +4647,24 @@ function vizToggleSelectMode() {
   vizSelectMode = !vizSelectMode;
   const btn = document.getElementById('vizSelectModeBtn');
   const delBtn = document.getElementById('vizDeleteBtn');
+  const selAllBtn = document.getElementById('vizSelectAllBtn');
+  const editTaskSelBtn = document.getElementById('vizEditTaskSelBtn');
   if (vizSelectMode) {
     btn.textContent = 'Cancel';
     btn.style.background = '#fce8e6';
     btn.style.color = '#d93025';
     delBtn.style.display = '';
     delBtn.disabled = true;
+    selAllBtn.style.display = '';
+    editTaskSelBtn.style.display = '';
+    editTaskSelBtn.disabled = true;
   } else {
     btn.textContent = 'Select';
     btn.style.background = '#f0f0f0';
     btn.style.color = '#555';
     delBtn.style.display = 'none';
+    selAllBtn.style.display = 'none';
+    editTaskSelBtn.style.display = 'none';
   }
   document.querySelectorAll('.viz-ep-cb').forEach(cb => {
     cb.style.display = vizSelectMode ? '' : 'none';
@@ -4482,6 +4677,40 @@ function vizUpdateDeleteBtn() {
   const btn = document.getElementById('vizDeleteBtn');
   btn.disabled = checked === 0;
   btn.textContent = checked > 0 ? `Delete (${checked})` : 'Delete';
+  const taskBtn = document.getElementById('vizEditTaskSelBtn');
+  taskBtn.disabled = checked === 0;
+  taskBtn.textContent = checked > 0 ? `Task (${checked})` : 'Task';
+}
+
+function vizSelectAll() {
+  const cbs = document.querySelectorAll('.viz-ep-cb');
+  const allChecked = [...cbs].every(cb => cb.checked);
+  cbs.forEach(cb => cb.checked = !allChecked);
+  document.getElementById('vizSelectAllBtn').textContent = allChecked ? 'All' : 'None';
+  vizUpdateDeleteBtn();
+}
+
+async function vizEditTaskSelected() {
+  const checked = [...document.querySelectorAll('.viz-ep-cb:checked')].map(cb => parseInt(cb.dataset.ep));
+  if (!checked.length) return;
+  const newTask = prompt(`Edit task for ${checked.length} selected episode(s):`, vizCurrentTask || '');
+  if (newTask == null || newTask.trim() === '') return;
+  const st = document.getElementById('vizDatasetStatus');
+  st.textContent = 'Updating task...'; st.style.color = '#888';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/update-task`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task: newTask.trim(), episodes: checked}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = `Task updated (${d.updated_episodes} episodes)`; st.style.color = '#34a853';
+      document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    } else {
+      st.textContent = d.error || 'Update failed'; st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
 }
 
 async function vizDeleteSelected() {
@@ -4510,6 +4739,35 @@ async function vizDeleteSelected() {
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
   btn.textContent = 'Delete';
+}
+
+async function vizRemoveIdle() {
+  if (!vizCurrentDataset) return;
+  if (!confirm(`Remove idle frames (leading/trailing) from all episodes in "${vizCurrentDataset}"?\n\nThis trims frames where the arm is not moving at the start and end of each episode.`)) return;
+
+  const btn = document.getElementById('vizRemoveIdleBtn');
+  btn.disabled = true;
+  btn.textContent = 'Removing...';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/remove-idle`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({threshold: 0.5, min_idle_frames: 5}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      if (d.trimmed_frames === 0) {
+        alert('No idle frames detected.');
+      } else {
+        alert(`Removed ${d.trimmed_frames} idle frames. ${d.remaining_frames} frames remaining.`);
+        document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+      }
+    } else {
+      alert('Error: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = 'Remove Idle';
 }
 
 async function vizSplitDataset() {
@@ -4731,6 +4989,32 @@ async function vizRenameDataset() {
   } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
 }
 
+// ── Edit Task ──
+
+async function vizEditTask() {
+  const name = vizCurrentDataset;
+  if (!name) return;
+  const newTask = prompt(`Edit task instruction for "${name}":`, vizCurrentTask || '');
+  if (newTask == null || newTask.trim() === '' || newTask === vizCurrentTask) return;
+  const st = document.getElementById('vizDatasetStatus');
+  st.textContent = 'Updating task...'; st.style.color = '#888';
+  try {
+    const r = await fetch(`/api/datasets/${name}/update-task`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task: newTask.trim()}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      st.textContent = 'Task updated'; st.style.color = '#34a853';
+      // Refresh the dataset view
+      document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    } else {
+      st.textContent = d.error || 'Update failed'; st.style.color = '#d93025';
+    }
+  } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
+}
+
 // ── Delete Dataset ──
 
 function vizShowDeleteDataset() {
@@ -4769,7 +5053,9 @@ async function vizDoDeleteDataset() {
       vizCurrentDataset = null;
       document.getElementById('vizInfoSection').style.display = 'none';
       document.getElementById('vizRenameDsBtn').style.display = 'none';
+      document.getElementById('vizEditTaskBtn').style.display = 'none';
       document.getElementById('vizDeleteDsBtn').style.display = 'none';
+      document.getElementById('vizRemoveIdleBtn').style.display = 'none';
       document.getElementById('vizPushHfBtn').style.display = 'none';
       document.getElementById('vizTrainBtn').style.display = 'none';
       vizRefreshDatasets();
@@ -6888,9 +7174,22 @@ async function vizLoadEpisode() {
   vizStopPlay();
 
   // Get timing from first camera key
+  // Some recordings have from_timestamp that includes pre-roll (idle) time before
+  // actual motion starts. Use to_timestamp - data_duration as the effective video
+  // start to align video frames with trajectory data correctly.
   const topKey = 'videos/observation.images.top';
-  vizEpStart = epMeta[`${topKey}/from_timestamp`] ?? 0;
-  vizEpEnd = epMeta[`${topKey}/to_timestamp`] ?? 0;
+  const origFrom = epMeta[`${topKey}/from_timestamp`] ?? 0;
+  const origTo = epMeta[`${topKey}/to_timestamp`] ?? 0;
+  const epLength = epMeta['length'] || 0;
+  const dataDuration = epLength > 0 ? epLength / vizFps : 0;
+  if (dataDuration > 0 && origTo > origFrom) {
+    // Effective start = to_timestamp - data_duration (skips pre-roll)
+    vizEpStart = origTo - dataDuration;
+    vizEpEnd = origTo;
+  } else {
+    vizEpStart = origFrom;
+    vizEpEnd = origTo;
+  }
 
   // Videos without individual controls — synced via unified Play/Pause
   const vids = document.getElementById('vizVideos');
@@ -7016,7 +7315,7 @@ async function vizLoadEpisode() {
     const d = await r.json();
     if (!d.ok || !d.frames.length) { epInfo.textContent = 'No frame data'; return; }
     vizFrameCount = d.frames.length;
-    epInfo.textContent = `${vizFrameCount} frames, ${(vizEpEnd - vizEpStart).toFixed(1)}s`;
+    epInfo.textContent = `${vizFrameCount} frames, ${(vizFrameCount / vizFps).toFixed(1)}s`;
     vizDrawChart(d.frames);
   } catch(e) { epInfo.textContent = 'Error: ' + e.message; }
 }
@@ -7578,6 +7877,7 @@ let evalCountdownSec = 0;
 let evalEpRunning = false;     // true while episode process is alive
 let evalEpAugData = null;     // per-episode augmentation data {params, cameras}
 let evalEpCameraData = null;  // per-episode camera snapshots (no augmentation)
+let evalEpVideoFilename = null; // per-episode recorded video filename
 
 function evalInit() {
   evalInited = true;
@@ -7602,6 +7902,17 @@ async function evalLoadConfig() {
       if (c.height != null) document.getElementById('evalHeight').value = c.height;
       if (c.fourcc != null) document.getElementById('evalFourcc').value = c.fourcc;
       if (c.use_fakecam != null) document.getElementById('evalUseFakecam').checked = c.use_fakecam;
+      if (c.record_video != null) document.getElementById('evalRecordVideo').checked = c.record_video;
+      if (c.use_bbox != null) {
+        document.getElementById('evalUseBbox').checked = c.use_bbox;
+        evalBboxToggle();
+      }
+      if (c.bbox_boxes && c.bbox_boxes.length) {
+        EVAL_BBOX.boxes = c.bbox_boxes;
+        EVAL_BBOX.frameW = c.bbox_frame_w || 0;
+        EVAL_BBOX.frameH = c.bbox_frame_h || 0;
+        evalBboxRefreshCrops();
+      }
       if (c.aug_mode) {
         const radio = document.querySelector(`input[name="evalAugMode"][value="${c.aug_mode}"]`);
         if (radio) radio.checked = true;
@@ -7633,6 +7944,11 @@ function _evalGetCurrentConfig() {
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
     cam_count: document.getElementById('evalCamCount').value || '2',
     use_fakecam: document.getElementById('evalUseFakecam').checked,
+    record_video: document.getElementById('evalRecordVideo').checked,
+    use_bbox: document.getElementById('evalUseBbox').checked,
+    bbox_boxes: EVAL_BBOX.boxes,
+    bbox_frame_w: EVAL_BBOX.frameW,
+    bbox_frame_h: EVAL_BBOX.frameH,
     aug_mode: evalGetAugMode(),
     aug_level: parseInt(document.getElementById('evalAugLevel').value) || 3,
     chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
@@ -7650,6 +7966,10 @@ function evalConfigChanged() {
     evalSession.task = config.task;
     evalSession.fps = config.fps;
     evalSession.use_fakecam = config.use_fakecam;
+    evalSession.use_bbox = config.use_bbox;
+    evalSession.bbox_boxes = config.bbox_boxes;
+    evalSession.bbox_frame_w = config.bbox_frame_w;
+    evalSession.bbox_frame_h = config.bbox_frame_h;
     evalSession.aug_mode = config.aug_mode;
     evalSession.aug_level = config.aug_level;
     evalSession.target_runs = config.target_runs;
@@ -7661,6 +7981,8 @@ function evalConfigChanged() {
       fourcc: config.fourcc || null,
       chunk_size: config.chunk_size,
       n_action_steps: config.n_action_steps,
+      use_bbox: config.use_bbox,
+      bbox_boxes: config.bbox_boxes,
     };
   }
 
@@ -7968,6 +8290,11 @@ async function _evalSaveFakecamParams() {
     const level = parseInt(document.getElementById('evalAugLevel').value) || 3;
     params = evalAugRandomParams(level);
   }
+  // Include bbox data if enabled
+  const bboxData = evalBboxGetData();
+  if (bboxData) {
+    params.bbox_overlay = bboxData;
+  }
   await fetch('/api/fakecam/save-params', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({params}),
@@ -7991,6 +8318,301 @@ function evalAugLevelChanged() {
   const desc = document.getElementById('evalAugLevelDesc');
   desc.innerHTML = `Rotation ±${L.rotation[1]}° · Translate ±${L.translate_x[1]}% · Scale ${L.scale[0]}–${L.scale[1]} · Brightness ${L.brightness[0]}–${L.brightness[1]} · Contrast ${L.contrast[0]}–${L.contrast[1]} · Noise 0–${L.noise[1]} · Blur 0–${L.blur[1]}`;
 }
+
+// ── Eval BBox on Frame ──
+const EVAL_BBOX = {
+  boxes: [],       // [{name, bbox:[x1,y1,x2,y2], color, color_hex}]
+  frameB64: null,  // captured frame base64
+  frameW: 0,
+  frameH: 0,
+  drawMode: false,
+  drawStart: null,
+};
+const EVAL_BBOX_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF8C42', '#6BCB77'];
+
+function evalBboxToggle() {
+  const on = document.getElementById('evalUseBbox').checked;
+  document.getElementById('evalBboxSettings').style.display = on ? '' : 'none';
+  evalUpdateCmd();
+}
+
+async function evalBboxCapture() {
+  const st = document.getElementById('evalBboxStatus');
+  st.textContent = 'Capturing...';
+  try {
+    // Capture at the same resolution as inference so bbox aligns correctly
+    const evalW = document.getElementById('evalWidth').value || '320';
+    const evalH = document.getElementById('evalHeight').value || '240';
+    const r = await fetch(`/api/eval/capture-top-frame?width=${evalW}&height=${evalH}`);
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Failed'; return; }
+    EVAL_BBOX.frameB64 = d.image_b64;
+    EVAL_BBOX.frameW = d.width;
+    EVAL_BBOX.frameH = d.height;
+    // Draw on canvas
+    const canvas = document.getElementById('evalBboxCanvas');
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      // Enable buttons
+      document.getElementById('evalBboxDetectBtn').disabled = false;
+      document.getElementById('evalBboxDrawBtn').disabled = false;
+      st.textContent = `${d.width}x${d.height}`;
+      // Sync task hint from eval task field
+      const taskEl = document.getElementById('evalBboxTask');
+      if (!taskEl.value) taskEl.value = document.getElementById('evalTask').value || '';
+    };
+    img.src = 'data:image/jpeg;base64,' + d.image_b64;
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+}
+
+async function evalBboxGeminiDetect() {
+  if (!EVAL_BBOX.frameB64) { alert('Capture a frame first'); return; }
+  const st = document.getElementById('evalBboxStatus');
+  st.textContent = 'Detecting...';
+  const task = document.getElementById('evalBboxTask').value || document.getElementById('evalTask').value || '';
+  try {
+    const r = await fetch('/api/eval/detect-bbox', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ image_b64: EVAL_BBOX.frameB64, task_text: task }),
+    });
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Failed'; return; }
+    // Add detected objects
+    (d.objects || []).forEach((obj, i) => {
+      const color = EVAL_BBOX_COLORS[(EVAL_BBOX.boxes.length + i) % EVAL_BBOX_COLORS.length];
+      EVAL_BBOX.boxes.push({
+        name: obj.name || obj.label || 'object',
+        bbox: obj.bbox,
+        color,
+        color_hex: obj.color_hex || color,
+      });
+    });
+    evalBboxRedraw();
+    evalBboxRefreshCrops();
+    st.textContent = `${d.objects?.length || 0} objects detected`;
+    evalConfigChanged();
+  } catch(e) { st.textContent = 'Error: ' + e.message; }
+}
+
+function evalBboxToggleDraw() {
+  EVAL_BBOX.drawMode = !EVAL_BBOX.drawMode;
+  const drawCanvas = document.getElementById('evalBboxDrawCanvas');
+  const btn = document.getElementById('evalBboxDrawBtn');
+  const hint = document.getElementById('evalBboxDrawHint');
+  const clearBtn = document.getElementById('evalBboxClearBtn');
+  if (EVAL_BBOX.drawMode) {
+    const baseCanvas = document.getElementById('evalBboxCanvas');
+    drawCanvas.width = baseCanvas.width;
+    drawCanvas.height = baseCanvas.height;
+    drawCanvas.style.display = 'block';
+    btn.style.background = '#e65100';
+    btn.style.color = '#fff';
+    btn.innerHTML = '&#10003; Done Drawing';
+    hint.style.display = 'block';
+    clearBtn.style.display = 'inline-block';
+    _evalBboxRedrawOverlay();
+  } else {
+    drawCanvas.style.display = 'none';
+    btn.style.background = '#fff3e0';
+    btn.style.color = '#e65100';
+    btn.innerHTML = '&#9998; Draw BBox';
+    hint.style.display = 'none';
+  }
+}
+
+function evalBboxClearAll() {
+  EVAL_BBOX.boxes = [];
+  evalBboxRedraw();
+  evalBboxRefreshCrops();
+  evalConfigChanged();
+}
+
+function evalBboxRedraw() {
+  // Redraw base frame + all boxes on main canvas
+  const canvas = document.getElementById('evalBboxCanvas');
+  const ctx = canvas.getContext('2d');
+  if (EVAL_BBOX.frameB64) {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      _evalBboxDrawBoxes(ctx, 1, 1);
+    };
+    img.src = 'data:image/jpeg;base64,' + EVAL_BBOX.frameB64;
+  }
+  // Also redraw draw canvas overlay
+  const drawCanvas = document.getElementById('evalBboxDrawCanvas');
+  const dctx = drawCanvas.getContext('2d');
+  dctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+}
+
+function _evalBboxDrawBoxes(ctx, scaleX, scaleY) {
+  const lineW = parseInt(document.getElementById('evalBboxLineWidth').value) || 2;
+  const showLabel = document.getElementById('evalBboxShowLabel').checked;
+  EVAL_BBOX.boxes.forEach((box, i) => {
+    const [x1, y1, x2, y2] = box.bbox;
+    const color = box.color || EVAL_BBOX_COLORS[i % EVAL_BBOX_COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineW;
+    ctx.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+    if (showLabel) {
+      const fontSize = Math.max(10, lineW * 6);
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      const lbl = box.name;
+      const tw = ctx.measureText(lbl).width;
+      const lh = fontSize + 4;
+      ctx.fillStyle = color;
+      ctx.fillRect(x1 * scaleX, Math.max(0, y1 * scaleY - lh), tw + 6, lh);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(lbl, x1 * scaleX + 3, Math.max(fontSize, y1 * scaleY - 3));
+    }
+  });
+}
+
+function evalBboxRefreshCrops() {
+  const cropsDiv = document.getElementById('evalBboxCrops');
+  cropsDiv.innerHTML = '';
+  document.getElementById('evalBboxStylePanel').style.display = EVAL_BBOX.boxes.length ? '' : 'none';
+  EVAL_BBOX.boxes.forEach((box, i) => {
+    const [x1, y1, x2, y2] = box.bbox;
+    const card = document.createElement('div');
+    card.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 8px;border:2px solid ' + box.color + ';border-radius:6px;font-size:0.75rem;position:relative';
+    card.innerHTML = `
+      <input type="color" value="${box.color}" style="width:20px;height:20px;border:none;padding:0;cursor:pointer;background:none" onchange="evalBboxEditColor(${i},this.value)">
+      <span onclick="evalBboxEditName(${i})" style="color:${box.color};font-weight:600;cursor:pointer;border-bottom:1px dashed ${box.color}" title="Click to rename">${box.name}</span>
+      <span style="color:#aaa;font-size:0.65rem">[${x1},${y1},${x2},${y2}]</span>
+      <button onclick="evalBboxRemove(${i})" style="background:none;border:none;color:#c00;cursor:pointer;font-size:14px;padding:0 2px">&times;</button>`;
+    cropsDiv.appendChild(card);
+  });
+}
+
+function evalBboxEditName(idx) {
+  const box = EVAL_BBOX.boxes[idx];
+  const newName = prompt('Rename object:', box.name);
+  if (newName && newName.trim() && newName.trim() !== box.name) {
+    box.name = newName.trim();
+    evalBboxRedraw();
+    evalBboxRefreshCrops();
+    evalConfigChanged();
+  }
+}
+
+function evalBboxEditColor(idx, newColor) {
+  EVAL_BBOX.boxes[idx].color = newColor;
+  EVAL_BBOX.boxes[idx].color_hex = newColor;
+  evalBboxRedraw();
+  evalBboxRefreshCrops();
+  evalConfigChanged();
+}
+
+function evalBboxRemove(idx) {
+  EVAL_BBOX.boxes.splice(idx, 1);
+  evalBboxRedraw();
+  evalBboxRefreshCrops();
+  evalConfigChanged();
+}
+
+function evalBboxGetData() {
+  if (!document.getElementById('evalUseBbox').checked || !EVAL_BBOX.boxes.length) return null;
+  return {
+    boxes: EVAL_BBOX.boxes.map(b => ({
+      name: b.name,
+      bbox: b.bbox,
+      color_hex: b.color_hex || b.color,
+    })),
+    line_width: parseInt(document.getElementById('evalBboxLineWidth').value) || 2,
+    show_label: document.getElementById('evalBboxShowLabel').checked,
+    frame_width: EVAL_BBOX.frameW,
+    frame_height: EVAL_BBOX.frameH,
+  };
+}
+
+// Helper: convert mouse event to canvas-space coords
+function _evalBboxMouseToCanvas(e, drawCanvas) {
+  const rect = drawCanvas.getBoundingClientRect();
+  const displayX = e.clientX - rect.left;
+  const displayY = e.clientY - rect.top;
+  // Scale from display coords to canvas internal coords
+  const canvasX = displayX * (drawCanvas.width / rect.width);
+  const canvasY = displayY * (drawCanvas.height / rect.height);
+  return { canvasX, canvasY };
+}
+
+// Redraw existing eval bbox overlay on draw canvas (dashed style during draw mode)
+function _evalBboxRedrawOverlay() {
+  const drawCanvas = document.getElementById('evalBboxDrawCanvas');
+  const ctx = drawCanvas.getContext('2d');
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  const lineW = parseInt(document.getElementById('evalBboxLineWidth').value) || 2;
+  const showLabel = document.getElementById('evalBboxShowLabel').checked;
+  EVAL_BBOX.boxes.forEach((box, i) => {
+    const [x1, y1, x2, y2] = box.bbox;
+    const color = box.color || EVAL_BBOX_COLORS[i % EVAL_BBOX_COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineW;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.setLineDash([]);
+    if (showLabel) {
+      const fontSize = Math.max(10, lineW * 6);
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      const lbl = box.name;
+      const tw = ctx.measureText(lbl).width;
+      const lh = fontSize + 4;
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.max(0, y1 - lh), tw + 8, lh);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(lbl, x1 + 4, Math.max(fontSize, y1 - 3));
+    }
+  });
+}
+
+// Mouse events for bbox drawing on eval canvas
+(function() {
+  const drawCanvas = document.getElementById('evalBboxDrawCanvas');
+  if (!drawCanvas) return;
+  let startX, startY, drawing = false;
+  drawCanvas.addEventListener('mousedown', (e) => {
+    if (!EVAL_BBOX.drawMode) return;
+    const { canvasX, canvasY } = _evalBboxMouseToCanvas(e, drawCanvas);
+    startX = canvasX;
+    startY = canvasY;
+    drawing = true;
+  });
+  drawCanvas.addEventListener('mousemove', (e) => {
+    if (!drawing) return;
+    const { canvasX, canvasY } = _evalBboxMouseToCanvas(e, drawCanvas);
+    _evalBboxRedrawOverlay();
+    const ctx = drawCanvas.getContext('2d');
+    ctx.strokeStyle = '#FF6B6B';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(startX, startY, canvasX - startX, canvasY - startY);
+    ctx.setLineDash([]);
+  });
+  drawCanvas.addEventListener('mouseup', (e) => {
+    if (!drawing) return;
+    drawing = false;
+    const { canvasX, canvasY } = _evalBboxMouseToCanvas(e, drawCanvas);
+    let x1 = Math.round(Math.min(startX, canvasX));
+    let y1 = Math.round(Math.min(startY, canvasY));
+    let x2 = Math.round(Math.max(startX, canvasX));
+    let y2 = Math.round(Math.max(startY, canvasY));
+    const baseCanvas = document.getElementById('evalBboxCanvas');
+    x1 = Math.max(0, x1); y1 = Math.max(0, y1);
+    x2 = Math.min(baseCanvas.width, x2); y2 = Math.min(baseCanvas.height, y2);
+    if (x2 - x1 < 10 || y2 - y1 < 10) { _evalBboxRedrawOverlay(); return; }
+    const name = prompt('Object name:');
+    if (!name || !name.trim()) { _evalBboxRedrawOverlay(); return; }
+    const color = EVAL_BBOX_COLORS[EVAL_BBOX.boxes.length % EVAL_BBOX_COLORS.length];
+    EVAL_BBOX.boxes.push({ name: name.trim(), bbox: [x1, y1, x2, y2], color, color_hex: color });
+    evalBboxRedraw();
+    evalBboxRefreshCrops();
+    evalConfigChanged();
+  });
+})();
 
 function evalUpdateCmd() {
   const pre = document.getElementById('evalCmdPreview');
@@ -8023,11 +8645,12 @@ function evalUpdateCmd() {
   } else {
     camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
   }
-  let needsFakecam = useFakecam || blackCamArgs;
+  const useBbox = document.getElementById('evalUseBbox').checked;
+  let needsFakecam = useFakecam || useBbox || blackCamArgs;
   let cmd = '';
   if (needsFakecam) {
     cmd = 'python fakecam_inject.py';
-    if (useFakecam) cmd += ' --params-file fakecam_params.json';
+    if (useFakecam || useBbox) cmd += ' --params-file fakecam_params.json';
     cmd += blackCamArgs + ' -- \\\n  ';
   }
   cmd += `lerobot-rollout \\\n`;
@@ -8044,6 +8667,7 @@ function evalUpdateCmd() {
   if (chunkSize > 0) cmd += ` \\\n  --policy.chunk_size=${chunkSize}`;
   if (nActionSteps > 0) cmd += ` \\\n  --policy.n_action_steps=${nActionSteps}`;
   pre.textContent = cmd;
+  _evalShowFakecamParamsIfNeeded();
 }
 
 function evalCopyCmd() {
@@ -8055,6 +8679,33 @@ function evalCopyCmd() {
   ta.select();
   document.execCommand('copy');
   document.body.removeChild(ta);
+}
+
+async function evalLoadFakecamParams() {
+  try {
+    const r = await fetch('/api/fakecam/read-params-file');
+    const d = await r.json();
+    const pre = document.getElementById('evalFakecamParamsPreview');
+    if (d.ok) {
+      pre.textContent = JSON.stringify(d.params, null, 2);
+    } else {
+      pre.textContent = d.error || 'File not found';
+    }
+  } catch(e) {
+    document.getElementById('evalFakecamParamsPreview').textContent = 'Error: ' + e.message;
+  }
+}
+
+function _evalShowFakecamParamsIfNeeded() {
+  const useFakecam = document.getElementById('evalUseFakecam').checked;
+  const useBbox = document.getElementById('evalUseBbox').checked;
+  const wrap = document.getElementById('evalFakecamParamsWrap');
+  if (useFakecam || useBbox) {
+    wrap.style.display = '';
+    evalLoadFakecamParams();
+  } else {
+    wrap.style.display = 'none';
+  }
 }
 
 // ── Download Model ──
@@ -8368,13 +9019,41 @@ function _evalBuildBody() {
     fourcc: document.getElementById('evalFourcc').value.toUpperCase().trim(),
     cam_count: document.getElementById('evalCamCount').value || '2',
     use_fakecam: document.getElementById('evalUseFakecam').checked,
+    use_bbox: document.getElementById('evalUseBbox').checked,
+    bbox_data: evalBboxGetData(),
     chunk_size: parseInt(document.getElementById('evalChunkSize').value) || 0,
     n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || 0,
   };
 }
 
 async function _evalStopProcess() {
-  try { await fetch('/api/eval/stop', {method: 'POST'}); } catch(e) {}
+  try {
+    const r = await fetch('/api/eval/stop', {method: 'POST'});
+    const d = await r.json();
+    return d.video_filename || null;
+  } catch(e) { return null; }
+}
+
+async function _evalStartVideoRecording() {
+  try {
+    const bboxData = evalBboxGetData();
+    const r = await fetch('/api/eval/start-recording', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        width: parseInt(document.getElementById('evalWidth').value) || 320,
+        height: parseInt(document.getElementById('evalHeight').value) || 240,
+        fps: parseInt(document.getElementById('evalFps').value) || 30,
+        cam_count: document.getElementById('evalCamCount').value || '2',
+        bbox_data: bboxData,
+      }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      evalEpVideoFilename = d.video_filename;
+      console.log('[Eval] Video recording started:', d.video_filename);
+    }
+  } catch(e) { console.error('[Eval] Failed to start recording:', e); }
 }
 
 function _evalShowRecordButtons() {
@@ -8406,6 +9085,7 @@ async function evalStartEpisode() {
   // 0) Capture camera preview BEFORE starting (camera not locked yet)
   evalEpAugData = null;
   evalEpCameraData = null;
+  evalEpVideoFilename = null;
   const camCount = document.getElementById('evalCamCount').value || '2';
   if (document.getElementById('evalUseFakecam').checked) {
     const savedParams = await _evalSaveFakecamParams();
@@ -8431,8 +9111,12 @@ async function evalStartEpisode() {
         const container = document.getElementById('evalFakecamCams');
         wrap.style.display = '';
         container.innerHTML = '';
+        const bboxData = evalBboxGetData();
         for (const cam of pd.cameras) {
           const div = document.createElement('div');
+          const isTopCam = (cam.name || '').toLowerCase() === 'top';
+          const showBbox = bboxData && isTopCam;
+          const bboxCanvasId = `evalPreviewBbox_${cam.name}`;
           div.innerHTML = `
             <div style="font-size:0.75rem;font-weight:600;color:#555;margin-bottom:4px">${cam.name}</div>
             <div style="display:flex;gap:6px">
@@ -8444,8 +9128,44 @@ async function evalStartEpisode() {
                 <div style="font-size:0.65rem;color:#999;margin-bottom:2px">Augmented</div>
                 <img src="data:image/jpeg;base64,${cam.augmented}" style="width:100%;border-radius:4px;border:1px solid #e88">
               </div>
+              ${showBbox ? `<div style="flex:1;text-align:center">
+                <div style="font-size:0.65rem;color:#ff9800;margin-bottom:2px">With BBox</div>
+                <canvas id="${bboxCanvasId}" style="width:100%;border-radius:4px;border:2px solid #ff9800"></canvas>
+              </div>` : ''}
             </div>`;
           container.appendChild(div);
+          // Draw bbox on canvas (top camera only)
+          if (showBbox) {
+            const srcB64 = cam.augmented || cam.original;
+            const bboxCanvas = document.getElementById(bboxCanvasId);
+            const bimg = new Image();
+            bimg.onload = () => {
+              bboxCanvas.width = bimg.width;
+              bboxCanvas.height = bimg.height;
+              const bctx = bboxCanvas.getContext('2d');
+              bctx.drawImage(bimg, 0, 0);
+              const fW = bboxData.frame_width || bimg.width;
+              const fH = bboxData.frame_height || bimg.height;
+              const ssx = bimg.width / fW;
+              const ssy = bimg.height / fH;
+              const lw = bboxData.line_width || 2;
+              bboxData.boxes.forEach(b => {
+                const [bx1,by1,bx2,by2] = b.bbox;
+                bctx.strokeStyle = b.color_hex || '#FF6B6B';
+                bctx.lineWidth = lw;
+                bctx.strokeRect(bx1*ssx, by1*ssy, (bx2-bx1)*ssx, (by2-by1)*ssy);
+                if (bboxData.show_label) {
+                  bctx.font = 'bold 12px sans-serif';
+                  const tw = bctx.measureText(b.name).width;
+                  bctx.fillStyle = b.color_hex || '#FF6B6B';
+                  bctx.fillRect(bx1*ssx, Math.max(0, by1*ssy-16), tw+6, 16);
+                  bctx.fillStyle = '#fff';
+                  bctx.fillText(b.name, bx1*ssx+3, Math.max(12, by1*ssy-3));
+                }
+              });
+            };
+            bimg.src = 'data:image/jpeg;base64,' + srcB64;
+          }
         }
       }
     } catch(e) {}
@@ -8532,6 +9252,10 @@ async function evalStartEpisode() {
           evalCountdownSec = parseInt(document.getElementById('evalDuration').value) || 12;
           cdEl.textContent = evalCountdownSec + 's';
           st.innerHTML = '<span style="color:#34a853">Robot running...</span>';
+          // Start video recording when inference actually begins
+          if (document.getElementById('evalRecordVideo').checked) {
+            _evalStartVideoRecording();
+          }
           evalCountdownTimer = setInterval(async () => {
             evalCountdownSec--;
             if (evalCountdownSec <= 0) {
@@ -8539,7 +9263,7 @@ async function evalStartEpisode() {
               evalEpRunning = false;
               cdEl.textContent = '0s';
               st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
-              await _evalStopProcess();
+              evalEpVideoFilename = await _evalStopProcess();
               st.textContent = 'Episode done. Record result:';
               _evalShowRecordButtons();
             } else {
@@ -8559,7 +9283,7 @@ async function evalStopEpisode() {
   st.innerHTML = '<span style="color:#ff9800">Stopping...</span>';
   document.getElementById('evalStopBtn').style.display = 'none';
   document.getElementById('evalCountdown').style.display = 'none';
-  await _evalStopProcess();
+  evalEpVideoFilename = await _evalStopProcess();
   st.textContent = 'Stopped. Record result:';
   _evalShowRecordButtons();
 }
@@ -8581,6 +9305,12 @@ async function evalRecordResult(result) {
       chunk_size: parseInt(document.getElementById('evalChunkSize').value) || null,
       n_action_steps: parseInt(document.getElementById('evalNActionSteps').value) || null,
       use_fakecam: document.getElementById('evalUseFakecam').checked,
+      use_bbox: document.getElementById('evalUseBbox').checked,
+      bbox_boxes: EVAL_BBOX.boxes.map(b => ({ name: b.name, bbox: b.bbox, color_hex: b.color_hex || b.color })),
+      bbox_frame_w: EVAL_BBOX.frameW || 0,
+      bbox_frame_h: EVAL_BBOX.frameH || 0,
+      bbox_line_width: parseInt(document.getElementById('evalBboxLineWidth').value) || 2,
+      bbox_show_label: document.getElementById('evalBboxShowLabel').checked,
     },
   };
   if (evalEpAugData) {
@@ -8598,9 +9328,13 @@ async function evalRecordResult(result) {
       original: c.original,
     }));
   }
+  if (evalEpVideoFilename) {
+    epResult.video_filename = evalEpVideoFilename;
+  }
   evalSession.results.push(epResult);
   evalEpAugData = null;
   evalEpCameraData = null;
+  evalEpVideoFilename = null;
   evalSession.completed++;
   if (result === 'fail') evalSession.fail++;
   else evalSession.success++;
@@ -8643,7 +9377,7 @@ function evalRenderResults() {
     const bg = bgMap[r.result] || '#f8f8f8';
     const icon = iconMap[r.result] || '?';
     const time = new Date(r.timestamp).toLocaleTimeString();
-    const hasDetail = r.aug_params || r.aug_preview || r.camera_preview || r.config;
+    const hasDetail = r.aug_params || r.aug_preview || r.camera_preview || r.config || r.video_filename;
 
     // Detail section
     let detail = '';
@@ -8660,8 +9394,20 @@ function evalRenderResults() {
           ['Chunk', c.chunk_size || 'default'],
           ['N Steps', c.n_action_steps || 'default'],
           ['FakeCam', c.use_fakecam ? 'ON' : 'OFF'],
+          ['BBox', c.use_bbox ? `ON (${(c.bbox_boxes||[]).length})` : 'OFF'],
         ].filter(([,v]) => v !== '-');
         configHtml = `<div style="font-size:0.68rem;color:#888;margin-bottom:6px">${entries.map(([k,v]) => `<span style="margin-right:10px"><strong>${k}:</strong> ${v}</span>`).join('')}</div>`;
+        // Show bbox boxes if present
+        if (c.use_bbox && c.bbox_boxes && c.bbox_boxes.length) {
+          configHtml += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">${c.bbox_boxes.map(b => {
+            const [x1,y1,x2,y2] = b.bbox || [0,0,0,0];
+            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid ${b.color_hex||'#888'};border-radius:4px;font-size:0.65rem">
+              <span style="width:8px;height:8px;border-radius:50%;background:${b.color_hex||'#888'};flex-shrink:0"></span>
+              <strong style="color:${b.color_hex||'#888'}">${b.name}</strong>
+              <span style="color:#aaa">[${x1},${y1},${x2},${y2}]</span>
+            </span>`;
+          }).join('')}</div>`;
+        }
       }
       let paramHtml = '';
       if (r.aug_params) {
@@ -8681,20 +9427,35 @@ function evalRenderResults() {
       }
       let imgHtml = '';
       const previews = r.aug_preview || r.camera_preview || [];
+      const hasBboxOverlay = r.config && r.config.use_bbox && r.config.bbox_boxes && r.config.bbox_boxes.length;
       if (previews.length) {
-        imgHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap">${previews.map(c => {
+        imgHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap">${previews.map((c, ci) => {
           const hasAugImg = c.augmented;
+          const isTopCam = (c.name || '').toLowerCase() === 'top';
+          const showBbox = hasBboxOverlay && isTopCam;
+          const bboxImgId = `evalResultBboxImg_${i}_${ci}`;
           return `<div style="flex:1;min-width:120px">
             <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:3px">${c.name}</div>
             <div style="display:flex;gap:4px">
-              <div style="${hasAugImg?'flex:1;':''}text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">${hasAugImg?'Original':'Camera'}</div><img src="data:image/jpeg;base64,${c.original}" style="width:100%;border-radius:4px;border:1px solid #e0e0e0"></div>
+              <div style="${hasAugImg||showBbox?'flex:1;':''}text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">${hasAugImg?'Original':'Camera'}</div><img src="data:image/jpeg;base64,${c.original}" style="width:100%;border-radius:4px;border:1px solid #e0e0e0"></div>
               ${hasAugImg?`<div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">Augmented</div><img src="data:image/jpeg;base64,${c.augmented}" style="width:100%;border-radius:4px;border:1px solid #e0a0a0"></div>`:''}
+              ${showBbox?`<div style="flex:1;text-align:center"><div style="font-size:0.6rem;color:#aaa;margin-bottom:1px">With BBox</div><canvas id="${bboxImgId}" style="width:100%;border-radius:4px;border:2px solid #ff9800"></canvas></div>`:''}
             </div>
           </div>`;
         }).join('')}</div>`;
       }
+      let videoHtml = '';
+      if (r.video_filename) {
+        const vtype = r.video_filename.endsWith('.avi') ? 'video/x-msvideo' : 'video/mp4';
+        videoHtml = `<div style="margin-top:8px">
+          <div style="font-size:0.68rem;font-weight:600;color:#666;margin-bottom:4px">Recorded Video</div>
+          <video controls style="max-width:100%;border-radius:6px;border:1px solid #e0e0e0;max-height:300px" preload="metadata">
+            <source src="/data/eval_videos/${r.video_filename}" type="${vtype}">
+          </video>
+        </div>`;
+      }
       detail = `<div id="evalResultDetail_${i}" style="display:none;padding:8px 12px 10px;background:#fafafa;border-radius:0 0 8px 8px;border-top:1px dashed #e0e0e0">
-        ${configHtml}${paramHtml}${imgHtml}
+        ${configHtml}${paramHtml}${imgHtml}${videoHtml}
       </div>`;
     }
 
@@ -8703,6 +9464,7 @@ function evalRenderResults() {
         <span style="color:${color};font-weight:700;font-size:1.1rem;width:22px;text-align:center;flex-shrink:0">${icon}</span>
         <span style="font-size:0.8rem;font-weight:600;color:#444;width:46px;flex-shrink:0">#${r.run}</span>
         <span style="font-size:0.7rem;color:${color};font-weight:500;flex-shrink:0">${r.result}</span>
+        ${r.video_filename?'<span style="font-size:0.7rem;color:#ff9800;flex-shrink:0" title="Video recorded">&#9658;</span>':''}
         <span style="flex:1"></span>
         ${hasDetail?`<span style="font-size:0.65rem;color:#aaa;flex-shrink:0" id="evalDetailBtn_${i}">&#9660; detail</span>`:''}
         <span style="font-size:0.7rem;color:#aaa;flex-shrink:0">${time}</span>
@@ -8726,10 +9488,59 @@ function evalToggleDetail(idx) {
   if (el.style.display === 'none') {
     el.style.display = '';
     if (btn) btn.innerHTML = '&#9650; detail';
+    // Draw bbox overlays if needed
+    _evalDrawResultBboxes(idx);
   } else {
     el.style.display = 'none';
     if (btn) btn.innerHTML = '&#9660; detail';
   }
+}
+
+function _evalDrawResultBboxes(idx) {
+  if (!evalSession || !evalSession.results[idx]) return;
+  const r = evalSession.results[idx];
+  if (!r.config || !r.config.use_bbox || !r.config.bbox_boxes || !r.config.bbox_boxes.length) return;
+  const previews = r.aug_preview || r.camera_preview || [];
+  const showLabel = r.config.bbox_show_label !== undefined ? r.config.bbox_show_label : true;
+  const lineW = r.config.bbox_line_width || 2;
+  previews.forEach((c, ci) => {
+    if ((c.name || '').toLowerCase() !== 'top') return;
+    const canvasId = `evalResultBboxImg_${idx}_${ci}`;
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || canvas.dataset.drawn) return;
+    const srcB64 = c.augmented || c.original;
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const boxes = r.config.bbox_boxes;
+      const frameW = r.config.bbox_frame_w || img.width;
+      const frameH = r.config.bbox_frame_h || img.height;
+      const sx = img.width / frameW;
+      const sy = img.height / frameH;
+      boxes.forEach(b => {
+        const [x1, y1, x2, y2] = b.bbox || [0,0,0,0];
+        const color = b.color_hex || '#FF6B6B';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineW;
+        ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+        if (showLabel) {
+          const fontSize = Math.max(10, lineW * 6);
+          ctx.font = `bold ${fontSize}px sans-serif`;
+          const lbl = b.name;
+          const tw = ctx.measureText(lbl).width;
+          ctx.fillStyle = color;
+          ctx.fillRect(x1 * sx, Math.max(0, y1 * sy - fontSize - 4), tw + 8, fontSize + 4);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(lbl, x1 * sx + 4, Math.max(fontSize, y1 * sy - 4));
+        }
+      });
+      canvas.dataset.drawn = '1';
+    };
+    img.src = 'data:image/jpeg;base64,' + srcB64;
+  });
 }
 
 function evalEditResult(idx, newResult) {
@@ -8974,6 +9785,15 @@ async function evalLoadSession(sessionId) {
     document.getElementById('evalTargetRuns').value = d.target_runs || 10;
     document.getElementById('evalFps').value = d.fps || 30;
     document.getElementById('evalUseFakecam').checked = d.use_fakecam || false;
+    if (d.record_video != null) document.getElementById('evalRecordVideo').checked = d.record_video;
+    document.getElementById('evalUseBbox').checked = d.use_bbox || false;
+    evalBboxToggle();
+    if (d.bbox_boxes && d.bbox_boxes.length) {
+      EVAL_BBOX.boxes = d.bbox_boxes;
+      EVAL_BBOX.frameW = d.bbox_frame_w || 0;
+      EVAL_BBOX.frameH = d.bbox_frame_h || 0;
+      evalBboxRefreshCrops();
+    }
     if (d.aug_mode) {
       const radio = document.querySelector(`input[name="evalAugMode"][value="${d.aug_mode}"]`);
       if (radio) radio.checked = true;
@@ -9443,13 +10263,19 @@ function simSetupVideo(videoEl, noneEl, videoInfo) {
 function simSyncVideos() {
   if (!SIM.videos) return;
   const t = SIM.currentFrame / SIM.fps;
+  const dataDuration = SIM.frames.length / SIM.fps;
   const topV = document.getElementById('simVideoTop');
   const wristV = document.getElementById('simVideoWrist');
   if (SIM.videos['observation.images.top']) {
-    topV.currentTime = (SIM.videos['observation.images.top'].from_timestamp || 0) + t;
+    const v = SIM.videos['observation.images.top'];
+    // Use to_timestamp - dataDuration as effective start (handles encoder pre-roll)
+    const effectiveStart = (v.to_timestamp && dataDuration > 0) ? v.to_timestamp - dataDuration : (v.from_timestamp || 0);
+    topV.currentTime = effectiveStart + t;
   }
   if (SIM.videos['observation.images.wrist']) {
-    wristV.currentTime = (SIM.videos['observation.images.wrist'].from_timestamp || 0) + t;
+    const v = SIM.videos['observation.images.wrist'];
+    const effectiveStart = (v.to_timestamp && dataDuration > 0) ? v.to_timestamp - dataDuration : (v.from_timestamp || 0);
+    wristV.currentTime = effectiveStart + t;
   }
 }
 
@@ -9902,6 +10728,496 @@ document.querySelectorAll('.nav-item').forEach(item => {
     }
   });
 });
+
+// ══════════ Generate 3D ══════════
+
+const G3D = {
+  points: [],
+  model: null,
+  pendingPixel: null,
+  imageSize: null,
+  imageFile: null,
+  imageB64: '',
+  objects: [],
+  scene: null, camera: null, renderer: null, controls: null,
+  robot: null, sceneObjects: [], inited: false,
+};
+
+const G3D_COLORS = ['#e8453c', '#1a73e8', '#34a853', '#f9ab00', '#9c27b0', '#00acc1', '#ff7043', '#607d8b'];
+
+function g3dJointArray(joints) {
+  return JOINT_NAMES.map(n => Number(joints?.[n] ?? (n === 'gripper' ? 50 : 0)));
+}
+
+function g3dMsg(text, isError=false) {
+  const el = document.getElementById('g3dCalibMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#d93025' : '#777';
+}
+
+function g3dSetCalibrated(on) {
+  const st = document.getElementById('g3dCalibStatus');
+  if (!st) return;
+  st.textContent = on ? 'Calibrated' : 'Not calibrated';
+  st.className = 'cal-status ' + (on ? 'on' : 'off');
+}
+
+async function g3dLoadCalibrationStatus() {
+  try {
+    const r = await fetch('/api/generate3d/calibration/status');
+    const d = await r.json();
+    if (!d.ok) return;
+    G3D.points = d.points || [];
+    G3D.model = d.model || null;
+    G3D.imageSize = d.last_image_size || G3D.imageSize;
+    g3dSetCalibrated(!!G3D.model);
+    g3dRenderPoints();
+    g3dRenderModelInfo();
+  } catch (_) {}
+}
+
+async function g3dCaptureCalib() {
+  const btn = document.getElementById('g3dCaptureBtn');
+  btn.disabled = true;
+  g3dMsg('Capturing...');
+  try {
+    const r = await fetch('/api/generate3d/calibration/capture', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) { g3dMsg(d.error || 'Capture failed', true); btn.disabled = false; return; }
+    G3D.imageSize = [d.image_width, d.image_height];
+    g3dShowCalibImage(d.image);
+    g3dMsg(`Captured ${d.image_width}x${d.image_height}`);
+  } catch (e) {
+    g3dMsg(e.message, true);
+  }
+  btn.disabled = false;
+}
+
+function g3dShowCalibImage(b64) {
+  const img = document.getElementById('g3dCalibImg');
+  img.src = 'data:image/jpeg;base64,' + b64;
+  img.onload = () => {
+    G3D.imageSize = [img.naturalWidth, img.naturalHeight];
+    const canvas = document.getElementById('g3dCalibOverlay');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    document.getElementById('g3dCalibWrap').style.display = 'inline-block';
+    document.getElementById('g3dCalibPlaceholder').style.display = 'none';
+    g3dDrawCalibOverlay();
+  };
+}
+
+function g3dCalibClick(e) {
+  const img = document.getElementById('g3dCalibImg');
+  if (!img.naturalWidth) return;
+  const rect = img.getBoundingClientRect();
+  const u = Math.round((e.clientX - rect.left) * img.naturalWidth / rect.width);
+  const v = Math.round((e.clientY - rect.top) * img.naturalHeight / rect.height);
+  G3D.pendingPixel = [u, v];
+  g3dDrawCalibOverlay();
+  document.getElementById('g3dSavePointBtn').disabled = false;
+
+  if (document.getElementById('g3dClickMove').checked && G3D.model) {
+    g3dMoveToPixel([u, v]);
+  } else {
+    g3dMsg(`Selected pixel (${u}, ${v})`);
+  }
+}
+
+function g3dDrawCalibOverlay() {
+  const canvas = document.getElementById('g3dCalibOverlay');
+  if (!canvas || !canvas.width) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  G3D.points.forEach((p, i) => {
+    const [u, v] = p.pixel;
+    const color = G3D_COLORS[i % G3D_COLORS.length];
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(u - 15, v); ctx.lineTo(u + 15, v); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u, v - 15); ctx.lineTo(u, v + 15); ctx.stroke();
+    ctx.beginPath(); ctx.arc(u, v, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = color; ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(String(i + 1), u + 13, v - 10);
+  });
+
+  if (G3D.pendingPixel) {
+    const [u, v] = G3D.pendingPixel;
+    ctx.strokeStyle = '#ff1493'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(u, v, 13, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u - 20, v); ctx.lineTo(u + 20, v); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(u, v - 20); ctx.lineTo(u, v + 20); ctx.stroke();
+  }
+}
+
+function g3dRenderPoints() {
+  const list = document.getElementById('g3dPointsList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!G3D.points.length) {
+    list.innerHTML = '<div style="font-size:0.82rem;color:#999">No points saved.</div>';
+  }
+  G3D.points.forEach((p, i) => {
+    const pos = p.position_3d || [0, 0, 0];
+    const row = document.createElement('div');
+    row.className = 'cb-point-row done';
+    row.innerHTML = `<div class="cb-point-idx">${i + 1}</div>
+      <div class="cb-point-info">
+        <code>px (${p.pixel[0]}, ${p.pixel[1]})</code><br>
+        <span style="font-size:0.75rem;color:#555">3D x:${Number(pos[0]).toFixed(3)} z:${Number(pos[2]).toFixed(3)}</span>
+      </div>
+      <button class="btn btn-sm btn-outline" onclick="g3dDeletePoint(${i})" style="font-size:0.72rem;padding:3px 8px">Remove</button>`;
+    list.appendChild(row);
+  });
+  document.getElementById('g3dComputeBtn').disabled = G3D.points.length < 3;
+  g3dDrawCalibOverlay();
+}
+
+function g3dRenderModelInfo() {
+  const el = document.getElementById('g3dModelInfo');
+  if (!el) return;
+  if (!G3D.model) {
+    el.innerHTML = `${G3D.points.length} points saved. Need 3+ for affine, 6+ for quadratic.`;
+    return;
+  }
+  el.innerHTML = `Model: <strong>${G3D.model.type}</strong> · points: ${G3D.model.point_count} · world RMSE: ${(G3D.model.rmse_m * 100).toFixed(2)} cm`;
+}
+
+async function g3dSavePoint() {
+  if (!G3D.pendingPixel) return;
+  const btn = document.getElementById('g3dSavePointBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/generate3d/calibration/save-point', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pixel:G3D.pendingPixel, image_size:G3D.imageSize}),
+    });
+    const d = await r.json();
+    if (!d.ok) { g3dMsg(d.error || 'Save failed', true); btn.textContent = 'Save Current Position'; btn.disabled = false; return; }
+    G3D.points = d.points || [];
+    G3D.model = null;
+    G3D.pendingPixel = null;
+    g3dSetCalibrated(false);
+    g3dRenderPoints();
+    g3dRenderModelInfo();
+    g3dMsg(`Saved point ${G3D.points.length}`);
+  } catch (e) {
+    g3dMsg(e.message, true);
+    btn.disabled = false;
+  }
+  btn.textContent = 'Save Current Position';
+}
+
+async function g3dDeletePoint(index) {
+  const r = await fetch('/api/generate3d/calibration/delete-point', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({index}),
+  });
+  const d = await r.json();
+  if (!d.ok) { g3dMsg(d.error || 'Remove failed', true); return; }
+  G3D.points = d.points || [];
+  G3D.model = null;
+  g3dSetCalibrated(false);
+  g3dRenderPoints();
+  g3dRenderModelInfo();
+}
+
+async function g3dComputeCalibration() {
+  const btn = document.getElementById('g3dComputeBtn');
+  btn.disabled = true;
+  g3dMsg('Computing model...');
+  try {
+    const r = await fetch('/api/generate3d/calibration/compute', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model_type:document.getElementById('g3dModelType').value, image_size:G3D.imageSize}),
+    });
+    const d = await r.json();
+    if (!d.ok) { g3dMsg(d.error || 'Compute failed', true); btn.disabled = false; return; }
+    G3D.model = d.model;
+    g3dSetCalibrated(true);
+    g3dRenderModelInfo();
+    g3dMsg(`Model ready: ${d.model.type}`);
+  } catch (e) {
+    g3dMsg(e.message, true);
+    btn.disabled = false;
+  }
+}
+
+async function g3dResetCalibration() {
+  if (!confirm('Reset Generate 3D calibration data?')) return;
+  await fetch('/api/generate3d/calibration/reset', {method:'POST'});
+  G3D.points = []; G3D.model = null; G3D.pendingPixel = null;
+  g3dSetCalibrated(false);
+  g3dRenderPoints();
+  g3dRenderModelInfo();
+  g3dDrawCalibOverlay();
+  g3dMsg('Reset');
+}
+
+async function g3dMoveToPixel(pixel) {
+  const st = document.getElementById('g3dMoveStatus');
+  st.textContent = `Moving to (${pixel[0]}, ${pixel[1]})...`;
+  const heightCm = parseFloat(document.getElementById('g3dTargetHeight').value) || 0;
+  const safetyCm = parseFloat(document.getElementById('g3dSafetyHeight').value) || 0;
+  try {
+    const r = await fetch('/api/generate3d/calibration/move-to', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pixel, image_size:G3D.imageSize, height_cm:heightCm, safety_height_cm:safetyCm}),
+    });
+    const d = await r.json();
+    if (!d.ok) { st.innerHTML = `<span style="color:#d93025">${d.error}</span>`; return; }
+    const p = d.position_3d || [0, 0, 0];
+    st.innerHTML = `Moved via ${d.path}; 3D x:${p[0].toFixed(3)} z:${p[2].toFixed(3)}`;
+  } catch (e) {
+    st.innerHTML = `<span style="color:#d93025">${e.message}</span>`;
+  }
+}
+
+function g3dB64ToFile(b64, name) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], name, {type:'image/jpeg'});
+}
+
+async function g3dCaptureSceneImage() {
+  const st = document.getElementById('g3dSimStatus');
+  st.textContent = 'Capturing...';
+  try {
+    const r = await fetch('/api/generate3d/calibration/capture', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Capture failed'; return; }
+    G3D.imageFile = g3dB64ToFile(d.image, 'topview.jpg');
+    G3D.imageB64 = d.image;
+    G3D.imageSize = [d.image_width, d.image_height];
+    g3dDrawInputImage(d.image);
+    document.getElementById('g3dDetectBtn').disabled = false;
+    st.textContent = `Captured ${d.image_width}x${d.image_height}`;
+  } catch (e) {
+    st.textContent = e.message;
+  }
+}
+
+function g3dDrawInputImage(b64, objects=[]) {
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('g3dImageCanvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    canvas.style.display = 'block';
+    document.getElementById('g3dImagePlaceholder').style.display = 'none';
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    objects.forEach((obj, i) => {
+      const [x1, y1, x2, y2] = obj.bbox || [0, 0, 0, 0];
+      const color = obj.color_hex || G3D_COLORS[i % G3D_COLORS.length];
+      ctx.strokeStyle = color; ctx.lineWidth = 3;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      const p = obj.position_3d || [0, 0, 0];
+      const label = `${obj.name} x:${p[0].toFixed(2)} z:${p[2].toFixed(2)}`;
+      ctx.font = 'bold 14px sans-serif';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.max(0, y1 - 23), tw + 10, 23);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, x1 + 5, Math.max(16, y1 - 7));
+    });
+  };
+  img.src = 'data:image/jpeg;base64,' + b64;
+}
+
+document.getElementById('g3dImageInput').addEventListener('change', function() {
+  const file = this.files && this.files[0];
+  if (!file) return;
+  G3D.imageFile = file;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    G3D.imageB64 = String(dataUrl).split(',')[1] || '';
+    g3dDrawInputImage(G3D.imageB64);
+    document.getElementById('g3dDetectBtn').disabled = false;
+    document.getElementById('g3dSimStatus').textContent = file.name;
+  };
+  reader.readAsDataURL(file);
+});
+
+async function g3dDetectObjects() {
+  const st = document.getElementById('g3dSimStatus');
+  const btn = document.getElementById('g3dDetectBtn');
+  if (!G3D.imageFile) { st.textContent = 'No image'; return; }
+  btn.disabled = true;
+  st.textContent = 'Detecting with Gemini...';
+  try {
+    const fd = new FormData();
+    fd.append('image', G3D.imageFile);
+    const r = await fetch('/api/generate3d/detect-image', {method:'POST', body:fd});
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Detection failed'; btn.disabled = false; return; }
+    G3D.objects = d.objects || [];
+    G3D.imageB64 = d.frame_image_b64 || G3D.imageB64;
+    G3D.imageSize = [d.image_width, d.image_height];
+    g3dDrawInputImage(G3D.imageB64, G3D.objects);
+    g3dRenderObjectsList();
+    g3dPlotObjects(G3D.objects);
+    document.getElementById('g3dRawWrap').style.display = d.gemini_raw ? 'block' : 'none';
+    document.getElementById('g3dRaw').textContent = d.gemini_raw || '';
+    st.textContent = `Generated ${G3D.objects.length} objects (${d.elapsed}s)`;
+  } catch (e) {
+    st.textContent = e.message;
+  }
+  btn.disabled = false;
+}
+
+function g3dRenderObjectsList() {
+  const list = document.getElementById('g3dObjectsList');
+  list.innerHTML = '';
+  if (!G3D.objects.length) {
+    list.innerHTML = '<div style="font-size:0.82rem;color:#999">No objects detected.</div>';
+    return;
+  }
+  G3D.objects.forEach((obj, i) => {
+    const p = obj.position_3d || [0, 0, 0];
+    const color = obj.color_hex || G3D_COLORS[i % G3D_COLORS.length];
+    const row = document.createElement('div');
+    row.style.cssText = 'border:1px solid #e0e0e0;border-radius:8px;padding:8px 10px;background:#fff;display:flex;align-items:center;gap:8px';
+    row.innerHTML = `<span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:0.86rem;font-weight:600;color:#333">${esc(obj.name)}</div>
+        <div style="font-size:0.73rem;color:#777">px ${obj.center_pixel?.join(', ')} · x:${p[0].toFixed(3)} z:${p[2].toFixed(3)} · ${obj.shape_3d}</div>
+      </div>
+      <button class="btn btn-sm btn-outline" onclick="g3dPreviewObject(${i})" style="font-size:0.72rem;padding:3px 8px">Preview</button>`;
+    list.appendChild(row);
+  });
+}
+
+function g3dInitScene() {
+  if (G3D.inited) return;
+  const canvas = document.getElementById('g3dCanvas');
+  const w = canvas.clientWidth || 640, h = canvas.clientHeight || 520;
+  G3D.scene = new THREE.Scene();
+  G3D.scene.background = new THREE.Color(0x1a1a2e);
+  G3D.camera = new THREE.PerspectiveCamera(45, w / h, 0.005, 10);
+  G3D.camera.position.set(0.42, 0.34, 0.42);
+  G3D.camera.lookAt(0, 0.10, 0.12);
+  G3D.renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+  G3D.renderer.setSize(w, h);
+  G3D.renderer.setPixelRatio(window.devicePixelRatio);
+  G3D.renderer.shadowMap.enabled = true;
+  G3D.controls = new THREE.OrbitControls(G3D.camera, canvas);
+  G3D.controls.target.set(0, 0.10, 0.12);
+  G3D.controls.enableDamping = true;
+
+  G3D.scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.8);
+  key.position.set(0.5, 1, 0.5); key.castShadow = true; G3D.scene.add(key);
+  const fill = new THREE.DirectionalLight(0x99aaff, 0.3);
+  fill.position.set(-0.5, 0.4, -0.6); G3D.scene.add(fill);
+  G3D.scene.add(new THREE.GridHelper(0.7, 28, 0x444466, 0x2a2a44));
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.9, 0.7),
+    new THREE.MeshPhongMaterial({color:0x222240, transparent:true, opacity:0.62})
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.set(0, -0.001, 0.14);
+  ground.receiveShadow = true;
+  G3D.scene.add(ground);
+  G3D.scene.add(new THREE.AxesHelper(0.06));
+
+  G3D.robot = simCreateRobotArm(0x4488bb, 1.0);
+  G3D.robot.rotation.x = -Math.PI / 2;
+  G3D.scene.add(G3D.robot);
+  simApplyJoints(G3D.robot, [0, 0, 0, 0, 0, 50]);
+
+  function loop() {
+    requestAnimationFrame(loop);
+    G3D.controls.update();
+    G3D.renderer.render(G3D.scene, G3D.camera);
+  }
+  loop();
+
+  const ro = new ResizeObserver(() => {
+    const cw = canvas.clientWidth || 640, ch = canvas.clientHeight || 520;
+    G3D.renderer.setSize(cw, ch);
+    G3D.camera.aspect = cw / ch;
+    G3D.camera.updateProjectionMatrix();
+  });
+  ro.observe(canvas);
+  G3D.inited = true;
+}
+
+function g3dClearObjects() {
+  G3D.sceneObjects.forEach(o => G3D.scene.remove(o));
+  G3D.sceneObjects = [];
+}
+
+function g3dAddSceneObject(obj, idx) {
+  const pos = obj.position_3d || [0, 0, 0];
+  const size = obj.estimated_size_cm || [3, 3, 3];
+  const sw = Math.max(Number(size[0]) || 3, 1.5) / 100;
+  const sd = Math.max(Number(size[1]) || 3, 1.5) / 100;
+  const sh = Math.max(Number(size[2]) || 3, 1.5) / 100;
+  const color = parseInt(String(obj.color_hex || '#888888').replace('#',''), 16) || 0x888888;
+  const mat = new THREE.MeshPhongMaterial({color, shininess:40, specular:0x222222});
+  let mesh;
+  if (obj.shape_3d === 'cylinder') mesh = new THREE.Mesh(new THREE.CylinderGeometry(sw/2, sw/2, sh, 24), mat);
+  else if (obj.shape_3d === 'sphere') mesh = new THREE.Mesh(new THREE.SphereGeometry(Math.max(sw, sd, sh)/2, 16, 16), mat);
+  else mesh = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), mat);
+  mesh.position.set(pos[0], sh / 2, pos[2]);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  G3D.scene.add(mesh); G3D.sceneObjects.push(mesh);
+
+  const labelCanvas = document.createElement('canvas');
+  labelCanvas.width = 256; labelCanvas.height = 64;
+  const ctx = labelCanvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.62)';
+  ctx.roundRect(0, 0, 256, 64, 8); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 26px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(obj.name || `object ${idx + 1}`, 128, 41);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(labelCanvas), transparent:true}));
+  sprite.scale.set(0.08, 0.02, 1);
+  sprite.position.set(pos[0], sh + 0.017, pos[2]);
+  G3D.scene.add(sprite); G3D.sceneObjects.push(sprite);
+}
+
+function g3dPlotObjects(objects) {
+  g3dInitScene();
+  g3dClearObjects();
+  objects.forEach((obj, i) => g3dAddSceneObject(obj, i));
+  document.getElementById('g3dSceneInfo').textContent = `${objects.length} objects`;
+}
+
+function g3dPreviewObject(idx) {
+  const obj = G3D.objects[idx];
+  if (!obj || !obj.predicted_joints) return;
+  g3dInitScene();
+  simApplyJoints(G3D.robot, g3dJointArray(obj.predicted_joints));
+  const p = obj.position_3d || [0, 0, 0];
+  document.getElementById('g3dSceneInfo').textContent = `${obj.name}: x ${p[0].toFixed(3)}, z ${p[2].toFixed(3)}`;
+}
+
+async function g3dUseCurrentRobotState() {
+  g3dInitScene();
+  const st = document.getElementById('g3dSimStatus');
+  st.textContent = 'Reading robot state...';
+  try {
+    const r = await fetch('/api/generate3d/current-state');
+    const d = await r.json();
+    if (!d.ok) { st.textContent = d.error || 'Robot not connected'; return; }
+    simApplyJoints(G3D.robot, g3dJointArray(d.joints));
+    const p = d.position_3d || [0, 0, 0];
+    st.textContent = `Robot x:${p[0].toFixed(3)} z:${p[2].toFixed(3)}`;
+  } catch (e) {
+    st.textContent = e.message;
+  }
+}
+
+g3dLoadCalibrationStatus();
 
 // ════════════════════════════════════════════════════
 // ══ Object Detection subtab

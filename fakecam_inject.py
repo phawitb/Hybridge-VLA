@@ -177,6 +177,64 @@ def patch_black_cameras(black_indices, width=320, height=240):
     print("[FakeCam] cv2.VideoCapture replaced with BlackCameraCapture")
 
 
+def build_bbox_drawer(bbox_overlay):
+    """Return a function that draws bounding box overlays on a frame."""
+    import cv2
+
+    if not bbox_overlay or not bbox_overlay.get("boxes"):
+        return None
+
+    boxes = bbox_overlay["boxes"]
+    line_width = int(bbox_overlay.get("line_width", 2))
+    show_label = bbox_overlay.get("show_label", True)
+    src_w = int(bbox_overlay.get("frame_width", 0))
+    src_h = int(bbox_overlay.get("frame_height", 0))
+
+    print(f"[FakeCam] BBox overlay: {len(boxes)} boxes, line_width={line_width}, show_label={show_label}")
+    for b in boxes:
+        print(f"  {b['name']}: {b['bbox']} color={b.get('color_hex', '#FF0000')}")
+
+    def _hex_to_bgr(hex_color):
+        hex_color = hex_color.lstrip('#')
+        if len(hex_color) == 6:
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            return (b, g, r)
+        return (0, 0, 255)
+
+    _logged_sizes = set()
+
+    def draw_bboxes(frame):
+        h, w = frame.shape[:2]
+        size_key = (w, h)
+        if size_key not in _logged_sizes:
+            _logged_sizes.add(size_key)
+            print(f"[FakeCam] BBox draw: frame={w}x{h}, source={src_w}x{src_h}, scale=({w/src_w if src_w else 1:.3f}, {h/src_h if src_h else 1:.3f})")
+        # Scale bbox coordinates from source frame size to actual frame size
+        sx = w / src_w if src_w > 0 else 1.0
+        sy = h / src_h if src_h > 0 else 1.0
+        # Scale line_width and font proportionally to frame size
+        scale_factor = min(sx, sy) if src_w > 0 else 1.0
+        scaled_lw = max(1, round(line_width * scale_factor))
+        scaled_font = max(0.25, 0.5 * scale_factor)
+        scaled_thickness = max(1, round(scale_factor))
+        for box in boxes:
+            x1, y1, x2, y2 = box["bbox"]
+            x1, y1, x2, y2 = int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)
+            color_bgr = _hex_to_bgr(box.get("color_hex", "#FF0000"))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color_bgr, scaled_lw)
+            if show_label and box.get("name"):
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                text = box["name"]
+                (tw, th_text), baseline = cv2.getTextSize(text, font, scaled_font, scaled_thickness)
+                cv2.rectangle(frame, (x1, max(0, y1 - th_text - baseline - 4)),
+                              (x1 + tw + 4, y1), color_bgr, -1)
+                cv2.putText(frame, text, (x1 + 2, max(th_text + 2, y1 - baseline - 2)),
+                            font, scaled_font, (255, 255, 255), scaled_thickness, cv2.LINE_AA)
+        return frame
+
+    return draw_bboxes
+
+
 def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0):
     """Replace cv2.VideoCapture with a subclass that applies augmentation.
 
@@ -190,14 +248,36 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
 
     aug_frame = build_aug_frame()
 
+    # Build bbox drawer if bbox_overlay is in params
+    bbox_drawer = build_bbox_drawer(params.get("bbox_overlay"))
+
+    # Determine which camera index gets bbox overlay (top camera only)
+    bbox_cam_index = None
+    bbox_cfg = params.get("bbox_overlay", {})
+    if bbox_cfg.get("cam_index") is not None:
+        bbox_cam_index = int(bbox_cfg["cam_index"])
+    elif bbox_drawer:
+        # Default: try to infer top camera index from config.yaml
+        try:
+            import yaml
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")) as _f:
+                _cfg = yaml.safe_load(_f)
+            bbox_cam_index = _cfg.get("robot", {}).get("cameras", {}).get("top", {}).get("index", 0)
+            print(f"[FakeCam] BBox camera index (from config): {bbox_cam_index}")
+        except Exception:
+            bbox_cam_index = 0
+            print(f"[FakeCam] BBox camera index (default): {bbox_cam_index}")
+
     # Shared state for hot-reload
     state = {
         "cam_p": build_cam_params(params),
         "light_p": build_light_params(params),
+        "bbox_drawer": bbox_drawer,
+        "bbox_cam_index": bbox_cam_index,
         "file_mtime": None,
     }
 
-    if not state["cam_p"] and not state["light_p"]:
+    if not state["cam_p"] and not state["light_p"] and not state["bbox_drawer"]:
         print("[FakeCam] No augmentation params — running without augmentation")
 
     print(f"[FakeCam] Augmentation active:")
@@ -205,6 +285,8 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
         print(f"  Camera: {state['cam_p']}")
     if state["light_p"]:
         print(f"  Light:  {state['light_p']}")
+    if state["bbox_drawer"]:
+        print(f"  BBox:   overlay enabled")
 
     # Track file mtime for change detection
     if params_file and os.path.exists(params_file):
@@ -229,6 +311,7 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
                 if new_params is not None:
                     state["cam_p"] = build_cam_params(new_params)
                     state["light_p"] = build_light_params(new_params)
+                    state["bbox_drawer"] = build_bbox_drawer(new_params.get("bbox_overlay"))
             except Exception:
                 pass
 
@@ -245,6 +328,10 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
     class AugmentedVideoCapture(_OriginalVideoCapture):
         """VideoCapture subclass that applies fakecam augmentation on read()."""
 
+        def __init__(self, *args, **kwargs):
+            self._fakecam_index = args[0] if args and isinstance(args[0], int) else None
+            super().__init__(*args, **kwargs)
+
         def read(self):
             ret, frame = super().read()
             if ret and frame is not None:
@@ -252,6 +339,10 @@ def patch_opencv(params, params_file=None, server_url=None, reload_interval=2.0)
                 light_p = state["light_p"]
                 if cam_p or light_p:
                     frame = aug_frame(frame, cam_p, light_p)
+                # Draw bbox overlay only on the top camera
+                draw_fn = state["bbox_drawer"]
+                if draw_fn and self._fakecam_index == state.get("bbox_cam_index"):
+                    frame = draw_fn(frame)
             return ret, frame
 
     # Replace cv2.VideoCapture so any new instance uses our subclass
