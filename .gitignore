@@ -9,3 +9,4 @@ test.py
 *.png
 *.jpg
 !test_cam0.jpg
+*.pt

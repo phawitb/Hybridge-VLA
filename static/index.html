@@ -98,6 +98,10 @@
   .btn-sm { padding: 5px 14px; font-size: 0.78rem; border-radius: 6px; }
   .btn-outline { background: transparent; color: #1a73e8; border: 1px solid #1a73e8; }
   .btn-outline:hover { background: #e8f0fe; }
+
+  /* Results table */
+  #evalResultsTable th, #evalResultsTable td { border-bottom: 1px solid #eee; }
+  #evalResultsTable tr:hover td { background: #f8f8ff; }
   .btn-danger { background: #d93025; }
   .btn-danger:hover { background: #b71c1c; }
   .btn-ghost { background: none; border: none; color: #1a73e8; cursor: pointer; font-size: 0.8rem; font-weight: 500; padding: 4px 8px; }
@@ -2602,6 +2606,14 @@ conda run -n lerobot uvicorn train_api:app \
   <div class="page" id="page-evaluate" style="max-width:none">
     <div class="page-title"><span>Evaluate</span></div>
 
+    <!-- Inner tabs -->
+    <div class="inner-tabs" id="evalInnerTabs">
+      <button class="inner-tab active" data-evaltab="eval-run">Run</button>
+      <button class="inner-tab" data-evaltab="eval-results">Results</button>
+    </div>
+
+    <!-- Tab: Run (existing content) -->
+    <div class="inner-page active" id="evalTabRun" data-evaltab="eval-run">
     <div style="display:flex;gap:16px;align-items:flex-start">
       <!-- Main area -->
       <div style="flex:1;min-width:0">
@@ -2933,6 +2945,80 @@ conda run -n lerobot uvicorn train_api:app \
         </div>
       </div>
     </div>
+    </div><!-- /evalTabRun -->
+
+    <!-- Tab: Results -->
+    <div class="inner-page" id="evalTabResults" data-evaltab="eval-results">
+      <div class="config-card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0">Model Comparison</h3>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" id="evalResViewBtn" onclick="evalResultsToggleViewMode()" style="background:#607d8b;font-size:0.72rem;padding:2px 10px">&#128065; View</button>
+            <button class="btn btn-sm" onclick="evalResultsRefresh()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px">Refresh</button>
+          </div>
+        </div>
+        <p style="font-size:0.82rem;color:#666;margin-bottom:14px">Accuracy comparison by dataset, policy, and training sample size (N). Data is aggregated from saved evaluation sessions.</p>
+        <div id="evalResultsTableWrap" style="overflow-x:auto">
+          <table id="evalResultsTable" style="width:100%;border-collapse:collapse;font-size:0.82rem;white-space:nowrap">
+            <thead>
+              <tr style="background:#f5f5f5;border-bottom:2px solid #e0e0e0">
+                <th style="text-align:left;padding:8px 12px;font-weight:700;color:#333">Task</th>
+                <th style="text-align:left;padding:8px 12px;font-weight:700;color:#333">Policy</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_20</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_40</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_60</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_80</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_100</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_120</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_150</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_200</th>
+                <th style="text-align:center;padding:8px 12px;font-weight:700;color:#333">N_300</th>
+              </tr>
+            </thead>
+            <tbody id="evalResultsBody">
+              <tr><td colspan="11" style="text-align:center;padding:20px;color:#888">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Manual entry -->
+      <div class="config-card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0">Add / Edit Result</h3>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Dataset (Task)</label>
+            <input type="text" id="evalResTask" class="form-input" placeholder="e.g. DS1_1B1O_FF" style="font-size:0.82rem">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Policy</label>
+            <select id="evalResPolicy" class="form-input" style="font-size:0.82rem">
+              <option value="ACT">ACT</option>
+              <option value="SmolVLA">SmolVLA</option>
+              <option value="Pi0.5">Pi0.5</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">N (train samples)</label>
+            <input type="number" id="evalResN" class="form-input" placeholder="e.g. 80" style="font-size:0.82rem">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Success / Total</label>
+            <div style="display:flex;gap:4px;align-items:center">
+              <input type="number" id="evalResSuccess" class="form-input" placeholder="S" style="font-size:0.82rem;width:50px">
+              <span>/</span>
+              <input type="number" id="evalResTotal" class="form-input" placeholder="T" style="font-size:0.82rem;width:50px">
+            </div>
+          </div>
+          <div class="form-group">
+            <button class="btn btn-sm" onclick="evalResultsAdd()" style="background:#34a853;font-size:0.82rem;padding:6px 16px">Add</button>
+          </div>
+        </div>
+      </div>
+    </div><!-- /evalTabResults -->
+
   </div><!-- /page-evaluate -->
 
 </div><!-- /main-content -->
@@ -10332,6 +10418,207 @@ async function simLoadEpisode() {
     status.textContent = 'Error: ' + e.message;
     loadBtn.disabled = false;
   }
+}
+
+// ── Evaluate Results Tab ──
+
+// Inner tab switching for Evaluate page
+document.getElementById('evalInnerTabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.inner-tab');
+  if (!btn) return;
+  const tabId = btn.dataset.evaltab;
+  document.querySelectorAll('#evalInnerTabs .inner-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('#page-evaluate > .inner-page').forEach(p => {
+    p.classList.toggle('active', p.dataset.evaltab === tabId);
+  });
+  if (tabId === 'eval-results') evalResultsRefresh();
+});
+
+// Results data stored in localStorage
+const EVAL_RESULTS_KEY = 'eval_results_comparison';
+const EVAL_RESULTS_VISIBILITY_KEY = 'eval_results_visibility';
+let evalResViewMode = false;
+
+function evalResultsGetData() {
+  try {
+    return JSON.parse(localStorage.getItem(EVAL_RESULTS_KEY)) || [];
+  } catch(e) { return []; }
+}
+
+function evalResultsSaveData(data) {
+  localStorage.setItem(EVAL_RESULTS_KEY, JSON.stringify(data));
+}
+
+function evalResultsGetVisibility() {
+  try {
+    return JSON.parse(localStorage.getItem(EVAL_RESULTS_VISIBILITY_KEY)) || {};
+  } catch(e) { return {}; }
+}
+
+function evalResultsSaveVisibility(vis) {
+  localStorage.setItem(EVAL_RESULTS_VISIBILITY_KEY, JSON.stringify(vis));
+}
+
+function evalResultsToggleViewMode() {
+  evalResViewMode = !evalResViewMode;
+  const btn = document.getElementById('evalResViewBtn');
+  if (evalResViewMode) {
+    btn.style.background = '#34a853';
+    btn.innerHTML = '&#128065; Save';
+  } else {
+    btn.style.background = '#607d8b';
+    btn.innerHTML = '&#128065; View';
+  }
+  evalResultsRender(evalResultsGetData());
+}
+
+function evalResultsToggleTask(task) {
+  const vis = evalResultsGetVisibility();
+  if (vis[task] === false) {
+    vis[task] = true;
+  } else if (vis[task] === undefined || vis[task] === true) {
+    vis[task] = false;
+  }
+  evalResultsSaveVisibility(vis);
+  evalResultsRender(evalResultsGetData());
+}
+
+function evalResultsAdd() {
+  const task = document.getElementById('evalResTask').value.trim();
+  const policy = document.getElementById('evalResPolicy').value;
+  const n = parseInt(document.getElementById('evalResN').value);
+  const success = parseInt(document.getElementById('evalResSuccess').value);
+  const total = parseInt(document.getElementById('evalResTotal').value);
+  if (!task || !policy || !n || isNaN(success) || !total) {
+    alert('Please fill in all fields.');
+    return;
+  }
+  const data = evalResultsGetData();
+  const existing = data.find(d => d.task === task && d.policy === policy && d.n === n);
+  if (existing) {
+    existing.success = success;
+    existing.total = total;
+  } else {
+    data.push({ task, policy, n, success, total });
+  }
+  evalResultsSaveData(data);
+  evalResultsRender(data);
+  document.getElementById('evalResN').value = '';
+  document.getElementById('evalResSuccess').value = '';
+  document.getElementById('evalResTotal').value = '';
+}
+
+function evalResultsDelete(task, policy, n) {
+  let data = evalResultsGetData();
+  data = data.filter(d => !(d.task === task && d.policy === policy && d.n === n));
+  evalResultsSaveData(data);
+  evalResultsRender(data);
+}
+
+
+async function evalResultsRefresh() {
+  // Always import from sessions on refresh
+  try {
+    const r = await fetch('/api/eval/sessions');
+    const d = await r.json();
+    if (d.ok && d.sessions.length) {
+      const data = evalResultsGetData();
+      for (const s of d.sessions) {
+        const model = s.model || s.name || '';
+        const match = model.match(/^(act|smolvla|pi05)_(.+?)_rand(\d+)/i);
+        if (!match) continue;
+        const policy = match[1].toLowerCase() === 'act' ? 'ACT' : match[1].toLowerCase() === 'smolvla' ? 'SmolVLA' : 'Pi0.5';
+        const task = match[2];
+        const n = parseInt(match[3]);
+        const success = s.success || 0;
+        const total = (s.success || 0) + (s.fail || 0);
+        if (total === 0) continue;
+        const existing = data.find(d => d.task === task && d.policy === policy && d.n === n);
+        if (existing) {
+          existing.success = success;
+          existing.total = total;
+        } else {
+          data.push({ task, policy, n, success, total });
+        }
+      }
+      evalResultsSaveData(data);
+    }
+  } catch(e) {}
+  evalResultsRender(evalResultsGetData());
+}
+
+function evalResultsRender(data) {
+  const tbody = document.getElementById('evalResultsBody');
+  if (!data || !data.length) {
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:20px;color:#888">No results yet. Add results manually or they will be imported from sessions.</td></tr>';
+    return;
+  }
+
+  const nCols = [20, 40, 60, 80, 100, 120, 150, 200, 300];
+  const visibility = evalResultsGetVisibility();
+
+  // Group by task then policy
+  const grouped = {};
+  data.forEach(d => {
+    if (!grouped[d.task]) grouped[d.task] = {};
+    if (!grouped[d.task][d.policy]) grouped[d.task][d.policy] = {};
+    grouped[d.task][d.policy][d.n] = { success: d.success, total: d.total };
+  });
+
+  let html = '';
+  const tasks = Object.keys(grouped).sort();
+  tasks.forEach(task => {
+    const isVisible = visibility[task] !== false; // default visible
+    const policies = Object.keys(grouped[task]).sort();
+
+    // In view mode: show all tasks with eye toggle
+    // In normal mode: only show visible tasks
+    if (!evalResViewMode && !isVisible) return;
+
+    policies.forEach((policy, pi) => {
+      const rowOpacity = (!evalResViewMode && isVisible) || evalResViewMode ? (isVisible ? '1' : '0.4') : '1';
+      html += `<tr style="border-bottom:1px solid #eee;opacity:${rowOpacity}">`;
+
+      // Eye + Task cell (only first row of group)
+      if (pi === 0) {
+        if (evalResViewMode) {
+          const eyeIcon = isVisible ? '&#128065;' : '&#128065;&#8205;&#128488;';
+          const eyeColor = isVisible ? '#333' : '#ccc';
+          html += `<td style="padding:8px 6px;vertical-align:top;text-align:center;cursor:pointer;user-select:none" rowspan="${policies.length}" onclick="evalResultsToggleTask('${task}')"><span style="font-size:1.1rem;color:${eyeColor}" title="${isVisible ? 'Visible - click to hide' : 'Hidden - click to show'}">${eyeIcon}</span></td>`;
+        }
+        html += `<td style="padding:8px 12px;font-weight:600;color:#333;vertical-align:top" rowspan="${policies.length}">${task}</td>`;
+      }
+      // Policy
+      html += `<td style="padding:8px 12px;color:#555">${policy}</td>`;
+      // N columns
+      nCols.forEach(n => {
+        const entry = grouped[task][policy][n];
+        if (entry) {
+          const pct = (entry.success / entry.total * 100).toFixed(0);
+          const color = pct >= 90 ? '#1b8a2e' : pct >= 70 ? '#e8710a' : '#d93025';
+          html += `<td style="text-align:center;padding:8px 12px;cursor:pointer" title="Click to delete" onclick="if(confirm('Delete this entry?'))evalResultsDelete('${task}','${policy}',${n})"><span style="font-weight:700;color:${color}">${pct}%</span> <span style="font-size:0.72rem;color:#888">(${entry.success}/${entry.total})</span></td>`;
+        } else {
+          html += `<td style="text-align:center;padding:8px 12px;color:#ccc">\u2013</td>`;
+        }
+      });
+      html += '</tr>';
+    });
+  });
+
+  // Update thead to include eye column in view mode
+  const thead = document.querySelector('#evalResultsTable thead tr');
+  const existingEyeTh = thead.querySelector('.eval-eye-th');
+  if (evalResViewMode && !existingEyeTh) {
+    const th = document.createElement('th');
+    th.className = 'eval-eye-th';
+    th.style.cssText = 'padding:8px 6px;width:30px';
+    thead.insertBefore(th, thead.firstChild);
+  } else if (!evalResViewMode && existingEyeTh) {
+    existingEyeTh.remove();
+  }
+
+  tbody.innerHTML = html;
 }
 
 // ── Detect Objects ──
