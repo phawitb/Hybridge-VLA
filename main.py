@@ -5760,6 +5760,47 @@ def _g3d_fit_model(points, model_type="auto", image_size=None):
     }, None
 
 
+def _g3d_ik_solve(target_pos):
+    """Numerical IK solver using multi-start L-BFGS-B.
+    Tries all calibration points as starting guesses and picks the best result.
+    target_pos: [x, y, z] in URDF frame (Z-up).
+    Returns optimized 5 joint angles in degrees, or None on failure."""
+    from scipy.optimize import minimize
+
+    target = np.array(target_pos, dtype=np.float64)
+    points = g3d_calib_state.get("points", [])
+    if not points:
+        return None
+
+    bounds = [
+        (-90, 90),    # shoulder_pan
+        (-60, 60),    # shoulder_lift
+        (-30, 100),   # elbow_flex
+        (-10, 90),    # wrist_flex
+        (-45, 45),    # wrist_roll
+    ]
+
+    def cost(q):
+        pos = np.array(_so101_fk(list(q)), dtype=np.float64)
+        return float(np.sum((pos - target) ** 2))
+
+    best_err = float("inf")
+    best_q = None
+    for p in points:
+        q0 = [float(p["joints"].get(j, 0.0)) for j in ROBOT_JOINTS[:5]]
+        result = minimize(cost, q0, method="L-BFGS-B", bounds=bounds,
+                          options={"maxiter": 1000, "ftol": 1e-16})
+        final_pos = np.array(_so101_fk(list(result.x)), dtype=np.float64)
+        err = float(np.linalg.norm(final_pos - target))
+        if err < best_err:
+            best_err = err
+            best_q = result.x.tolist()
+
+    if best_err > 0.005:  # 5mm tolerance
+        return None
+    return best_q
+
+
 def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
     model = g3d_calib_state.get("model")
     if not model:
@@ -5767,20 +5808,55 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
     image_size = _g3d_image_size(image_size)
     basis = _g3d_basis(pixel, image_size, model.get("type", "affine"))
     world_xz = basis @ np.array(model["world_coeff"], dtype=np.float64)
-    joint_values = basis @ np.array(model["joint_coeff"], dtype=np.float64)
 
-    joints = {}
-    for idx, name in enumerate(ROBOT_JOINTS):
-        joints[name] = round(float(joint_values[idx]), 2)
+    # Compute default height (y in Three.js) from calibration points mean
+    points = g3d_calib_state.get("points", [])
+    if points:
+        default_y = float(np.mean([p["position_3d"][1] for p in points]))
+    else:
+        default_y = 0.0
 
+    # Target 3D position in Three.js coords: [x, y, z]
+    target_3d = [float(world_xz[0]), default_y, float(world_xz[1])]
+
+    # Apply height offset (override default height)
     if height_cm > 0:
-        h = float(height_cm) / 100.0
-        arm_len = 0.25
-        offset_deg = math.degrees(math.atan2(h, arm_len))
-        joints["shoulder_lift"] = round(joints["shoulder_lift"] - offset_deg, 2)
+        target_3d[1] = float(height_cm) / 100.0
+
+    # Convert Three.js Y-up [x, y, z] back to URDF Z-up [x, -z, y]
+    target_urdf = [target_3d[0], -target_3d[2], target_3d[1]]
+
+    # Use multi-start IK solver
+    ik_result = _g3d_ik_solve(target_urdf)
+
+    if ik_result is not None:
+        joints = {}
+        for idx, name in enumerate(ROBOT_JOINTS[:5]):
+            joints[name] = round(float(ik_result[idx]), 2)
+        # Use nearest calibration point's gripper value
+        px = np.array(pixel, dtype=np.float64)
+        nearest_gripper = 0.0
+        best_dist = float("inf")
+        for p in points:
+            d = np.linalg.norm(px - np.array(p["pixel"], dtype=np.float64))
+            if d < best_dist:
+                best_dist = d
+                nearest_gripper = p["joints"].get("gripper", 0.0)
+        joints["gripper"] = round(float(nearest_gripper), 2)
+    else:
+        # IK failed — fallback to polynomial prediction
+        joint_values = basis @ np.array(model["joint_coeff"], dtype=np.float64)
+        joints = {}
+        for idx, name in enumerate(ROBOT_JOINTS):
+            joints[name] = round(float(joint_values[idx]), 2)
+        if height_cm > 0:
+            h = float(height_cm) / 100.0
+            arm_len = 0.25
+            offset_deg = math.degrees(math.atan2(h, arm_len))
+            joints["shoulder_lift"] = round(joints["shoulder_lift"] - offset_deg, 2)
 
     return {
-        "position_3d": [round(float(world_xz[0]), 5), 0.0, round(float(world_xz[1]), 5)],
+        "position_3d": [round(target_3d[0], 5), round(target_3d[1], 5), round(target_3d[2], 5)],
         "joints": joints,
     }
 

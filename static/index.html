@@ -6217,6 +6217,7 @@ async function trainLoadDatasets() {
     }
     trainSelectedRepoId = null;
     document.getElementById('trainSelectedDs').textContent = 'None';
+    d.datasets.sort((a, b) => a.name.localeCompare(b.name));
     listEl.innerHTML = d.datasets.map(ds => {
       const modified = ds.last_modified ? new Date(ds.last_modified).toLocaleDateString() : '';
       return `<div class="train-ds-item" data-repo="${ds.id}" data-name="${ds.name}"
@@ -8240,7 +8241,7 @@ async function evalLoadModels() {
     const r = await fetch('/api/hf-models');
     const d = await r.json();
     if (!d.ok) { st.textContent = d.error || 'Error'; return; }
-    evalModels = d.models || [];
+    evalModels = (d.models || []).sort((a, b) => a.name.localeCompare(b.name));
     sel.innerHTML = '<option value="">-- Select model --</option>';
     evalModels.forEach((m, i) => {
       const o = document.createElement('option');
@@ -10553,7 +10554,7 @@ function evalResultsAdd() {
   if (existing) {
     existing.a1 = a1; existing.a2 = a2; existing.a3 = a3; existing.fail = fail; existing.total = total;
   } else {
-    data.push({ task, policy, n, a1, a2, a3, fail, total });
+    data.push({ task, policy, n, a1, a2, a3, fail, total, manual: true });
   }
   evalResultsSaveData(data);
   evalResultsRender(data);
@@ -10573,31 +10574,24 @@ function evalResultsDelete(task, policy, n) {
 
 
 async function evalResultsRefresh() {
-  // Always import from sessions on refresh
+  // Rebuild from all sessions, accumulating duplicates (same task/policy/n)
   try {
     const r = await fetch('/api/eval/sessions');
     const d = await r.json();
     if (d.ok && d.sessions.length) {
-      const data = evalResultsGetData();
+      // Keep only manually added entries (those with manual flag)
+      const data = evalResultsGetData().filter(d => d.manual);
       for (const s of d.sessions) {
-        const model = s.model || s.name || '';
-        const match = model.match(/^(act|smolvla|pi05)_(.+?)_rand(\d+)/i);
+        const model = s.name || s.model || '';
+        const match = model.match(/^(act|smolvla|pi05)_(.+?)_rand(\d+)(.*)/i);
         if (!match) continue;
         const policy = match[1].toLowerCase() === 'act' ? 'ACT' : match[1].toLowerCase() === 'smolvla' ? 'SmolVLA' : 'Pi0.5';
-        const task = match[2];
+        const suffix = (match[4] || '').trim();
+        const task = match[2] + (suffix ? ' ' + suffix : '');
         const n = parseInt(match[3]);
         const total = (s.success || 0) + (s.fail || 0);
         if (total === 0) continue;
-        const existing = data.find(d => d.task === task && d.policy === policy && d.n === n);
-        if (existing) {
-          existing.a1 = s.a1 || 0;
-          existing.a2 = s.a2 || 0;
-          existing.a3 = s.a3 || 0;
-          existing.fail = s.fail || 0;
-          existing.total = total;
-        } else {
-          data.push({ task, policy, n, a1: s.a1 || 0, a2: s.a2 || 0, a3: s.a3 || 0, fail: s.fail || 0, total });
-        }
+        data.push({ task, policy, n, a1: s.a1 || 0, a2: s.a2 || 0, a3: s.a3 || 0, fail: s.fail || 0, total, sid: s.id });
       }
       evalResultsSaveData(data);
     }
@@ -10625,7 +10619,7 @@ function evalResultsRender(data) {
   data.forEach(d => {
     if (!grouped[d.task]) grouped[d.task] = {};
     if (!grouped[d.task][d.policy]) grouped[d.task][d.policy] = {};
-    grouped[d.task][d.policy][d.n] = { a1: d.a1 || 0, a2: d.a2 || 0, a3: d.a3 || 0, fail: d.fail || 0, total: d.total || 0 };
+    grouped[d.task][d.policy][d.n] = { a1: d.a1 || 0, a2: d.a2 || 0, a3: d.a3 || 0, fail: d.fail || 0, total: d.total || 0, sid: d.sid || '' };
   });
 
   const tasks = Object.keys(grouped).sort();
@@ -10668,7 +10662,8 @@ function evalResultsRender(data) {
             const success = successFns[ti](entry);
             const pct = entry.total > 0 ? (success / entry.total * 100).toFixed(0) : 0;
             const color = pct >= 90 ? '#1b8a2e' : pct >= 70 ? '#e8710a' : '#d93025';
-            html += `<td style="text-align:center;padding:6px 8px;cursor:pointer" title="Click to delete" onclick="if(confirm('Delete this entry?'))evalResultsDelete('${task}','${policy}',${n})"><span style="font-weight:700;color:${color}">${pct}%</span> <span style="font-size:0.7rem;color:#888">(${success}/${entry.total})</span></td>`;
+            const sid = entry.sid || '';
+            html += `<td style="text-align:center;padding:6px 8px;cursor:pointer" title="Open in Run tab" onclick="evalResultsGoToSession('${sid}')"><span style="font-weight:700;color:${color}">${pct}%</span> <span style="font-size:0.7rem;color:#888">(${success}/${entry.total})</span></td>`;
           } else {
             html += `<td style="text-align:center;padding:6px 8px;color:#ccc">\u2013</td>`;
           }
@@ -10690,6 +10685,19 @@ function evalResultsRender(data) {
       existingEyeTh.remove();
     }
   });
+}
+
+async function evalResultsGoToSession(sessionId) {
+  if (!sessionId) return;
+  // Switch to Run tab
+  document.querySelectorAll('#evalInnerTabs .inner-tab').forEach(t => t.classList.remove('active'));
+  const runBtn = document.querySelector('#evalInnerTabs .inner-tab[data-evaltab="eval-run"]');
+  if (runBtn) runBtn.classList.add('active');
+  document.querySelectorAll('#page-evaluate > .inner-page').forEach(p => {
+    p.classList.toggle('active', p.dataset.evaltab === 'eval-run');
+  });
+  // Load session
+  await evalLoadSession(sessionId);
 }
 
 // ── Detect Objects ──
