@@ -2998,6 +2998,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
             <tbody id="evalResBody1"></tbody>
@@ -3019,6 +3020,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
             <tbody id="evalResBody2"></tbody>
@@ -3040,6 +3042,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
             <tbody id="evalResBody3"></tbody>
@@ -3092,34 +3095,26 @@ conda run -n lerobot uvicorn train_api:app \
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <h3 style="margin:0">Visualization</h3>
           <div style="display:flex;gap:6px;align-items:center">
-            <label class="form-label" style="margin:0;font-size:0.78rem">Attempt:</label>
-            <select id="evalChartAttempt" class="form-input" style="font-size:0.78rem;padding:2px 8px;width:auto" onchange="evalChartRender()">
-              <option value="1">1st attempt</option>
-              <option value="2">Within 2nd</option>
-              <option value="3" selected>Within 3rd</option>
+            <label class="form-label" style="margin:0;font-size:0.78rem">Task:</label>
+            <select id="evalChartTask" class="form-input" style="font-size:0.78rem;padding:2px 8px;width:auto" onchange="evalChartRender()">
+              <option value="__all__">All Tasks</option>
             </select>
           </div>
         </div>
 
-        <!-- Chart 1: Learning Curves -->
-        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Success Rate vs Training Samples (N)</h4>
-        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Each line = one task+policy combination. Shows how accuracy improves with more training data.</p>
-        <div style="position:relative;height:320px;margin-bottom:24px">
-          <canvas id="evalChartCurve"></canvas>
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Within 1st Attempt</h4>
+        <div style="position:relative;height:280px;margin-bottom:20px">
+          <canvas id="evalChartA1"></canvas>
         </div>
 
-        <!-- Chart 2: Policy Comparison (grouped bar) -->
-        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Policy Comparison by Task (best N)</h4>
-        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Compares ACT vs SmolVLA vs Pi0.5 using each task's best N value.</p>
-        <div style="position:relative;height:280px;margin-bottom:24px">
-          <canvas id="evalChartBar"></canvas>
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Within 2nd Attempt</h4>
+        <div style="position:relative;height:280px;margin-bottom:20px">
+          <canvas id="evalChartA2"></canvas>
         </div>
 
-        <!-- Chart 3: Attempt Breakdown (stacked bar) -->
-        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Attempt Breakdown</h4>
-        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Distribution of 1st / 2nd / 3rd attempt successes and failures per task+policy.</p>
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Within 3rd Attempt</h4>
         <div style="position:relative;height:280px">
-          <canvas id="evalChartStack"></canvas>
+          <canvas id="evalChartA3"></canvas>
         </div>
       </div>
     </div><!-- /evalTabResults -->
@@ -10634,6 +10629,39 @@ function evalResultsSaveVisibility(vis) {
   localStorage.setItem(EVAL_RESULTS_VISIBILITY_KEY, JSON.stringify(vis));
 }
 
+const EVAL_RESULTS_NOTES_KEY = 'evalResultsNotes';
+function evalResultsGetNotes() {
+  try { return JSON.parse(localStorage.getItem(EVAL_RESULTS_NOTES_KEY)) || {}; }
+  catch(e) { return {}; }
+}
+function evalResultsSaveNote(key, value) {
+  const notes = evalResultsGetNotes();
+  if (value.trim()) { notes[key] = value.trim(); } else { delete notes[key]; }
+  localStorage.setItem(EVAL_RESULTS_NOTES_KEY, JSON.stringify(notes));
+}
+function evalNoteExpand(noteId, noteKey) {
+  document.getElementById(noteId + '_preview').style.display = 'none';
+  document.getElementById(noteId + '_expanded').style.display = 'block';
+}
+function evalNoteCollapse(noteId) {
+  document.getElementById(noteId + '_expanded').style.display = 'none';
+  document.getElementById(noteId + '_preview').style.display = '';
+}
+function evalNoteEdit(noteId, noteKey) {
+  document.getElementById(noteId + '_expanded').style.display = 'none';
+  document.getElementById(noteId + '_editing').style.display = 'block';
+  document.getElementById(noteId + '_ta').focus();
+}
+function evalNoteSave(noteId, noteKey) {
+  const ta = document.getElementById(noteId + '_ta');
+  evalResultsSaveNote(noteKey, ta.value);
+  evalResultsRender(evalResultsGetData());
+}
+function evalNoteCancel(noteId) {
+  document.getElementById(noteId + '_editing').style.display = 'none';
+  document.getElementById(noteId + '_expanded').style.display = 'block';
+}
+
 function evalResultsToggleViewMode() {
   evalResViewMode = !evalResViewMode;
   const btn = document.getElementById('evalResViewBtn');
@@ -10729,7 +10757,7 @@ function evalResultsRender(data) {
     document.getElementById('evalResBody2'),
     document.getElementById('evalResBody3'),
   ];
-  const emptyMsg = '<tr><td colspan="11" style="text-align:center;padding:14px;color:#888">No results yet.</td></tr>';
+  const emptyMsg = '<tr><td colspan="12" style="text-align:center;padding:14px;color:#888">No results yet.</td></tr>';
   if (!data || !data.length) {
     bodies.forEach(b => { b.innerHTML = emptyMsg; });
     return;
@@ -10792,6 +10820,30 @@ function evalResultsRender(data) {
             html += `<td style="text-align:center;padding:6px 8px;color:#ccc">\u2013</td>`;
           }
         });
+        const noteKey = (task + '::' + policy).replace(/'/g, "\\'");
+        const noteRaw = evalResultsGetNotes()[task + '::' + policy] || '';
+        const noteHtml = noteRaw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+        const noteId = 'evalNote_' + ti + '_' + noteKey.replace(/[^a-zA-Z0-9]/g, '_');
+        const preview = noteRaw ? noteRaw.split('\n')[0].substring(0, 30) + (noteRaw.length > 30 || noteRaw.includes('\n') ? '...' : '') : '';
+        const previewHtml = preview.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const noteTaHtml = noteRaw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        html += `<td style="padding:4px 6px;min-width:120px;max-width:220px;white-space:normal">` +
+          `<div id="${noteId}_preview" style="cursor:pointer;font-size:0.78rem;color:${noteRaw ? '#333' : '#bbb'}" onclick="evalNoteExpand('${noteId}','${noteKey}')">` +
+            (noteRaw ? `<span>${previewHtml}</span>` : `<span style="font-style:italic">+ note</span>`) +
+          `</div>` +
+          `<div id="${noteId}_expanded" style="display:none">` +
+            `<div style="font-size:0.78rem;color:#333;margin-bottom:4px;line-height:1.4">${noteHtml || '<span style="color:#bbb;font-style:italic">empty</span>'}</div>` +
+            `<button onclick="evalNoteEdit('${noteId}','${noteKey}')" style="padding:2px 8px;font-size:0.72rem;background:#1a73e8;color:#fff;border:none;border-radius:3px;cursor:pointer">Edit</button>` +
+            `<button onclick="evalNoteCollapse('${noteId}')" style="padding:2px 8px;font-size:0.72rem;background:#eee;color:#333;border:none;border-radius:3px;cursor:pointer;margin-left:4px">Close</button>` +
+          `</div>` +
+          `<div id="${noteId}_editing" style="display:none">` +
+            `<textarea id="${noteId}_ta" style="width:100%;min-height:60px;border:1px solid #1a73e8;border-radius:3px;padding:4px 6px;font-size:0.78rem;resize:vertical;outline:none">${noteTaHtml}</textarea>` +
+            `<div style="display:flex;gap:4px;margin-top:3px">` +
+              `<button onclick="evalNoteSave('${noteId}','${noteKey}')" style="flex:1;padding:2px 6px;font-size:0.72rem;background:#1a73e8;color:#fff;border:none;border-radius:3px;cursor:pointer">Save</button>` +
+              `<button onclick="evalNoteCancel('${noteId}')" style="flex:1;padding:2px 6px;font-size:0.72rem;background:#eee;color:#333;border:none;border-radius:3px;cursor:pointer">Cancel</button>` +
+            `</div>` +
+          `</div>` +
+        `</td>`;
         html += '</tr>';
       });
     });
@@ -10812,7 +10864,7 @@ function evalResultsRender(data) {
 }
 
 // ── Eval Results Charts ──
-let evalChartCurve = null, evalChartBar = null, evalChartStack = null;
+let evalChartA1 = null, evalChartA2 = null, evalChartA3 = null;
 
 const EVAL_CHART_COLORS = [
   '#1a73e8', '#d93025', '#34a853', '#e8710a', '#9c27b0',
@@ -10822,148 +10874,72 @@ const EVAL_CHART_COLORS = [
 function evalChartRender() {
   const allData = evalResultsGetData();
   const visibility = evalResultsGetVisibility();
-  const data = allData.filter(d => visibility[d.task] !== false);
-  if (!data || !data.length) return;
+  const visibleData = allData.filter(d => visibility[d.task] !== false);
+  if (!visibleData || !visibleData.length) return;
 
-  const attemptLevel = parseInt(document.getElementById('evalChartAttempt')?.value || '3');
-  const successFn = entry => {
-    if (attemptLevel === 1) return entry.a1 || 0;
-    if (attemptLevel === 2) return (entry.a1 || 0) + (entry.a2 || 0);
-    return (entry.a1 || 0) + (entry.a2 || 0) + (entry.a3 || 0);
-  };
-
-  // ── Chart 1: Learning Curves (line chart) ──
-  const grouped = {};
-  data.forEach(d => {
-    const key = d.task + ' / ' + d.policy;
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push({ n: d.n, rate: d.total > 0 ? successFn(d) / d.total * 100 : 0 });
-  });
-
-  const allN = [...new Set(data.map(d => d.n))].sort((a, b) => a - b);
-  const lineDatasets = Object.keys(grouped).sort().map((key, i) => {
-    const points = grouped[key].sort((a, b) => a.n - b.n);
-    return {
-      label: key,
-      data: allN.map(n => { const p = points.find(p => p.n === n); return p ? p.rate : null; }),
-      borderColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length],
-      backgroundColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length] + '22',
-      borderWidth: 2, pointRadius: 4, tension: 0.3, spanGaps: true,
-    };
-  });
-
-  const curveCtx = document.getElementById('evalChartCurve');
-  if (curveCtx) {
-    if (evalChartCurve) evalChartCurve.destroy();
-    evalChartCurve = new Chart(curveCtx, {
-      type: 'line',
-      data: { labels: allN.map(n => 'N=' + n), datasets: lineDatasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'right', labels: { font: { size: 11 }, boxWidth: 14 } } },
-        scales: {
-          y: { min: 0, max: 100, title: { display: true, text: 'Success Rate (%)' },
-               ticks: { callback: v => v + '%' } },
-          x: { title: { display: true, text: 'Training Samples (N)' } },
-        },
-      },
-    });
+  // Populate task select
+  const taskSel = document.getElementById('evalChartTask');
+  if (taskSel) {
+    const curVal = taskSel.value;
+    const tasks = [...new Set(visibleData.map(d => d.task))].sort();
+    taskSel.innerHTML = '<option value="__all__">All Tasks</option>' +
+      tasks.map(t => `<option value="${t}"${t === curVal ? ' selected' : ''}>${t}</option>`).join('');
+    if (curVal !== '__all__' && !tasks.includes(curVal)) taskSel.value = '__all__';
   }
 
-  // ── Chart 2: Policy Comparison (grouped bar) ──
-  // For each task, find the best N (highest success rate) per policy
-  const taskGroups = {};
-  data.forEach(d => {
-    if (!taskGroups[d.task]) taskGroups[d.task] = {};
-    if (!taskGroups[d.task][d.policy]) taskGroups[d.task][d.policy] = [];
-    taskGroups[d.task][d.policy].push(d);
-  });
+  const selectedTask = taskSel?.value || '__all__';
+  const data = selectedTask === '__all__' ? visibleData : visibleData.filter(d => d.task === selectedTask);
+  if (!data.length) return;
 
-  const tasks = Object.keys(taskGroups).sort();
-  const allPolicies = [...new Set(data.map(d => d.policy))].sort();
-  const policyColors = { ACT: '#1a73e8', SmolVLA: '#34a853', 'Pi0.5': '#e8710a' };
+  const successFns = [
+    entry => entry.a1 || 0,
+    entry => (entry.a1 || 0) + (entry.a2 || 0),
+    entry => (entry.a1 || 0) + (entry.a2 || 0) + (entry.a3 || 0),
+  ];
+  const chartIds = ['evalChartA1', 'evalChartA2', 'evalChartA3'];
+  const chartRefs = [evalChartA1, evalChartA2, evalChartA3];
+  const titles = ['Within 1st Attempt', 'Within 2nd Attempt', 'Within 3rd Attempt'];
 
-  const barDatasets = allPolicies.map(policy => ({
-    label: policy,
-    data: tasks.map(task => {
-      const entries = (taskGroups[task] || {})[policy] || [];
-      if (!entries.length) return 0;
-      const best = entries.reduce((a, b) => {
-        const rA = a.total > 0 ? successFn(a) / a.total : 0;
-        const rB = b.total > 0 ? successFn(b) / b.total : 0;
-        return rA >= rB ? a : b;
+  chartIds.forEach((id, idx) => {
+    const successFn = successFns[idx];
+    const grouped = {};
+    data.forEach(d => {
+      const key = d.task + ' / ' + d.policy;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push({ n: d.n, rate: d.total > 0 ? successFn(d) / d.total * 100 : 0 });
+    });
+
+    const allN = [...new Set(data.map(d => d.n))].sort((a, b) => a - b);
+    const lineDatasets = Object.keys(grouped).sort().map((key, i) => {
+      const points = grouped[key].sort((a, b) => a.n - b.n);
+      return {
+        label: key,
+        data: allN.map(n => { const p = points.find(p => p.n === n); return p ? p.rate : null; }),
+        borderColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length],
+        backgroundColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length] + '22',
+        borderWidth: 2, pointRadius: 4, tension: 0.3, spanGaps: true,
+      };
+    });
+
+    const ctx = document.getElementById(id);
+    if (ctx) {
+      if (chartRefs[idx]) chartRefs[idx].destroy();
+      chartRefs[idx] = new Chart(ctx, {
+        type: 'line',
+        data: { labels: allN.map(n => 'N=' + n), datasets: lineDatasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'right', labels: { font: { size: 11 }, boxWidth: 14 } } },
+          scales: {
+            y: { min: 0, max: 110, title: { display: true, text: 'Success Rate (%)' },
+                 ticks: { callback: v => v + '%' } },
+            x: { title: { display: true, text: 'Training Samples (N)' } },
+          },
+        },
       });
-      return best.total > 0 ? Math.round(successFn(best) / best.total * 100) : 0;
-    }),
-    backgroundColor: policyColors[policy] || '#888',
-  }));
-
-  const barCtx = document.getElementById('evalChartBar');
-  if (barCtx) {
-    if (evalChartBar) evalChartBar.destroy();
-    evalChartBar = new Chart(barCtx, {
-      type: 'bar',
-      data: { labels: tasks, datasets: barDatasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14 } } },
-        scales: {
-          y: { min: 0, max: 100, title: { display: true, text: 'Best Success Rate (%)' },
-               ticks: { callback: v => v + '%' } },
-        },
-      },
-    });
-  }
-
-  // ── Chart 3: Attempt Breakdown (stacked bar) ──
-  // Each bar = task+policy (best N), stacked segments = 1st/2nd/3rd/fail
-  const stackLabels = [];
-  const s1 = [], s2 = [], s3 = [], sf = [];
-  tasks.forEach(task => {
-    allPolicies.forEach(policy => {
-      const entries = (taskGroups[task] || {})[policy] || [];
-      if (!entries.length) return;
-      const best = entries.reduce((a, b) => {
-        const rA = a.total > 0 ? successFn(a) / a.total : 0;
-        const rB = b.total > 0 ? successFn(b) / b.total : 0;
-        return rA >= rB ? a : b;
-      });
-      if (best.total === 0) return;
-      stackLabels.push(task + '\n' + policy + ' N=' + best.n);
-      const t = best.total;
-      s1.push(Math.round((best.a1 || 0) / t * 100));
-      s2.push(Math.round((best.a2 || 0) / t * 100));
-      s3.push(Math.round((best.a3 || 0) / t * 100));
-      sf.push(Math.round((best.fail || 0) / t * 100));
-    });
+    }
   });
-
-  const stackCtx = document.getElementById('evalChartStack');
-  if (stackCtx) {
-    if (evalChartStack) evalChartStack.destroy();
-    evalChartStack = new Chart(stackCtx, {
-      type: 'bar',
-      data: {
-        labels: stackLabels,
-        datasets: [
-          { label: '1st attempt', data: s1, backgroundColor: '#34a853' },
-          { label: '2nd attempt', data: s2, backgroundColor: '#e8710a' },
-          { label: '3rd attempt', data: s3, backgroundColor: '#1a73e8' },
-          { label: 'Fail', data: sf, backgroundColor: '#d93025' },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14 } } },
-        scales: {
-          x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
-          y: { stacked: true, min: 0, max: 100, title: { display: true, text: '%' },
-               ticks: { callback: v => v + '%' } },
-          x: { stacked: true },
-        },
-      },
-    });
-  }
+  [evalChartA1, evalChartA2, evalChartA3] = chartRefs;
 }
 
 async function evalResultsGoToSession(sessionId) {
