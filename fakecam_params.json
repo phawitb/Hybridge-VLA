@@ -2,22 +2,22 @@
   "bbox_overlay": {
     "boxes": [
       {
-        "name": "pink",
+        "name": "pink bow",
         "bbox": [
-          162,
-          66,
-          201,
-          92
+          103,
+          96,
+          144,
+          134
         ],
         "color_hex": "#FF6B6B"
       },
       {
-        "name": "green",
+        "name": "green bowl",
         "bbox": [
-          210,
+          200,
           10,
-          273,
-          70
+          268,
+          75
         ],
         "color_hex": "#4ECDC4"
       }

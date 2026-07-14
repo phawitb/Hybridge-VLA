@@ -6783,6 +6783,10 @@ async def eval_list_sessions():
     for f in sorted(EVAL_DIR.glob("*.json"), reverse=True):
         try:
             d = json.loads(f.read_text())
+            results = d.get("results", [])
+            a1 = sum(1 for r in results if r.get("result") == "1-attempt")
+            a2 = sum(1 for r in results if r.get("result") == "2-attempt")
+            a3 = sum(1 for r in results if r.get("result") == "3-attempt")
             sessions.append({
                 "id": d.get("session_id", f.stem),
                 "name": d.get("session_name", ""),
@@ -6792,6 +6796,7 @@ async def eval_list_sessions():
                 "completed": d.get("completed", 0),
                 "success": d.get("success", 0),
                 "fail": d.get("fail", 0),
+                "a1": a1, "a2": a2, "a3": a3,
                 "created": d.get("created", ""),
             })
         except Exception:
