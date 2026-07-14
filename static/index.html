@@ -3086,6 +3086,42 @@ conda run -n lerobot uvicorn train_api:app \
           </div>
         </div>
       </div>
+
+      <!-- Visualization Charts -->
+      <div class="config-card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0">Visualization</h3>
+          <div style="display:flex;gap:6px;align-items:center">
+            <label class="form-label" style="margin:0;font-size:0.78rem">Attempt:</label>
+            <select id="evalChartAttempt" class="form-input" style="font-size:0.78rem;padding:2px 8px;width:auto" onchange="evalChartRender()">
+              <option value="1">1st attempt</option>
+              <option value="2">Within 2nd</option>
+              <option value="3" selected>Within 3rd</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Chart 1: Learning Curves -->
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Success Rate vs Training Samples (N)</h4>
+        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Each line = one task+policy combination. Shows how accuracy improves with more training data.</p>
+        <div style="position:relative;height:320px;margin-bottom:24px">
+          <canvas id="evalChartCurve"></canvas>
+        </div>
+
+        <!-- Chart 2: Policy Comparison (grouped bar) -->
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Policy Comparison by Task (best N)</h4>
+        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Compares ACT vs SmolVLA vs Pi0.5 using each task's best N value.</p>
+        <div style="position:relative;height:280px;margin-bottom:24px">
+          <canvas id="evalChartBar"></canvas>
+        </div>
+
+        <!-- Chart 3: Attempt Breakdown (stacked bar) -->
+        <h4 style="margin:0 0 6px;font-size:0.85rem;color:#555">Attempt Breakdown</h4>
+        <p style="font-size:0.75rem;color:#999;margin-bottom:8px">Distribution of 1st / 2nd / 3rd attempt successes and failures per task+policy.</p>
+        <div style="position:relative;height:280px">
+          <canvas id="evalChartStack"></canvas>
+        </div>
+      </div>
     </div><!-- /evalTabResults -->
 
   </div><!-- /page-evaluate -->
@@ -10620,6 +10656,7 @@ function evalResultsToggleTask(task) {
   }
   evalResultsSaveVisibility(vis);
   evalResultsRender(evalResultsGetData());
+  evalChartRender();
 }
 
 function evalResultsAdd() {
@@ -10683,6 +10720,7 @@ async function evalResultsRefresh() {
     }
   } catch(e) {}
   evalResultsRender(evalResultsGetData());
+  evalChartRender();
 }
 
 function evalResultsRender(data) {
@@ -10771,6 +10809,161 @@ function evalResultsRender(data) {
       existingEyeTh.remove();
     }
   });
+}
+
+// ── Eval Results Charts ──
+let evalChartCurve = null, evalChartBar = null, evalChartStack = null;
+
+const EVAL_CHART_COLORS = [
+  '#1a73e8', '#d93025', '#34a853', '#e8710a', '#9c27b0',
+  '#00bcd4', '#795548', '#607d8b', '#ff5722', '#3f51b5',
+];
+
+function evalChartRender() {
+  const allData = evalResultsGetData();
+  const visibility = evalResultsGetVisibility();
+  const data = allData.filter(d => visibility[d.task] !== false);
+  if (!data || !data.length) return;
+
+  const attemptLevel = parseInt(document.getElementById('evalChartAttempt')?.value || '3');
+  const successFn = entry => {
+    if (attemptLevel === 1) return entry.a1 || 0;
+    if (attemptLevel === 2) return (entry.a1 || 0) + (entry.a2 || 0);
+    return (entry.a1 || 0) + (entry.a2 || 0) + (entry.a3 || 0);
+  };
+
+  // ── Chart 1: Learning Curves (line chart) ──
+  const grouped = {};
+  data.forEach(d => {
+    const key = d.task + ' / ' + d.policy;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push({ n: d.n, rate: d.total > 0 ? successFn(d) / d.total * 100 : 0 });
+  });
+
+  const allN = [...new Set(data.map(d => d.n))].sort((a, b) => a - b);
+  const lineDatasets = Object.keys(grouped).sort().map((key, i) => {
+    const points = grouped[key].sort((a, b) => a.n - b.n);
+    return {
+      label: key,
+      data: allN.map(n => { const p = points.find(p => p.n === n); return p ? p.rate : null; }),
+      borderColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length],
+      backgroundColor: EVAL_CHART_COLORS[i % EVAL_CHART_COLORS.length] + '22',
+      borderWidth: 2, pointRadius: 4, tension: 0.3, spanGaps: true,
+    };
+  });
+
+  const curveCtx = document.getElementById('evalChartCurve');
+  if (curveCtx) {
+    if (evalChartCurve) evalChartCurve.destroy();
+    evalChartCurve = new Chart(curveCtx, {
+      type: 'line',
+      data: { labels: allN.map(n => 'N=' + n), datasets: lineDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { font: { size: 11 }, boxWidth: 14 } } },
+        scales: {
+          y: { min: 0, max: 100, title: { display: true, text: 'Success Rate (%)' },
+               ticks: { callback: v => v + '%' } },
+          x: { title: { display: true, text: 'Training Samples (N)' } },
+        },
+      },
+    });
+  }
+
+  // ── Chart 2: Policy Comparison (grouped bar) ──
+  // For each task, find the best N (highest success rate) per policy
+  const taskGroups = {};
+  data.forEach(d => {
+    if (!taskGroups[d.task]) taskGroups[d.task] = {};
+    if (!taskGroups[d.task][d.policy]) taskGroups[d.task][d.policy] = [];
+    taskGroups[d.task][d.policy].push(d);
+  });
+
+  const tasks = Object.keys(taskGroups).sort();
+  const allPolicies = [...new Set(data.map(d => d.policy))].sort();
+  const policyColors = { ACT: '#1a73e8', SmolVLA: '#34a853', 'Pi0.5': '#e8710a' };
+
+  const barDatasets = allPolicies.map(policy => ({
+    label: policy,
+    data: tasks.map(task => {
+      const entries = (taskGroups[task] || {})[policy] || [];
+      if (!entries.length) return 0;
+      const best = entries.reduce((a, b) => {
+        const rA = a.total > 0 ? successFn(a) / a.total : 0;
+        const rB = b.total > 0 ? successFn(b) / b.total : 0;
+        return rA >= rB ? a : b;
+      });
+      return best.total > 0 ? Math.round(successFn(best) / best.total * 100) : 0;
+    }),
+    backgroundColor: policyColors[policy] || '#888',
+  }));
+
+  const barCtx = document.getElementById('evalChartBar');
+  if (barCtx) {
+    if (evalChartBar) evalChartBar.destroy();
+    evalChartBar = new Chart(barCtx, {
+      type: 'bar',
+      data: { labels: tasks, datasets: barDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14 } } },
+        scales: {
+          y: { min: 0, max: 100, title: { display: true, text: 'Best Success Rate (%)' },
+               ticks: { callback: v => v + '%' } },
+        },
+      },
+    });
+  }
+
+  // ── Chart 3: Attempt Breakdown (stacked bar) ──
+  // Each bar = task+policy (best N), stacked segments = 1st/2nd/3rd/fail
+  const stackLabels = [];
+  const s1 = [], s2 = [], s3 = [], sf = [];
+  tasks.forEach(task => {
+    allPolicies.forEach(policy => {
+      const entries = (taskGroups[task] || {})[policy] || [];
+      if (!entries.length) return;
+      const best = entries.reduce((a, b) => {
+        const rA = a.total > 0 ? successFn(a) / a.total : 0;
+        const rB = b.total > 0 ? successFn(b) / b.total : 0;
+        return rA >= rB ? a : b;
+      });
+      if (best.total === 0) return;
+      stackLabels.push(task + '\n' + policy + ' N=' + best.n);
+      const t = best.total;
+      s1.push(Math.round((best.a1 || 0) / t * 100));
+      s2.push(Math.round((best.a2 || 0) / t * 100));
+      s3.push(Math.round((best.a3 || 0) / t * 100));
+      sf.push(Math.round((best.fail || 0) / t * 100));
+    });
+  });
+
+  const stackCtx = document.getElementById('evalChartStack');
+  if (stackCtx) {
+    if (evalChartStack) evalChartStack.destroy();
+    evalChartStack = new Chart(stackCtx, {
+      type: 'bar',
+      data: {
+        labels: stackLabels,
+        datasets: [
+          { label: '1st attempt', data: s1, backgroundColor: '#34a853' },
+          { label: '2nd attempt', data: s2, backgroundColor: '#e8710a' },
+          { label: '3rd attempt', data: s3, backgroundColor: '#1a73e8' },
+          { label: 'Fail', data: sf, backgroundColor: '#d93025' },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14 } } },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+          y: { stacked: true, min: 0, max: 100, title: { display: true, text: '%' },
+               ticks: { callback: v => v + '%' } },
+          x: { stacked: true },
+        },
+      },
+    });
+  }
 }
 
 async function evalResultsGoToSession(sessionId) {
