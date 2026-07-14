@@ -33,6 +33,19 @@
     width: 320px; flex-shrink: 0; background: #fff; border-left: 1px solid #e0e0e0;
     padding: 16px; overflow-y: auto; position: sticky; top: 0; height: 100vh;
   }
+
+  /* Panel resize dividers */
+  .panel-divider {
+    width: 4px; cursor: col-resize; background: #e0e0e0; flex-shrink: 0;
+    align-self: stretch; z-index: 50; transition: background 0.15s; border-radius: 2px;
+    margin: 0 2px;
+  }
+  .panel-divider:hover, .panel-divider.active { background: #1a73e8; }
+  .panel-divider-sidebar {
+    position: fixed; left: 217px; top: 0; bottom: 0; width: 4px;
+    cursor: col-resize; z-index: 50; background: #e0e0e0; transition: background 0.15s;
+  }
+  .panel-divider-sidebar:hover, .panel-divider-sidebar.active { background: #1a73e8; }
   .right-panel h3 { font-size: 0.9rem; font-weight: 700; color: #1a73e8; margin-bottom: 10px; }
   .right-panel .cal-row-cams { grid-template-columns: 1fr; }
   .right-panel .cal-slider-col { flex: none; }
@@ -379,6 +392,7 @@
   </div>
 </div>
 
+<div class="panel-divider-sidebar" id="dividerSidebar"></div>
 <div class="main">
 <div class="main-content">
 
@@ -2532,8 +2546,10 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         </div>
       </div>
 
+      <!-- Divider between main and sidebar -->
+      <div class="panel-divider" id="dividerTraining"></div>
       <!-- Column 3: Persistent sidebar (always visible) -->
-      <div style="width:320px;flex-shrink:0;position:sticky;top:16px">
+      <div id="trainRightCol" style="width:320px;flex-shrink:0;position:sticky;top:16px">
         <!-- Training Server -->
         <div class="config-card" style="margin-bottom:14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -2927,8 +2943,10 @@ conda run -n lerobot uvicorn train_api:app \
 
       </div>
 
+      <!-- Divider -->
+      <div class="panel-divider" id="dividerEval"></div>
       <!-- Sidebar: Session history + Log -->
-      <div style="width:350px;flex-shrink:0;position:sticky;top:16px;display:flex;flex-direction:column;gap:14px">
+      <div id="evalRightCol" style="width:350px;flex-shrink:0;position:sticky;top:16px;display:flex;flex-direction:column;gap:14px">
         <div class="config-card">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <h3 style="margin:0;font-size:0.9rem">Sessions</h3>
@@ -3075,6 +3093,7 @@ conda run -n lerobot uvicorn train_api:app \
 </div><!-- /main-content -->
 
 <!-- Right panel: Camera & Teleop (always visible) -->
+<div class="panel-divider" id="dividerRight"></div>
 <div class="right-panel">
   <h3>Camera & Teleop</h3>
   <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3435,6 +3454,71 @@ function updateTokenUI(u) {
   saveTokens(u);
 }
 
+// ---- Panel resize ----
+(function initPanelResize() {
+  function makeDraggable(divider, onDrag) {
+    divider.addEventListener('mousedown', e => {
+      e.preventDefault();
+      divider.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMove = ev => onDrag(ev.clientX);
+      const onUp = () => {
+        divider.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // Sidebar ↔ Main
+  const sidebar = document.querySelector('.sidebar');
+  const divSidebar = document.getElementById('dividerSidebar');
+  const mainEl = document.querySelector('.main');
+  if (divSidebar && sidebar && mainEl) {
+    makeDraggable(divSidebar, x => {
+      const w = Math.max(140, Math.min(400, x));
+      sidebar.style.width = w + 'px';
+      mainEl.style.marginLeft = w + 'px';
+      divSidebar.style.left = (w - 3) + 'px';
+    });
+  }
+
+  // Main content ↔ Right panel (global)
+  const divRight = document.getElementById('dividerRight');
+  const rightPanel = document.querySelector('.right-panel');
+  if (divRight && rightPanel) {
+    makeDraggable(divRight, x => {
+      const w = Math.max(200, Math.min(600, window.innerWidth - x));
+      rightPanel.style.width = w + 'px';
+    });
+  }
+
+  // Evaluate page: main ↔ right column
+  const divEval = document.getElementById('dividerEval');
+  const evalRightCol = document.getElementById('evalRightCol');
+  if (divEval && evalRightCol) {
+    makeDraggable(divEval, x => {
+      const w = Math.max(200, Math.min(600, window.innerWidth - x));
+      evalRightCol.style.width = w + 'px';
+    });
+  }
+
+  // Training page: main ↔ right column
+  const divTraining = document.getElementById('dividerTraining');
+  const trainRightCol = document.getElementById('trainRightCol');
+  if (divTraining && trainRightCol) {
+    makeDraggable(divTraining, x => {
+      const w = Math.max(200, Math.min(600, window.innerWidth - x));
+      trainRightCol.style.width = w + 'px';
+    });
+  }
+})();
+
 // ---- Events ----
 function setupEvents() {
   // Sidebar tabs
@@ -3446,9 +3530,11 @@ function setupEvents() {
       el.classList.add('active');
       // Hide right panel for Data Collection and Visualize tabs
       const rp = document.querySelector('.right-panel');
+      const rpDiv = document.getElementById('dividerRight');
       if (rp) {
         const hidePanel = el.dataset.tab === 'setup-env' || el.dataset.tab === 'data-collecting' || el.dataset.tab === 'visualize' || el.dataset.tab === 'inference' || el.dataset.tab === 'fakecam' || el.dataset.tab === 'training' || el.dataset.tab === 'evaluate' || el.dataset.tab === 'simulation' || el.dataset.tab === 'generate3d';
         rp.style.display = hidePanel ? 'none' : '';
+        if (rpDiv) rpDiv.style.display = hidePanel ? 'none' : '';
       }
       // Auto-load models on first visit to inference tab
       if (el.dataset.tab === 'inference' && !infModels.length) {
