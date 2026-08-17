@@ -103,6 +103,18 @@
   .method-add { display: flex; gap: 6px; margin-top: 6px; }
   .method-add input { width: 220px; padding: 5px 10px; font-size: 0.82rem; border-radius: 6px; }
   .method-add button { padding: 5px 12px; font-size: 0.8rem; border-radius: 6px; }
+  .model-registry { display: grid; gap: 8px; margin-top: 10px; }
+  .model-method-card { border: 1px solid #dfe3e8; border-radius: 8px; padding: 10px 12px; background: #fff; }
+  .model-method-card.unavailable { background: #f8f9fa; color: #777; }
+  .model-method-head { display: flex; gap: 9px; align-items: flex-start; }
+  .model-method-name { font-size: 0.84rem; font-weight: 700; color: #222; word-break: break-all; }
+  .model-method-meta { font-size: 0.72rem; color: #777; margin-top: 3px; line-height: 1.5; }
+  .model-method-tasks { margin: 7px 0 0 18px; padding: 0; font-size: 0.75rem; color: #555; }
+  .model-method-tasks li { margin: 3px 0; }
+  .model-status-pill { display: inline-block; border-radius: 10px; padding: 1px 7px; font-size: 0.67rem; font-weight: 600; background: #e6f4ea; color: #188038; }
+  .model-status-pill.remote { background: #f1f3f4; color: #666; }
+  .ik-mode-options { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; }
+  .ik-mode-options label { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; font-weight: 600; cursor: pointer; }
 
   /* Buttons */
   .btn { background: #1a73e8; color: #fff; border: none; padding: 9px 24px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
@@ -496,17 +508,32 @@
 
       <div class="config-card">
         <h3>Methods</h3>
-        <div class="methods-wrap" id="cfgMethodsWrap"></div>
-        <div class="method-add">
-          <input type="text" id="cfgMethodInput" placeholder="Add method...">
-          <button class="btn btn-sm" onclick="cfgAddMethod()">Add</button>
+        <p style="font-size:0.82rem;color:#666;margin-bottom:8px">Select one or more downloaded robot models. Training instructions define which tasks each model may receive.</p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-outline" id="cfgRegistryRefreshBtn" onclick="cfgLoadModelRegistry()">Refresh Models</button>
+          <span id="cfgRegistryStatus" style="font-size:0.78rem;color:#888"></span>
         </div>
+        <div class="model-registry" id="cfgModelRegistry"><div style="color:#999;font-size:0.8rem">Loading models...</div></div>
       </div>
 
       <div class="config-card">
-        <h3>Prompt Template</h3>
-        <div class="form-group">
-          <textarea id="cfgPrompt" style="min-height:200px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
+        <h3>IK Mode</h3>
+        <div class="ik-mode-options">
+          <label><input type="radio" name="cfgIkMode" value="use" onchange="cfgUpdatePromptMode()"> Use IK</label>
+          <label><input type="radio" name="cfgIkMode" value="no" onchange="cfgUpdatePromptMode()"> Not use IK</label>
+        </div>
+        <p id="cfgIkHelp" style="font-size:0.78rem;color:#777;margin-top:8px"></p>
+      </div>
+
+      <div class="config-card">
+        <h3>Prompt Templates</h3>
+        <div class="form-group" id="cfgUseIkPromptWrap">
+          <label class="form-label">Use IK Prompt</label>
+          <textarea id="cfgUseIkPrompt" style="min-height:260px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
+        </div>
+        <div class="form-group" id="cfgNoIkPromptWrap">
+          <label class="form-label">Not use IK Prompt</label>
+          <textarea id="cfgNoIkPrompt" style="min-height:260px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
         </div>
       </div>
 
@@ -3183,7 +3210,8 @@ conda run -n lerobot uvicorn train_api:app \
 <script>
 const COLORS = ['#e8453c','#1a73e8','#34a853','#f9ab00','#a142f4','#e8710a','#00bcd4','#e91e90','#8bc34a','#795548'];
 let cfg = null, imageFile = null, methods = [], allResults = [];
-let cfgMethods = []; // methods for config tab
+let cfgModelRegistry = [];
+let cfgSelectedModelIds = [];
 
 // ---- Init ----
 async function init() {
@@ -3232,7 +3260,14 @@ function cfgPopulate() {
   document.getElementById('cfgRobotId').value = cfg.robot_id || '';
   document.getElementById('cfgCamTop').value = cfg.camera_top_index ?? 0;
   document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 0;
-  document.getElementById('cfgPrompt').value = cfg.prompt_template || '';
+  const planner = cfg.planner || {};
+  cfgSelectedModelIds = [...(planner.selected_models || [])];
+  document.getElementById('cfgUseIkPrompt').value = planner.prompt_templates?.use_ik || '';
+  document.getElementById('cfgNoIkPrompt').value = planner.prompt_templates?.no_ik || '';
+  const mode = planner.use_ik !== false ? 'use' : 'no';
+  const radio = document.querySelector(`input[name="cfgIkMode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  cfgUpdatePromptMode();
 
   // Model select for config
   const sel = document.getElementById('cfgModel');
@@ -3248,9 +3283,7 @@ function cfgPopulate() {
   // HF repo name
   document.getElementById('cfgHfRepoName').value = cfg.hf_repo_name || '';
 
-  // Methods for config
-  cfgMethods = [...cfg.available_methods];
-  cfgRenderMethods();
+  cfgLoadModelRegistry();
 
   // Load env tokens (masked)
   cfgLoadTokens();
@@ -3352,24 +3385,116 @@ async function cfgSaveTokens() {
   } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
 }
 
-function cfgRenderMethods() {
-  const w = document.getElementById('cfgMethodsWrap');
-  w.innerHTML = cfgMethods.map((m, i) =>
-    `<span class="method-chip">${m}<button class="chip-rm" onclick="cfgRemoveMethod(${i})">&times;</button></span>`
-  ).join('');
+function selectableModelIds(records) {
+  return records.filter(record => record.selectable).map(record => record.id);
 }
-function cfgRemoveMethod(i) { cfgMethods.splice(i, 1); cfgRenderMethods(); }
-function cfgAddMethod() {
-  const inp = document.getElementById('cfgMethodInput');
-  const v = inp.value.trim();
-  if (v && !cfgMethods.includes(v)) { cfgMethods.push(v); cfgRenderMethods(); }
-  inp.value = '';
+
+function buildPlannerPayload({selectedIds, useIk, useIkPrompt, noIkPrompt}) {
+  const selected = [...new Set(selectedIds.filter(Boolean))];
+  if (!selected.length) throw new Error('Select at least one downloaded model.');
+  if (!useIkPrompt.trim() || !noIkPrompt.trim()) throw new Error('Both prompt templates are required.');
+  return {
+    use_ik: Boolean(useIk),
+    selected_models: selected,
+    prompt_templates: {use_ik: useIkPrompt, no_ik: noIkPrompt},
+  };
+}
+
+function cfgUpdatePromptMode() {
+  const useIk = document.querySelector('input[name="cfgIkMode"]:checked')?.value !== 'no';
+  document.getElementById('cfgUseIkPromptWrap').style.display = useIk ? '' : 'none';
+  document.getElementById('cfgNoIkPromptWrap').style.display = useIk ? 'none' : '';
+  document.getElementById('cfgIkHelp').textContent = useIk
+    ? 'Every VLA action is preceded by an IK reach step.'
+    : 'Plans contain only complete end-to-end tasks supported by selected models.';
+}
+
+async function cfgLoadModelRegistry() {
+  const status = document.getElementById('cfgRegistryStatus');
+  const button = document.getElementById('cfgRegistryRefreshBtn');
+  status.textContent = 'Loading local and Hugging Face models...';
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/models/registry');
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Unable to load models');
+    cfgModelRegistry = data.models || [];
+    const selectable = new Set(selectableModelIds(cfgModelRegistry));
+    cfgSelectedModelIds = cfgSelectedModelIds.filter(id => selectable.has(id));
+    cfgRenderModelRegistry();
+    status.textContent = `${cfgModelRegistry.length} models (${selectable.size} ready)`;
+  } catch (error) {
+    status.textContent = error.message;
+    status.style.color = '#d93025';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function cfgRenderModelRegistry() {
+  const wrap = document.getElementById('cfgModelRegistry');
+  if (!cfgModelRegistry.length) {
+    wrap.innerHTML = '<div style="color:#999;font-size:0.8rem">No models found.</div>';
+    return;
+  }
+  wrap.innerHTML = cfgModelRegistry.map(record => {
+    const checked = cfgSelectedModelIds.includes(record.id) ? 'checked' : '';
+    const disabled = record.selectable ? '' : 'disabled';
+    const tasks = (record.tasks || []).length
+      ? `<ul class="model-method-tasks">${record.tasks.map(task => `<li>${esc(task)}</li>`).join('')}</ul>`
+      : '<div style="font-size:0.75rem;color:#a33;margin-top:5px">Training instructions unavailable</div>';
+    const action = !record.downloaded && record.repo_id
+      ? `<button class="btn btn-sm btn-outline" onclick="cfgDownloadModel('${esc(record.repo_id)}','${esc(record.id)}')">Download</button>`
+      : '';
+    const reason = record.unavailable_reason ? ` · ${esc(record.unavailable_reason)}` : '';
+    return `<div class="model-method-card ${record.selectable ? '' : 'unavailable'}">
+      <div class="model-method-head">
+        <input type="checkbox" ${checked} ${disabled} onchange="cfgToggleModel('${esc(record.id)}',this.checked)" style="margin-top:3px">
+        <div style="flex:1;min-width:0">
+          <div class="model-method-name">${esc(record.display_name || record.id)}</div>
+          <div class="model-method-meta"><span class="model-status-pill ${record.downloaded ? '' : 'remote'}">${record.downloaded ? 'Local' : 'Hugging Face'}</span> · ${esc(record.policy_type || 'policy unknown')} · dataset: ${esc(record.dataset_id || 'unknown')}${reason}</div>
+          <div class="model-method-meta">Cameras: ${esc((record.camera_features || []).join(', ') || 'unknown')}</div>
+          <details style="margin-top:5px"><summary style="font-size:0.76rem;cursor:pointer">Training instructions (${(record.tasks || []).length})</summary>${tasks}</details>
+        </div>${action}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function cfgToggleModel(modelId, checked) {
+  if (checked && !cfgSelectedModelIds.includes(modelId)) cfgSelectedModelIds.push(modelId);
+  if (!checked) cfgSelectedModelIds = cfgSelectedModelIds.filter(id => id !== modelId);
+}
+
+async function cfgDownloadModel(repoId, modelName) {
+  const status = document.getElementById('cfgRegistryStatus');
+  status.textContent = `Starting download: ${modelName}`;
+  const response = await fetch('/api/model-download', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({repo_id: repoId, model_name: modelName}),
+  });
+  const data = await response.json();
+  if (!data.ok) { status.textContent = data.error || 'Download failed'; return; }
+  const poll = setInterval(async () => {
+    const state = await fetch('/api/model-download/status').then(r => r.json());
+    status.textContent = state.status || `Downloading ${modelName}...`;
+    if (!state.running) {
+      clearInterval(poll);
+      await cfgLoadModelRegistry();
+    }
+  }, 1000);
 }
 
 async function cfgSave() {
   const st = document.getElementById('cfgSaveStatus');
   st.textContent = 'Saving...'; st.className = 'status';
   try {
+    const planner = buildPlannerPayload({
+      selectedIds: cfgSelectedModelIds,
+      useIk: document.querySelector('input[name="cfgIkMode"]:checked')?.value !== 'no',
+      useIkPrompt: document.getElementById('cfgUseIkPrompt').value,
+      noIkPrompt: document.getElementById('cfgNoIkPrompt').value,
+    });
     const r = await fetch('/api/config/save', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -3379,8 +3504,7 @@ async function cfgSave() {
         camera_top_index: Number(document.getElementById('cfgCamTop').value),
         camera_wrist_index: Number(document.getElementById('cfgCamWrist').value),
         default_model: document.getElementById('cfgModel').value,
-        available_methods: cfgMethods,
-        prompt_template: document.getElementById('cfgPrompt').value,
+        planner,
       }),
     });
     const d = await r.json();
@@ -3389,10 +3513,6 @@ async function cfgSave() {
       // Reload config
       const r2 = await fetch('/api/config');
       cfg = await r2.json();
-      // Update debug tab
-      methods = [...cfg.available_methods];
-      renderMethods();
-      rebuildPrompt();
       buildModelSelect();
     } else {
       st.textContent = d.error || 'Save failed'; st.className = 'status error';
