@@ -41,7 +41,7 @@ function extractFunction(name) {
 
 const context = { console };
 vm.createContext(context);
-for (const name of ['selectableModelIds', 'buildPlannerPayload', 'buildRunStepPayload', 'runStateLabel']) {
+for (const name of ['selectableModelIds', 'buildPlannerPayload', 'buildRunStepPayload', 'runStateLabel', 'buildExecutionLoopPayload', 'buildRunSessionPayload', 'verifiedRunLabel']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
 
@@ -85,6 +85,25 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.buildRunStepPayload({
 assert.equal(context.runStateLabel({state: 'running', model_id: 'model_a'}), 'Running model_a');
 assert.equal(context.runStateLabel({state: 'failed', exit_code: 1}), 'Failed (exit 1)');
 assert.equal(context.runStateLabel({state: 'completed'}), 'Completed');
+
+assert.deepEqual(JSON.parse(JSON.stringify(context.buildExecutionLoopPayload({
+  actionsPerCycle: 100, cyclesBeforeReplan: 5, maxReplans: 3,
+}))), {actions_per_cycle: 100, cycles_before_replan: 5, max_replans: 3});
+assert.throws(() => context.buildExecutionLoopPayload({
+  actionsPerCycle: 0, cyclesBeforeReplan: 5, maxReplans: 3,
+}), /Actions per cycle/);
+
+assert.deepEqual(JSON.parse(JSON.stringify(context.buildRunSessionPayload('pick', {steps: []}, 2))), {
+  original_instruction: 'pick', plan: {steps: []}, start_index: 2,
+});
+assert.equal(context.verifiedRunLabel({phase: 'executing', cycle: 2, cycles_before_replan: 5, actions_per_cycle: 100}), 'Executing cycle 2/5 · 100 actions');
+assert.equal(context.verifiedRunLabel({phase: 'replanning', replan_count: 1, max_replans: 3}), 'Re-planning remaining work 1/3');
+assert.equal(context.verifiedRunLabel({state: 'needs_human_review', error: 'limit'}), 'Needs human review: limit');
+
+for (const id of ['cfgActionsPerCycle', 'cfgCyclesBeforeReplan', 'cfgMaxReplans']) {
+  assert.match(html, new RegExp(`id=["']${id}["']`));
+}
+assert.match(extractFunction('runStep'), /\/api\/run\/session\/start/);
 
 const runPlanSource = extractFunction('runPlan');
 assert.ok(
