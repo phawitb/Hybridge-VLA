@@ -36,6 +36,7 @@ def setup_config(monkeypatch, tmp_path):
         },
     }
     (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    (tmp_path / "models" / "model_a").mkdir(parents=True)
     monkeypatch.setattr(main, "ROOT", tmp_path)
     monkeypatch.setattr(main, "_load_model_registry", lambda cfg=None: [deepcopy(SELECTABLE_MODEL)])
 
@@ -178,3 +179,66 @@ def test_infer_accepts_selected_model_exact_training_task(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.json()["plan"]["steps"][0]["model_id"] == "model_a"
     assert response.json()["methods"] == ["vla_model:model_a"]
+
+
+class FakeVlaManager:
+    def __init__(self):
+        self.started = None
+
+    def start(self, command, model_id, task):
+        self.started = (command, model_id, task)
+        return {"ok": True, "pid": 123, "model_id": model_id, "task": task}
+
+    def status(self):
+        running = self.started is not None
+        return {"ok": True, "state": "running" if running else "idle", "running": running, "model_id": "model_a" if running else None, "task": "pick up the bow" if running else None, "exit_code": None, "lines": []}
+
+    def stop(self):
+        return {"ok": True, "state": "stopped"}
+
+
+def test_run_step_starts_selected_model_with_exact_declared_task(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    manager = FakeVlaManager()
+    monkeypatch.setattr(main, "vla_manager", manager)
+    monkeypatch.setattr(main, "build_infer_command", lambda **kwargs: ["safe-command"])
+    client = TestClient(main.app)
+
+    response = client.post("/api/run/step", json={
+        "method_id": "vla_model",
+        "model_id": "model_a",
+        "description": "pick up the bow",
+        "target_bbox": None,
+        "max_steps": 100,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["model_id"] == "model_a"
+    assert manager.started == (["safe-command"], "model_a", "pick up the bow")
+
+
+def test_run_step_rejects_task_outside_selected_model_capabilities(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "vla_manager", FakeVlaManager())
+    client = TestClient(main.app)
+
+    response = client.post("/api/run/step", json={
+        "method_id": "vla_model",
+        "model_id": "model_a",
+        "description": "open the drawer",
+        "max_steps": 100,
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "TASK_NOT_SUPPORTED"
+
+
+def test_run_status_and_stop_delegate_to_process_manager(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    manager = FakeVlaManager()
+    manager.started = (["safe-command"], "model_a", "pick up the bow")
+    monkeypatch.setattr(main, "vla_manager", manager)
+    client = TestClient(main.app)
+
+    assert client.get("/api/run/status").json()["state"] == "running"
+    assert client.post("/api/run/stop").json()["state"] == "stopped"

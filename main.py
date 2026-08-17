@@ -22,7 +22,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from model_registry import load_local_models, load_remote_models, merge_model_records
+from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
 from planner_config import (
     planner_settings,
     render_available_models,
@@ -30,6 +30,7 @@ from planner_config import (
     validate_plan,
     validation_feedback,
 )
+from vla_execution import VlaProcessManager, build_infer_command
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
@@ -93,6 +94,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
+vla_manager = VlaProcessManager(max_log_lines=500)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
@@ -7559,12 +7561,78 @@ async def run_step(request: Request):
       act_door_open_v1     → (placeholder)
       act_door_close_v1    → (placeholder)
     """
-    if not robot_state["connected"]:
-        return {"ok": False, "error": "Robot not connected"}
-
     data = await request.json()
     method = data.get("method_id", "")
     bbox = data.get("target_bbox")  # [x_center, y_center, w, h] normalized 0-1
+
+    if method == "vla_model":
+        cfg = load_config()
+        settings = planner_settings(cfg)
+        model_id = str(data.get("model_id", ""))
+        description = str(data.get("description", "")).strip()
+        if model_id not in settings["selected_models"]:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_SELECTED", "error": f"Model is not selected: {model_id}"},
+            )
+        record = get_model_record(_load_model_registry(cfg), model_id)
+        if not record or not record.get("selectable"):
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_SELECTABLE", "error": f"Model is not selectable: {model_id}"},
+            )
+        declared = {" ".join(str(task).strip().casefold().split()) for task in record.get("tasks", [])}
+        if " ".join(description.casefold().split()) not in declared:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "TASK_NOT_SUPPORTED",
+                    "error": f"Task is not declared for model {model_id}",
+                },
+            )
+        if any((teleop_state.get("running"), datacollect_state.get("running"), eval_state.get("running"), infer_py_state.get("running"))):
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is owned by another process"},
+            )
+        current_vla = vla_manager.status()
+        if current_vla.get("running"):
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "code": "VLA_ALREADY_RUNNING", "error": "VLA inference is already running"},
+            )
+        model_path = (ROOT / str(record.get("local_path", ""))).resolve()
+        models_root = (ROOT / "models").resolve()
+        if models_root not in model_path.parents or not model_path.exists():
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_DOWNLOADED", "error": "Model checkpoint is not available locally"},
+            )
+        if robot_state["connected"]:
+            disconnect_robot()
+            await asyncio.sleep(0.2)
+        max_steps = max(1, min(int(data.get("max_steps", 100)), 1000))
+        resolved_record = {**record, "local_path": str(model_path)}
+        try:
+            command = build_infer_command(
+                python=sys.executable,
+                script=ROOT / "infer_python.py",
+                model=resolved_record,
+                task=description,
+                robot=cfg.get("robot", {}),
+                cameras=cfg.get("robot", {}).get("cameras", {}),
+                max_steps=max_steps,
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "CAMERA_REQUIREMENT_FAILED", "error": str(exc)},
+            )
+        return vla_manager.start(command, model_id, description)
+
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
 
     if method == "ik_reach_object_v1":
         # Move to the bbox center using calibration
@@ -7649,6 +7717,16 @@ async def run_step(request: Request):
 
     else:
         return {"ok": False, "error": f"Unknown method: {method}"}
+
+
+@app.get("/api/run/status")
+async def run_status():
+    return vla_manager.status()
+
+
+@app.post("/api/run/stop")
+async def run_stop():
+    return vla_manager.stop()
 
 
 if __name__ == "__main__":
