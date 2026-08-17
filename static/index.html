@@ -726,13 +726,21 @@ Hybridge-VLA/<br>
       <h3>4.2 Gemini Model</h3>
       <p>Select the default model for planning. All available models are listed with their token limits.</p>
       <h3>4.3 Methods & Prompt</h3>
-      <p>Methods are the available robot actions. The prompt template uses <code>{instruction}</code> and <code>{available_methods}</code> placeholders.</p>
+      <p>The Methods panel is a task-aware registry of robot policy checkpoints from Hugging Face and the local <code>models/</code> directory.</p>
+      <ul>
+        <li>Training instructions come from the dataset referenced by each model's <code>train_config.json</code>.</li>
+        <li>Remote models remain visible with Download; only ready local models can be selected.</li>
+        <li><strong>Use IK</strong> requires an IK reach immediately before each VLA action.</li>
+        <li><strong>Not use IK</strong> emits only complete end-to-end VLA tasks and forbids IK.</li>
+        <li>Both templates use <code>{instruction}</code> and <code>{available_models}</code>.</li>
+      </ul>
 
       <h2 id="doc-api">5. API Reference</h2>
       <table>
         <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
         <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/config</code></td><td>Get all configuration</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/config/save</code></td><td>Save config to config.yaml</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/models/registry</code></td><td>List model capabilities and download readiness</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/test/all</code></td><td>Run all system tests</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/infer</code></td><td>Infer + verify loop</td></tr>
         <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/token-usage</code></td><td>Latest token usage</td></tr>
@@ -743,6 +751,8 @@ Hybridge-VLA/<br>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/robot/stop</code></td><td>Disconnect robot</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/*</code></td><td>Calibration endpoints</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/run/step</code></td><td>Execute a single plan step</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/run/status</code></td><td>Read VLA process state and logs</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/run/stop</code></td><td>Stop active VLA execution</td></tr>
       </table>
 
       <h2 id="doc-prompt">6. Prompt Engineering</h2>
@@ -1002,12 +1012,13 @@ bump_height = min(overshoot + 2, 10) degrees
     <div class="doc">
 
       <h2>Overview</h2>
-      <p>The Run tab executes a VLA plan on the physical robot. It captures an image from the top camera, sends it to Gemini for planning, and then lets you execute each step individually.</p>
+      <p>The Run tab captures the top camera, plans with the selected policy capabilities and IK mode, then executes each step on the physical robot. Every VLA step names its exact checkpoint in <code>model_id</code>.</p>
 
       <h2>How to Use</h2>
       <ol>
         <li>Ensure robot is connected (Config & Test > Debug > Start)</li>
-        <li>Ensure camera is calibrated (Calibrate tab)</li>
+        <li>Ensure camera is calibrated when using <strong>Use IK</strong></li>
+        <li>Select downloaded models whose training instructions cover the task</li>
         <li>Select a Gemini model and enter an instruction</li>
         <li>Press <strong>Plan</strong> &mdash; captures image from top camera and generates a plan</li>
         <li>Review the flowchart and bounding box visualization</li>
@@ -1015,9 +1026,19 @@ bump_height = min(overshoot + 2, 10) degrees
         <li>Steps auto-advance after completion</li>
       </ol>
 
+      <h2>Model and IK Safety</h2>
+      <ul>
+        <li>The server accepts only model IDs saved in Config &amp; Test and resolves checkpoint paths itself.</li>
+        <li>A VLA description must exactly match a training instruction declared for that model.</li>
+        <li>Use IK requires an IK predecessor; Not use IK rejects every IK step.</li>
+        <li>VLA execution stops after the selected control-step limit and streams recent logs to this page.</li>
+        <li>Stopping a process does not mark its plan step complete.</li>
+      </ul>
+
       <h2>Step Execution</h2>
       <table>
         <tr><th>Method</th><th>Action</th></tr>
+        <tr><td><code>vla_model</code></td><td>Run the step's explicit <code>model_id</code> with its exact declared training instruction</td></tr>
         <tr><td><code>ik_reach_object_v1</code></td><td>Move gripper to bbox center via calibration interpolation with safe arc path</td></tr>
         <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper (gripper = 0)</td></tr>
         <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper (gripper = 100)</td></tr>

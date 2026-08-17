@@ -69,8 +69,11 @@ def _load_model_registry(cfg: dict | None = None) -> list[dict]:
             for item in api.list_models(author=hf_user)
         ]
         dataset_ids = [item.id for item in api.list_datasets(author=hf_user)]
+        task_cache: dict[str, list[str]] = {}
 
         def task_loader(dataset_id: str) -> list[str]:
+            if dataset_id in task_cache:
+                return task_cache[dataset_id]
             path = hf_hub_download(
                 repo_id=dataset_id,
                 filename="meta/tasks.parquet",
@@ -78,7 +81,8 @@ def _load_model_registry(cfg: dict | None = None) -> list[dict]:
                 token=token,
             )
             import pyarrow.parquet as pq
-            return pq.read_table(path).to_pydict().get("task", [])
+            task_cache[dataset_id] = pq.read_table(path).to_pydict().get("task", [])
+            return task_cache[dataset_id]
 
         remote = load_remote_models(models, dataset_ids, task_loader)
         return merge_model_records(local, remote)
