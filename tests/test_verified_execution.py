@@ -154,3 +154,42 @@ def test_stop_cancels_loop_and_prevents_restart():
     assert result["ok"] is True
     assert state["state"] == "stopped"
     assert state["completed_steps"] == []
+
+
+def test_single_step_mode_stops_after_selected_step_success():
+    calls = []
+    manager = VerifiedExecutionManager()
+    manager.start(
+        "pick then place", {"steps": [step(1, "pick"), step(2, "place")]}, 1,
+        settings(),
+        lambda current, actions, stop: calls.append(current["description"]) or {"ok": True},
+        lambda current: {"ok": True, "status": "success", "reason": "done"},
+        lambda context: {"ok": False},
+        run_mode="step",
+    )
+
+    state = wait_terminal(manager)
+    assert calls == ["place"]
+    assert state["state"] == "completed"
+    assert state["run_mode"] == "step"
+    assert [item["description"] for item in state["completed_steps"]] == ["place"]
+
+
+def test_single_step_mode_stops_after_replan_for_user_selection():
+    manager = VerifiedExecutionManager()
+    manager.start(
+        "pick", {"steps": [step()]}, 0, settings(cycles=1),
+        lambda current, actions, stop: {"ok": True},
+        lambda current: {"ok": True, "status": "continue", "reason": "not done"},
+        lambda context: {"ok": True, "plan": {"steps": [step(1, "recover")] }},
+        run_mode="step",
+    )
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        state = manager.status()
+        if not state["running"]:
+            break
+        time.sleep(0.01)
+    assert state["state"] == "awaiting_step_selection"
+    assert state["plan"]["steps"][0]["description"] == "recover"

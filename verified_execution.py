@@ -7,7 +7,7 @@ import threading
 from typing import Callable
 
 
-TERMINAL_STATES = {"completed", "needs_human_review", "stopped"}
+TERMINAL_STATES = {"completed", "needs_human_review", "stopped", "awaiting_step_selection"}
 
 
 class VerifiedExecutionManager:
@@ -26,6 +26,7 @@ class VerifiedExecutionManager:
             "phase": "idle",
             "running": False,
             "original_instruction": "",
+            "run_mode": "all",
             "plan": {"steps": []},
             "current_step_index": 0,
             "cycle": 0,
@@ -55,6 +56,7 @@ class VerifiedExecutionManager:
         execute_step: Callable,
         verify_step: Callable,
         replan: Callable,
+        run_mode: str = "all",
     ) -> dict:
         with self._lock:
             if self._state["running"]:
@@ -62,6 +64,8 @@ class VerifiedExecutionManager:
             steps = plan.get("steps", []) if isinstance(plan, dict) else []
             if not isinstance(steps, list) or not steps or not 0 <= start_index < len(steps):
                 return {"ok": False, "code": "INVALID_RUN_PLAN", "error": "Plan and start index are required"}
+            if run_mode not in {"all", "step"}:
+                return {"ok": False, "code": "INVALID_RUN_MODE", "error": "Run mode must be all or step"}
             self._stop_event = threading.Event()
             self._state = {
                 **self._empty_state(),
@@ -69,6 +73,7 @@ class VerifiedExecutionManager:
                 "phase": "starting",
                 "running": True,
                 "original_instruction": str(original_instruction),
+                "run_mode": run_mode,
                 "plan": copy.deepcopy(plan),
                 "current_step_index": int(start_index),
                 "actions_per_cycle": int(settings["actions_per_cycle"]),
@@ -119,6 +124,11 @@ class VerifiedExecutionManager:
                     return
                 completed = state["completed_steps"] + [current]
                 self._update(completed_steps=completed, current_step_index=index + 1)
+                if state["run_mode"] == "step":
+                    self._update(state="completed", phase="completed", running=False)
+                    if self._on_terminal:
+                        self._on_terminal()
+                    return
                 continue
 
             task_history = []
@@ -159,6 +169,11 @@ class VerifiedExecutionManager:
                 if status == "success":
                     completed = self.status()["completed_steps"] + [current]
                     self._update(completed_steps=completed, current_step_index=index + 1)
+                    if state["run_mode"] == "step":
+                        self._update(state="completed", phase="completed", running=False)
+                        if self._on_terminal:
+                            self._on_terminal()
+                        return
                     break
                 if cycle < state["cycles_before_replan"]:
                     continue
@@ -185,6 +200,11 @@ class VerifiedExecutionManager:
                     self._review(replacement.get("error", "Re-plan did not return executable remaining steps"))
                     return
                 self._update(plan=copy.deepcopy(replacement_plan), current_step_index=0, cycle=0)
+                if state["run_mode"] == "step":
+                    self._update(state="awaiting_step_selection", phase="awaiting_step_selection", running=False)
+                    if self._on_terminal:
+                        self._on_terminal()
+                    return
                 break
 
     def stop(self) -> dict:

@@ -7776,6 +7776,9 @@ Generate a replacement plan containing ONLY unfinished work. Output only the req
 @app.post("/api/run/session/start")
 async def run_session_start(request: Request):
     data = await request.json()
+    run_mode = str(data.get("run_mode", "all"))
+    if run_mode not in {"all", "step"}:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_RUN_MODE", "error": "Run mode must be all or step"})
     cfg = load_config()
     settings = planner_settings(cfg)
     registry = _load_model_registry(cfg)
@@ -7790,11 +7793,12 @@ async def run_session_start(request: Request):
     return verified_manager.start(
         str(data.get("original_instruction", "")),
         plan,
-        int(data.get("start_index", 0)),
+        0 if run_mode == "all" else int(data.get("start_index", 0)),
         execution_loop_settings(cfg),
         _verified_execute_step,
         _verified_completion,
         _verified_replan,
+        run_mode,
     )
 
 
