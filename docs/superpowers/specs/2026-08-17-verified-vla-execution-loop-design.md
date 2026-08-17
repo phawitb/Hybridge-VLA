@@ -53,6 +53,13 @@ The server owns orchestration so execution continues reliably even if browser po
 
 The Run UI displays the current execution phase, for example `Executing cycle 2/5`, `Verifying`, `Re-planning remaining work`, `Completed`, or `Needs human review`. Logs remain visible. The existing Run Step button starts the verified loop for the selected VLA step; Stop cancels the full loop. When a replacement plan is accepted, the flow chart updates without re-inserting completed steps.
 
+The Run tab exposes two distinct execution modes:
+
+- **Run All** resets the displayed completion state and executes every task in the current plan from the first step through the final step. A valid re-plan replaces only the remaining plan and Run All continues automatically.
+- **Run Step** executes only the selected block. It stops after that step is verified successful and never advances into the next original-plan step. If its retry budget triggers a re-plan, the replacement plan is displayed but execution stops so the user can select a new step.
+
+Each plan block contains its own Gemini-check state: current cycle, `Executing` or `Verifying`, latest `success`, `continue`, or `uncertain` verdict, visible evidence, and reason. The Run layout uses three columns: camera image on the left, plan flow and controls in the center, and the live terminal log in the rightmost column. Stop cancels either execution mode.
+
 ## Completion Verification
 
 Gemini receives the task text and the latest observation captured by the persistent inference process at the cycle boundary. The verification prompt requires JSON with `status`, `reason`, and `visible_evidence`. Responses outside the allowed schema are classified as `uncertain`, retained in history, and consume one cycle. Verification is conservative: absence of clear visible evidence cannot produce `success`.
