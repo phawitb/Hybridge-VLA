@@ -20,6 +20,15 @@ import signal
 import sys
 import time
 
+
+def prepare_runtime():
+    """Load OpenCV before Torch to keep a single compatible OpenMP runtime on macOS."""
+    import cv2
+    import torch
+
+    return cv2, torch
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Python VLA inference")
     p.add_argument("--model-path", required=True, help="Path to model directory")
@@ -64,7 +73,7 @@ def _signal_handler(sig, frame):
 
 def main():
     global _running
-    import torch
+    _, torch = prepare_runtime()
 
     args = parse_args()
 

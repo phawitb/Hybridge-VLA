@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -118,3 +119,21 @@ def test_should_continue_stops_at_bounded_step_count():
     assert should_continue(True, 100, 100) is False
     assert should_continue(True, 100, 0) is True
     assert should_continue(False, 0, 0) is False
+
+
+def test_inference_runtime_loads_opencv_before_torch_without_openmp_abort():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import infer_python; "
+            "cv2, torch = infer_python.prepare_runtime(); "
+            "print(cv2.__name__, torch.__name__)",
+        ],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "cv2 torch"
