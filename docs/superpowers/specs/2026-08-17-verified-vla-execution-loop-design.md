@@ -6,7 +6,7 @@ Replace the current assumption that a VLA step is complete after 100 control ste
 
 ## Execution State Machine
 
-Each `vla_model` plan step starts with cycle number one. One cycle launches the selected model for exactly 100 control steps. When the inference process exits successfully, the server reconnects only the cameras needed for verification, captures a fresh frame, and asks Gemini to classify the requested task as one of:
+Each `vla_model` plan step starts with cycle number one. One cycle launches the selected model for the configured number of control steps (default 100). When the inference process exits successfully, the server reconnects only the cameras needed for verification, captures a fresh frame, and asks Gemini to classify the requested task as one of:
 
 - `success`: visible evidence shows the requested task is complete.
 - `continue`: visible evidence shows the task is incomplete and another execution cycle is appropriate.
@@ -16,9 +16,9 @@ On `success`, the current plan step is marked complete and execution advances to
 
 The Stop action cancels the active model process and the surrounding execution loop. A stopped run must never restart itself or advance the plan.
 
-## Five-Cycle Re-plan
+## Configurable Re-plan Threshold
 
-If one task reaches five cycles without a verified success, execution stops repeating that task and requests a new plan from Gemini using:
+If one task reaches the configured cycle limit (default five) without a verified success, execution stops repeating that task and requests a new plan from Gemini using:
 
 - the original user instruction;
 - a fresh scene image;
@@ -29,7 +29,19 @@ If one task reaches five cycles without a verified success, execution stops repe
 
 The re-plan prompt explicitly requires a plan for remaining work only and forbids repeating completed steps. The returned plan passes the same local model/task/IK validation as the initial plan. A valid replacement becomes the active remaining plan and its first step is ready to execute. An invalid replacement or Gemini API failure changes the run to `needs_human_review`; it does not resume the failed model automatically.
 
-Each newly planned task receives its own independent five-cycle budget. To prevent an endless sequence of re-plans, one Run session permits at most three automatic re-plans. Reaching that limit changes the run to `needs_human_review`.
+Each newly planned task receives its own independent cycle budget. To prevent an endless sequence of re-plans, one Run session permits the configured maximum number of automatic re-plans (default three). Reaching that limit changes the run to `needs_human_review`.
+
+## Config & Test Settings
+
+The `Config & Test` page adds an **Execution Loop** settings group with three numeric fields:
+
+- **Actions per cycle**: default `100`, allowed range `1–1000`.
+- **Cycles before re-plan**: default `5`, allowed range `1–20`.
+- **Max automatic re-plans**: default `3`, allowed range `1–10`.
+
+These values are stored in `config.yaml` under `execution_loop.actions_per_cycle`, `execution_loop.cycles_before_replan`, and `execution_loop.max_replans`. The existing config read/save API returns and validates all three fields. Missing settings migrate at read time to the defaults without rewriting the file until the user explicitly saves Config & Test.
+
+The Run page displays the active limits in its status text, such as `Executing cycle 2/5 · 100 actions`. A Run session snapshots the three settings when it starts, so editing Config & Test does not change an already-running robot operation mid-cycle.
 
 ## API and UI
 
@@ -45,8 +57,8 @@ For pick-and-place, success requires visible evidence that the target object has
 
 ## Safety and Failure Handling
 
-- Exactly 100 control steps are allowed per cycle; no unbounded inference process is introduced.
-- Maximum five cycles per task and three automatic re-plans per Run session.
+- The configured action limit is enforced for every cycle; no unbounded inference process is introduced.
+- The configured cycle and automatic re-plan limits are enforced for every Run session.
 - Process failure, camera capture failure, invalid re-plan, or API failure results in `needs_human_review` with a specific error.
 - Hardware ownership remains exclusive between inference and verification camera capture.
 - Stop is checked before every launch, verification, retry, and re-plan transition.
@@ -54,7 +66,8 @@ For pick-and-place, success requires visible evidence that the target object has
 
 ## Tests
 
-- Unit tests cover state transitions for success, continue, uncertain, five-cycle re-plan, re-plan limit, Stop, and failures.
+- Unit tests cover state transitions for success, continue, uncertain, configured-cycle re-plan, re-plan limit, Stop, and failures.
+- Config tests cover defaults, persistence, range validation, and per-session setting snapshots.
 - API tests cover starting, polling, stopping, fresh-image verification, accepted replacement plans, rejected replacement plans, and completed-step context.
 - Process tests retain the exact 100-step command bound.
 - UI tests cover phase labels, updated plans, automatic advancement, `needs_human_review`, and Stop behavior.
