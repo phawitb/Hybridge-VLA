@@ -4,7 +4,7 @@ import sys
 import time
 from pathlib import Path
 
-from infer_python import should_continue
+from infer_python import cycle_boundary_reached, normalize_cycle_command, should_continue
 from vla_execution import VlaProcessManager, build_infer_command
 
 
@@ -137,3 +137,39 @@ def test_inference_runtime_loads_opencv_before_torch_without_openmp_abort():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "cv2 torch"
+
+
+def test_cycle_boundary_and_control_commands():
+    assert cycle_boundary_reached(99, 0, 100) is False
+    assert cycle_boundary_reached(100, 0, 100) is True
+    assert cycle_boundary_reached(200, 100, 100) is True
+    assert normalize_cycle_command(" continue\n") == "continue"
+    assert normalize_cycle_command("STOP") == "stop"
+    assert normalize_cycle_command("unknown") == "stop"
+
+
+def test_process_manager_resumes_same_process_after_cycle_boundary(tmp_path):
+    manager = VlaProcessManager(max_log_lines=20)
+    image = tmp_path / "latest.jpg"
+    script = (
+        "import json,sys; "
+        f"print('CYCLE_READY '+json.dumps({{'step':100,'image':{str(image)!r}}}),flush=True); "
+        "command=sys.stdin.readline().strip(); "
+        "print('command='+command,flush=True); "
+        f"print('CYCLE_READY '+json.dumps({{'step':200,'image':{str(image)!r}}}),flush=True); "
+        "sys.stdin.readline()"
+    )
+
+    started = manager.start([sys.executable, "-u", "-c", script], "model_a", "pick")
+    wait_until(lambda: manager.status()["state"] == "waiting_for_verification")
+    first = manager.status()
+    resumed = manager.continue_cycle()
+    wait_until(lambda: manager.status()["cycle_ready_count"] == 2)
+    second = manager.status()
+
+    assert resumed["ok"] is True
+    assert first["pid"] == second["pid"] == started["pid"]
+    assert second["state"] == "waiting_for_verification"
+    assert second["verification_image"] == str(image)
+    assert "command=continue" in second["lines"]
+    manager.stop()

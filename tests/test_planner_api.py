@@ -1,6 +1,7 @@
 from copy import deepcopy
 import io
 import json
+import threading
 
 import yaml
 from fastapi.testclient import TestClient
@@ -341,6 +342,54 @@ def test_completion_verifier_treats_invalid_gemini_schema_as_uncertain(monkeypat
 
     assert result["ok"] is True
     assert result["status"] == "uncertain"
+
+
+def test_verified_execution_resumes_compatible_persistent_process(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+
+    class PersistentManager:
+        def __init__(self):
+            self.starts = 0
+            self.continues = 0
+            self.ready = 0
+
+        def status(self):
+            if not self.ready:
+                return {"state": "idle", "running": False, "cycle_ready_count": 0, "lines": []}
+            return {
+                "state": "waiting_for_verification", "running": True,
+                "cycle_ready_count": self.ready, "model_id": "model_a", "task": "pick up the bow",
+                "pid": 123, "verification_image": "/tmp/frame.jpg", "lines": [],
+            }
+
+        def start(self, command, model_id, task):
+            self.starts += 1
+            self.ready = 1
+            return {"ok": True, "pid": 123}
+
+        def continue_cycle(self):
+            self.continues += 1
+            self.ready += 1
+            return {"ok": True, "pid": 123}
+
+        def stop(self):
+            return {"ok": True}
+
+    manager = PersistentManager()
+    monkeypatch.setattr(main, "vla_manager", manager)
+    main.robot_state["connected"] = False
+    current = {
+        "step_index": 1, "description": "pick up the bow", "target_bbox": None,
+        "method_id": "vla_model", "model_id": "model_a",
+    }
+
+    first = main._verified_execute_step(current, 100, threading.Event())
+    second = main._verified_execute_step(current, 100, threading.Event())
+
+    assert first["ok"] is second["ok"] is True
+    assert first["pid"] == second["pid"] == 123
+    assert manager.starts == 1
+    assert manager.continues == 1
 
 
 def test_replan_rejects_completed_task_repetition(monkeypatch, tmp_path):

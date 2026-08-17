@@ -11,11 +11,12 @@ TERMINAL_STATES = {"completed", "needs_human_review", "stopped"}
 
 
 class VerifiedExecutionManager:
-    def __init__(self):
+    def __init__(self, on_terminal: Callable | None = None):
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._state = self._empty_state()
+        self._on_terminal = on_terminal
 
     @staticmethod
     def _empty_state() -> dict:
@@ -90,6 +91,8 @@ class VerifiedExecutionManager:
 
     def _review(self, error: str) -> None:
         self._update(state="needs_human_review", phase="needs_human_review", running=False, error=error)
+        if self._on_terminal:
+            self._on_terminal()
 
     def _worker(self, execute_step: Callable, verify_step: Callable, replan: Callable) -> None:
         while True:
@@ -100,6 +103,8 @@ class VerifiedExecutionManager:
             index = state["current_step_index"]
             if index >= len(steps):
                 self._update(state="completed", phase="completed", running=False)
+                if self._on_terminal:
+                    self._on_terminal()
                 return
             current = copy.deepcopy(steps[index])
             self._update(cycle=0)
@@ -187,4 +192,6 @@ class VerifiedExecutionManager:
         with self._lock:
             if self._state["state"] not in TERMINAL_STATES:
                 self._state.update(state="stopped", phase="stopped", running=False)
+        if self._on_terminal:
+            self._on_terminal()
         return {"ok": True, "state": self.status()["state"]}
