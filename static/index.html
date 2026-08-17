@@ -103,6 +103,18 @@
   .method-add { display: flex; gap: 6px; margin-top: 6px; }
   .method-add input { width: 220px; padding: 5px 10px; font-size: 0.82rem; border-radius: 6px; }
   .method-add button { padding: 5px 12px; font-size: 0.8rem; border-radius: 6px; }
+  .model-registry { display: grid; gap: 8px; margin-top: 10px; }
+  .model-method-card { border: 1px solid #dfe3e8; border-radius: 8px; padding: 10px 12px; background: #fff; }
+  .model-method-card.unavailable { background: #f8f9fa; color: #777; }
+  .model-method-head { display: flex; gap: 9px; align-items: flex-start; }
+  .model-method-name { font-size: 0.84rem; font-weight: 700; color: #222; word-break: break-all; }
+  .model-method-meta { font-size: 0.72rem; color: #777; margin-top: 3px; line-height: 1.5; }
+  .model-method-tasks { margin: 7px 0 0 18px; padding: 0; font-size: 0.75rem; color: #555; }
+  .model-method-tasks li { margin: 3px 0; }
+  .model-status-pill { display: inline-block; border-radius: 10px; padding: 1px 7px; font-size: 0.67rem; font-weight: 600; background: #e6f4ea; color: #188038; }
+  .model-status-pill.remote { background: #f1f3f4; color: #666; }
+  .ik-mode-options { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; }
+  .ik-mode-options label { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; font-weight: 600; cursor: pointer; }
 
   /* Buttons */
   .btn { background: #1a73e8; color: #fff; border: none; padding: 9px 24px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
@@ -496,17 +508,32 @@
 
       <div class="config-card">
         <h3>Methods</h3>
-        <div class="methods-wrap" id="cfgMethodsWrap"></div>
-        <div class="method-add">
-          <input type="text" id="cfgMethodInput" placeholder="Add method...">
-          <button class="btn btn-sm" onclick="cfgAddMethod()">Add</button>
+        <p style="font-size:0.82rem;color:#666;margin-bottom:8px">Select one or more downloaded robot models. Training instructions define which tasks each model may receive.</p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-outline" id="cfgRegistryRefreshBtn" onclick="cfgLoadModelRegistry()">Refresh Models</button>
+          <span id="cfgRegistryStatus" style="font-size:0.78rem;color:#888"></span>
         </div>
+        <div class="model-registry" id="cfgModelRegistry"><div style="color:#999;font-size:0.8rem">Loading models...</div></div>
       </div>
 
       <div class="config-card">
-        <h3>Prompt Template</h3>
-        <div class="form-group">
-          <textarea id="cfgPrompt" style="min-height:200px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
+        <h3>IK Mode</h3>
+        <div class="ik-mode-options">
+          <label><input type="radio" name="cfgIkMode" value="use" onchange="cfgUpdatePromptMode()"> Use IK</label>
+          <label><input type="radio" name="cfgIkMode" value="no" onchange="cfgUpdatePromptMode()"> Not use IK</label>
+        </div>
+        <p id="cfgIkHelp" style="font-size:0.78rem;color:#777;margin-top:8px"></p>
+      </div>
+
+      <div class="config-card">
+        <h3>Prompt Templates</h3>
+        <div class="form-group" id="cfgUseIkPromptWrap">
+          <label class="form-label">Use IK Prompt</label>
+          <textarea id="cfgUseIkPrompt" style="min-height:260px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
+        </div>
+        <div class="form-group" id="cfgNoIkPromptWrap">
+          <label class="form-label">Not use IK Prompt</label>
+          <textarea id="cfgNoIkPrompt" style="min-height:260px;font-size:0.8rem;line-height:1.4;font-family:'SF Mono','Menlo',monospace"></textarea>
         </div>
       </div>
 
@@ -699,13 +726,21 @@ Hybridge-VLA/<br>
       <h3>4.2 Gemini Model</h3>
       <p>Select the default model for planning. All available models are listed with their token limits.</p>
       <h3>4.3 Methods & Prompt</h3>
-      <p>Methods are the available robot actions. The prompt template uses <code>{instruction}</code> and <code>{available_methods}</code> placeholders.</p>
+      <p>The Methods panel is a task-aware registry of robot policy checkpoints from Hugging Face and the local <code>models/</code> directory.</p>
+      <ul>
+        <li>Training instructions come from the dataset referenced by each model's <code>train_config.json</code>.</li>
+        <li>Remote models remain visible with Download; only ready local models can be selected.</li>
+        <li><strong>Use IK</strong> requires an IK reach immediately before each VLA action.</li>
+        <li><strong>Not use IK</strong> emits only complete end-to-end VLA tasks and forbids IK.</li>
+        <li>Both templates use <code>{instruction}</code> and <code>{available_models}</code>.</li>
+      </ul>
 
       <h2 id="doc-api">5. API Reference</h2>
       <table>
         <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
         <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/config</code></td><td>Get all configuration</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/config/save</code></td><td>Save config to config.yaml</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/models/registry</code></td><td>List model capabilities and download readiness</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/test/all</code></td><td>Run all system tests</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/infer</code></td><td>Infer + verify loop</td></tr>
         <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/token-usage</code></td><td>Latest token usage</td></tr>
@@ -716,6 +751,8 @@ Hybridge-VLA/<br>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/robot/stop</code></td><td>Disconnect robot</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/calibrate/*</code></td><td>Calibration endpoints</td></tr>
         <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/run/step</code></td><td>Execute a single plan step</td></tr>
+        <tr><td><span class="badge badge-get">GET</span></td><td><code>/api/run/status</code></td><td>Read VLA process state and logs</td></tr>
+        <tr><td><span class="badge badge-post">POST</span></td><td><code>/api/run/stop</code></td><td>Stop active VLA execution</td></tr>
       </table>
 
       <h2 id="doc-prompt">6. Prompt Engineering</h2>
@@ -959,8 +996,11 @@ bump_height = min(overshoot + 2, 10) degrees
         <div style="flex:0 0 440px;min-width:300px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
             <button class="btn btn-sm" id="runStepBtn" onclick="runStep()" disabled>Run Step</button>
+            <label style="font-size:0.75rem;color:#666">VLA steps <input id="runMaxSteps" type="number" value="100" min="1" max="1000" style="width:70px;padding:4px"></label>
+            <button class="btn btn-sm btn-danger" id="runStopBtn" onclick="runStopVla()" style="display:none">Stop</button>
             <span class="status" id="runStepStatus"></span>
           </div>
+          <pre id="runStepLog" style="display:none;background:#1e1e1e;color:#ddd;border-radius:6px;padding:8px;font-size:0.7rem;max-height:150px;overflow:auto;white-space:pre-wrap"></pre>
           <div class="run-flow" id="runFlowChart"></div>
         </div>
       </div>
@@ -972,12 +1012,13 @@ bump_height = min(overshoot + 2, 10) degrees
     <div class="doc">
 
       <h2>Overview</h2>
-      <p>The Run tab executes a VLA plan on the physical robot. It captures an image from the top camera, sends it to Gemini for planning, and then lets you execute each step individually.</p>
+      <p>The Run tab captures the top camera, plans with the selected policy capabilities and IK mode, then executes each step on the physical robot. Every VLA step names its exact checkpoint in <code>model_id</code>.</p>
 
       <h2>How to Use</h2>
       <ol>
         <li>Ensure robot is connected (Config & Test > Debug > Start)</li>
-        <li>Ensure camera is calibrated (Calibrate tab)</li>
+        <li>Ensure camera is calibrated when using <strong>Use IK</strong></li>
+        <li>Select downloaded models whose training instructions cover the task</li>
         <li>Select a Gemini model and enter an instruction</li>
         <li>Press <strong>Plan</strong> &mdash; captures image from top camera and generates a plan</li>
         <li>Review the flowchart and bounding box visualization</li>
@@ -985,9 +1026,19 @@ bump_height = min(overshoot + 2, 10) degrees
         <li>Steps auto-advance after completion</li>
       </ol>
 
+      <h2>Model and IK Safety</h2>
+      <ul>
+        <li>The server accepts only model IDs saved in Config &amp; Test and resolves checkpoint paths itself.</li>
+        <li>A VLA description must exactly match a training instruction declared for that model.</li>
+        <li>Use IK requires an IK predecessor; Not use IK rejects every IK step.</li>
+        <li>VLA execution stops after the selected control-step limit and streams recent logs to this page.</li>
+        <li>Stopping a process does not mark its plan step complete.</li>
+      </ul>
+
       <h2>Step Execution</h2>
       <table>
         <tr><th>Method</th><th>Action</th></tr>
+        <tr><td><code>vla_model</code></td><td>Run the step's explicit <code>model_id</code> with its exact declared training instruction</td></tr>
         <tr><td><code>ik_reach_object_v1</code></td><td>Move gripper to bbox center via calibration interpolation with safe arc path</td></tr>
         <tr><td><code>act_gripper_grasp_v1</code></td><td>Close gripper (gripper = 0)</td></tr>
         <tr><td><code>act_gripper_release_v1</code></td><td>Open gripper (gripper = 100)</td></tr>
@@ -3183,7 +3234,8 @@ conda run -n lerobot uvicorn train_api:app \
 <script>
 const COLORS = ['#e8453c','#1a73e8','#34a853','#f9ab00','#a142f4','#e8710a','#00bcd4','#e91e90','#8bc34a','#795548'];
 let cfg = null, imageFile = null, methods = [], allResults = [];
-let cfgMethods = []; // methods for config tab
+let cfgModelRegistry = [];
+let cfgSelectedModelIds = [];
 
 // ---- Init ----
 async function init() {
@@ -3232,7 +3284,14 @@ function cfgPopulate() {
   document.getElementById('cfgRobotId').value = cfg.robot_id || '';
   document.getElementById('cfgCamTop').value = cfg.camera_top_index ?? 0;
   document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 0;
-  document.getElementById('cfgPrompt').value = cfg.prompt_template || '';
+  const planner = cfg.planner || {};
+  cfgSelectedModelIds = [...(planner.selected_models || [])];
+  document.getElementById('cfgUseIkPrompt').value = planner.prompt_templates?.use_ik || '';
+  document.getElementById('cfgNoIkPrompt').value = planner.prompt_templates?.no_ik || '';
+  const mode = planner.use_ik !== false ? 'use' : 'no';
+  const radio = document.querySelector(`input[name="cfgIkMode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  cfgUpdatePromptMode();
 
   // Model select for config
   const sel = document.getElementById('cfgModel');
@@ -3248,9 +3307,7 @@ function cfgPopulate() {
   // HF repo name
   document.getElementById('cfgHfRepoName').value = cfg.hf_repo_name || '';
 
-  // Methods for config
-  cfgMethods = [...cfg.available_methods];
-  cfgRenderMethods();
+  cfgLoadModelRegistry();
 
   // Load env tokens (masked)
   cfgLoadTokens();
@@ -3352,24 +3409,116 @@ async function cfgSaveTokens() {
   } catch(e) { st.textContent = e.message; st.style.color = '#d93025'; }
 }
 
-function cfgRenderMethods() {
-  const w = document.getElementById('cfgMethodsWrap');
-  w.innerHTML = cfgMethods.map((m, i) =>
-    `<span class="method-chip">${m}<button class="chip-rm" onclick="cfgRemoveMethod(${i})">&times;</button></span>`
-  ).join('');
+function selectableModelIds(records) {
+  return records.filter(record => record.selectable).map(record => record.id);
 }
-function cfgRemoveMethod(i) { cfgMethods.splice(i, 1); cfgRenderMethods(); }
-function cfgAddMethod() {
-  const inp = document.getElementById('cfgMethodInput');
-  const v = inp.value.trim();
-  if (v && !cfgMethods.includes(v)) { cfgMethods.push(v); cfgRenderMethods(); }
-  inp.value = '';
+
+function buildPlannerPayload({selectedIds, useIk, useIkPrompt, noIkPrompt}) {
+  const selected = [...new Set(selectedIds.filter(Boolean))];
+  if (!selected.length) throw new Error('Select at least one downloaded model.');
+  if (!useIkPrompt.trim() || !noIkPrompt.trim()) throw new Error('Both prompt templates are required.');
+  return {
+    use_ik: Boolean(useIk),
+    selected_models: selected,
+    prompt_templates: {use_ik: useIkPrompt, no_ik: noIkPrompt},
+  };
+}
+
+function cfgUpdatePromptMode() {
+  const useIk = document.querySelector('input[name="cfgIkMode"]:checked')?.value !== 'no';
+  document.getElementById('cfgUseIkPromptWrap').style.display = useIk ? '' : 'none';
+  document.getElementById('cfgNoIkPromptWrap').style.display = useIk ? 'none' : '';
+  document.getElementById('cfgIkHelp').textContent = useIk
+    ? 'Every VLA action is preceded by an IK reach step.'
+    : 'Plans contain only complete end-to-end tasks supported by selected models.';
+}
+
+async function cfgLoadModelRegistry() {
+  const status = document.getElementById('cfgRegistryStatus');
+  const button = document.getElementById('cfgRegistryRefreshBtn');
+  status.textContent = 'Loading local and Hugging Face models...';
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/models/registry');
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Unable to load models');
+    cfgModelRegistry = data.models || [];
+    const selectable = new Set(selectableModelIds(cfgModelRegistry));
+    cfgSelectedModelIds = cfgSelectedModelIds.filter(id => selectable.has(id));
+    cfgRenderModelRegistry();
+    status.textContent = `${cfgModelRegistry.length} models (${selectable.size} ready)`;
+  } catch (error) {
+    status.textContent = error.message;
+    status.style.color = '#d93025';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function cfgRenderModelRegistry() {
+  const wrap = document.getElementById('cfgModelRegistry');
+  if (!cfgModelRegistry.length) {
+    wrap.innerHTML = '<div style="color:#999;font-size:0.8rem">No models found.</div>';
+    return;
+  }
+  wrap.innerHTML = cfgModelRegistry.map(record => {
+    const checked = cfgSelectedModelIds.includes(record.id) ? 'checked' : '';
+    const disabled = record.selectable ? '' : 'disabled';
+    const tasks = (record.tasks || []).length
+      ? `<ul class="model-method-tasks">${record.tasks.map(task => `<li>${esc(task)}</li>`).join('')}</ul>`
+      : '<div style="font-size:0.75rem;color:#a33;margin-top:5px">Training instructions unavailable</div>';
+    const action = !record.downloaded && record.repo_id
+      ? `<button class="btn btn-sm btn-outline" onclick="cfgDownloadModel('${esc(record.repo_id)}','${esc(record.id)}')">Download</button>`
+      : '';
+    const reason = record.unavailable_reason ? ` · ${esc(record.unavailable_reason)}` : '';
+    return `<div class="model-method-card ${record.selectable ? '' : 'unavailable'}">
+      <div class="model-method-head">
+        <input type="checkbox" ${checked} ${disabled} onchange="cfgToggleModel('${esc(record.id)}',this.checked)" style="margin-top:3px">
+        <div style="flex:1;min-width:0">
+          <div class="model-method-name">${esc(record.display_name || record.id)}</div>
+          <div class="model-method-meta"><span class="model-status-pill ${record.downloaded ? '' : 'remote'}">${record.downloaded ? 'Local' : 'Hugging Face'}</span> · ${esc(record.policy_type || 'policy unknown')} · dataset: ${esc(record.dataset_id || 'unknown')}${reason}</div>
+          <div class="model-method-meta">Cameras: ${esc((record.camera_features || []).join(', ') || 'unknown')}</div>
+          <details style="margin-top:5px"><summary style="font-size:0.76rem;cursor:pointer">Training instructions (${(record.tasks || []).length})</summary>${tasks}</details>
+        </div>${action}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function cfgToggleModel(modelId, checked) {
+  if (checked && !cfgSelectedModelIds.includes(modelId)) cfgSelectedModelIds.push(modelId);
+  if (!checked) cfgSelectedModelIds = cfgSelectedModelIds.filter(id => id !== modelId);
+}
+
+async function cfgDownloadModel(repoId, modelName) {
+  const status = document.getElementById('cfgRegistryStatus');
+  status.textContent = `Starting download: ${modelName}`;
+  const response = await fetch('/api/model-download', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({repo_id: repoId, model_name: modelName}),
+  });
+  const data = await response.json();
+  if (!data.ok) { status.textContent = data.error || 'Download failed'; return; }
+  const poll = setInterval(async () => {
+    const state = await fetch('/api/model-download/status').then(r => r.json());
+    status.textContent = state.status || `Downloading ${modelName}...`;
+    if (!state.running) {
+      clearInterval(poll);
+      await cfgLoadModelRegistry();
+    }
+  }, 1000);
 }
 
 async function cfgSave() {
   const st = document.getElementById('cfgSaveStatus');
   st.textContent = 'Saving...'; st.className = 'status';
   try {
+    const planner = buildPlannerPayload({
+      selectedIds: cfgSelectedModelIds,
+      useIk: document.querySelector('input[name="cfgIkMode"]:checked')?.value !== 'no',
+      useIkPrompt: document.getElementById('cfgUseIkPrompt').value,
+      noIkPrompt: document.getElementById('cfgNoIkPrompt').value,
+    });
     const r = await fetch('/api/config/save', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -3379,8 +3528,7 @@ async function cfgSave() {
         camera_top_index: Number(document.getElementById('cfgCamTop').value),
         camera_wrist_index: Number(document.getElementById('cfgCamWrist').value),
         default_model: document.getElementById('cfgModel').value,
-        available_methods: cfgMethods,
-        prompt_template: document.getElementById('cfgPrompt').value,
+        planner,
       }),
     });
     const d = await r.json();
@@ -3389,10 +3537,6 @@ async function cfgSave() {
       // Reload config
       const r2 = await fetch('/api/config');
       cfg = await r2.json();
-      // Update debug tab
-      methods = [...cfg.available_methods];
-      renderMethods();
-      rebuildPrompt();
       buildModelSelect();
     } else {
       st.textContent = d.error || 'Save failed'; st.className = 'status error';
@@ -3643,7 +3787,6 @@ function setupEvents() {
   document.getElementById('instruction').addEventListener('input', rebuildPrompt);
   // Method input enter
   document.getElementById('methodInput').addEventListener('keydown', e => { if(e.key==='Enter') addMethod(); });
-  document.getElementById('cfgMethodInput').addEventListener('keydown', e => { if(e.key==='Enter') cfgAddMethod(); });
   // Submit
   document.getElementById('submitBtn').addEventListener('click', submit);
   document.getElementById('instruction').addEventListener('keydown', e => { if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) submit(); });
@@ -3777,7 +3920,7 @@ function renderSteps(plan, containerId) {
       <div class="step-idx">${s.step_index}</div>
       <div class="step-body">
         <div class="step-desc">${esc(s.description)}</div>
-        <div class="step-method">${esc(s.method_id)}</div>
+        <div class="step-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div>
         <div class="step-bbox">bbox: ${bboxStr}</div>
       </div>
     </div>`;
@@ -3851,7 +3994,7 @@ function openModal(id) {
     const color=COLORS[i%COLORS.length];
     const bb = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
     return `<div class="step-card"><div class="step-dot" style="background:${color}"></div><div class="step-idx">${s.step_index}</div>
-      <div class="step-body"><div class="step-desc">${esc(s.description)}</div><div class="step-method">${esc(s.method_id)}</div><div class="step-bbox">bbox: ${bb}</div></div></div>`;
+      <div class="step-body"><div class="step-desc">${esc(s.description)}</div><div class="step-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div><div class="step-bbox">bbox: ${bb}</div></div></div>`;
   }).join('');
 
   const methodsHtml = (r.methods||[]).map(m=>`<span class="method-chip">${m}</span>`).join(' ');
@@ -4281,6 +4424,7 @@ let runImageFile = null;
 let runImageUrl = null;
 let runSelectedStep = -1;
 let runStepsDone = new Set();
+let runVlaPollTimer = null;
 
 function buildRunModelSelect() {
   if (!cfg) return;
@@ -4320,16 +4464,9 @@ async function runPlan() {
 
   st.textContent='Planning...'; st.className='status';
 
-  const methodStr = (cfg.available_methods||[]).map(m => `* ${m}`).join('\n');
-  const prompt = cfg.prompt_template
-    .replace('{instruction}', instruction)
-    .replace('{available_methods}', methodStr);
-
   const fd = new FormData();
   fd.append('model', document.getElementById('runModel').value);
   fd.append('instruction', instruction);
-  fd.append('methods', (cfg.available_methods||[]).join(','));
-  fd.append('prompt', prompt);
   fd.append('image', runImageFile);
 
   try {
@@ -4370,7 +4507,7 @@ function runBuildFlow() {
         <div class="run-block-idx" style="background:${color}">${s.step_index}</div>
         <div class="run-block-body">
           <div class="run-block-desc">${esc(s.description)}</div>
-          <div class="run-block-method">${esc(s.method_id)}</div>
+          <div class="run-block-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div>
           <div class="run-block-bbox">bbox: ${bboxStr}</div>
           ${statusStr}
         </div>
@@ -4400,22 +4537,25 @@ async function runStep() {
   st.textContent = `Running step ${step.step_index}: ${step.method_id}...`;
 
   try {
+    const payload = buildRunStepPayload(step, parseInt(document.getElementById('runMaxSteps').value) || 100);
+    payload.height_cm = parseFloat(document.getElementById("cbHeight")?.value) || 0;
+    payload.safety_height_cm = parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0;
     const r = await fetch('/api/run/step', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        method_id: step.method_id,
-        target_bbox: step.target_bbox,
-        description: step.description,
-        height_cm: parseFloat(document.getElementById("cbHeight")?.value) || 0,
-        safety_height_cm: parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0,
-      }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (!d.ok) {
       st.innerHTML = `<span style="color:#d93025">Step ${step.step_index} failed: ${d.error}</span>`;
       if (block) block.className = 'run-block selected';
       btn.disabled = false;
+      return;
+    }
+    if (step.method_id === 'vla_model') {
+      document.getElementById('runStopBtn').style.display = '';
+      document.getElementById('runStepLog').style.display = '';
+      runPollVlaStep(runSelectedStep);
       return;
     }
     runStepsDone.add(runSelectedStep);
@@ -4427,6 +4567,57 @@ async function runStep() {
     if (block) block.className = 'run-block selected';
   }
   btn.disabled = false;
+}
+
+function buildRunStepPayload(step, maxSteps) {
+  return {
+    method_id: step.method_id,
+    model_id: step.model_id || null,
+    description: step.description,
+    target_bbox: step.target_bbox ?? null,
+    max_steps: Math.max(1, Math.min(parseInt(maxSteps) || 100, 1000)),
+  };
+}
+
+function runStateLabel(state) {
+  if (state.state === 'running' || state.state === 'starting') return `Running ${state.model_id || 'model'}`;
+  if (state.state === 'completed') return 'Completed';
+  if (state.state === 'failed') return `Failed (exit ${state.exit_code ?? 'unknown'})`;
+  if (state.state === 'stopped') return 'Stopped';
+  return state.state || 'Idle';
+}
+
+function runPollVlaStep(stepIndex) {
+  if (runVlaPollTimer) clearInterval(runVlaPollTimer);
+  const poll = async () => {
+    try {
+      const state = await fetch('/api/run/status').then(r => r.json());
+      document.getElementById('runStepStatus').textContent = runStateLabel(state);
+      const log = document.getElementById('runStepLog');
+      log.textContent = (state.lines || []).slice(-100).join('\n');
+      log.scrollTop = log.scrollHeight;
+      if (state.running || state.state === 'starting') return;
+      clearInterval(runVlaPollTimer); runVlaPollTimer = null;
+      document.getElementById('runStopBtn').style.display = 'none';
+      document.getElementById('runStepBtn').disabled = false;
+      if (state.state === 'completed') {
+        runStepsDone.add(stepIndex);
+        if (runSelectedStep < runPlanData.steps.length - 1) runSelectedStep++;
+        runBuildFlow();
+      } else {
+        runSelectedStep = stepIndex;
+        runBuildFlow();
+      }
+    } catch (error) {
+      document.getElementById('runStepStatus').textContent = error.message;
+    }
+  };
+  poll();
+  runVlaPollTimer = setInterval(poll, 500);
+}
+
+async function runStopVla() {
+  await fetch('/api/run/stop', {method:'POST'});
 }
 
 // ══════════ Data Collection ══════════

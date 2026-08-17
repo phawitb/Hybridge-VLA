@@ -19,8 +19,18 @@ import yaml
 from dotenv import load_dotenv
 from PIL import Image
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
+from planner_config import (
+    planner_settings,
+    render_available_models,
+    render_planner_prompt,
+    validate_plan,
+    validation_feedback,
+)
+from vla_execution import VlaProcessManager, build_infer_command
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
@@ -31,6 +41,56 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def _write_config(cfg: dict) -> None:
+    """Atomically replace config.yaml after successful serialization."""
+    target = ROOT / "config.yaml"
+    temporary = ROOT / "config.yaml.tmp"
+    temporary.write_text(yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False))
+    temporary.replace(target)
+
+
+def _load_model_registry(cfg: dict | None = None) -> list[dict]:
+    cfg = cfg or load_config()
+    cameras = set(cfg.get("robot", {}).get("cameras", {}).keys())
+    local = load_local_models(ROOT / "models", cameras)
+    hf_user = str(cfg.get("hf_repo_name", "")).strip()
+    if not hf_user:
+        return local
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+
+        token = _read_env().get("HF_TOKEN") or None
+        api = HfApi(token=token)
+        models = [
+            {
+                "id": item.modelId,
+                "name": item.modelId.rsplit("/", 1)[-1],
+            }
+            for item in api.list_models(author=hf_user)
+        ]
+        dataset_ids = [item.id for item in api.list_datasets(author=hf_user)]
+        task_cache: dict[str, list[str]] = {}
+
+        def task_loader(dataset_id: str) -> list[str]:
+            if dataset_id in task_cache:
+                return task_cache[dataset_id]
+            path = hf_hub_download(
+                repo_id=dataset_id,
+                filename="meta/tasks.parquet",
+                repo_type="dataset",
+                token=token,
+            )
+            import pyarrow.parquet as pq
+            task_cache[dataset_id] = pq.read_table(path).to_pydict().get("task", [])
+            return task_cache[dataset_id]
+
+        remote = load_remote_models(models, dataset_ids, task_loader)
+        return merge_model_records(local, remote)
+    except Exception as exc:
+        print(f"[Model Registry] Hugging Face discovery failed: {exc}")
+        return local
+
+
 CONFIG = load_config()
 RESULTS_DIR = ROOT / CONFIG["storage"]["results_dir"]
 IMAGES_DIR = ROOT / CONFIG["storage"]["images_dir"]
@@ -38,6 +98,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
+vla_manager = VlaProcessManager(max_log_lines=500)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
@@ -274,6 +335,7 @@ async def get_config():
         "default_instruction": cfg.get("default_instruction", ""),
         "available_methods": cfg.get("available_methods", []),
         "prompt_template": cfg.get("prompt_template", ""),
+        "planner": planner_settings(cfg),
         "verify": cfg.get("verify", {"enabled": True, "max_retries": 3}),
         "robot_port": robot_cfg.get("port", ""),
         "robot_id": robot_cfg.get("id", ""),
@@ -295,11 +357,52 @@ async def get_config():
     }
 
 
+@app.get("/api/models/registry")
+async def model_registry():
+    return {"ok": True, "models": _load_model_registry()}
+
+
 @app.post("/api/config/save")
 async def save_config(request: Request):
     """Save configuration fields to config.yaml."""
     data = await request.json()
     cfg = load_config()
+
+    if "planner" in data:
+        incoming = data["planner"]
+        selected = incoming.get("selected_models", []) if isinstance(incoming, dict) else []
+        if not selected:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "NO_SELECTED_MODELS", "error": "Select at least one downloaded model"},
+            )
+        selectable = {
+            record["id"] for record in _load_model_registry(cfg)
+            if record.get("selectable")
+        }
+        invalid = [model_id for model_id in selected if model_id not in selectable]
+        if invalid:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "MODEL_NOT_SELECTABLE",
+                    "error": f"Models are not selectable: {', '.join(invalid)}",
+                },
+            )
+        prompts = incoming.get("prompt_templates", {})
+        use_prompt = str(prompts.get("use_ik", ""))
+        no_prompt = str(prompts.get("no_ik", ""))
+        if not use_prompt.strip() or not no_prompt.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "PROMPT_REQUIRED", "error": "Both prompt templates are required"},
+            )
+        cfg["planner"] = {
+            "use_ik": bool(incoming.get("use_ik", True)),
+            "selected_models": list(dict.fromkeys(str(item) for item in selected)),
+            "prompt_templates": {"use_ik": use_prompt, "no_ik": no_prompt},
+        }
 
     if "robot_port" in data:
         cfg.setdefault("robot", {})["port"] = data["robot_port"]
@@ -361,8 +464,7 @@ async def save_config(request: Request):
             },
         }
 
-    with open(ROOT / "config.yaml", "w") as f:
-        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    _write_config(cfg)
 
     return {"ok": True}
 
@@ -715,8 +817,8 @@ async def test_all():
 async def infer(
     model: str = Form(...),
     instruction: str = Form(...),
-    methods: str = Form(...),
-    prompt: str = Form(...),
+    methods: str = Form(""),
+    prompt: str = Form(""),
     image: UploadFile = File(...),
 ):
     cfg = load_config()
@@ -725,6 +827,21 @@ async def infer(
     max_retries = verify_cfg.get("max_retries", 3)
     verify_enabled = verify_cfg.get("enabled", True)
     verify_template = cfg.get("verify_prompt_template", "")
+    settings = planner_settings(cfg)
+    registry = _load_model_registry(cfg)
+    selected_records = [
+        record for record in registry
+        if record.get("id") in settings["selected_models"] and record.get("selectable")
+    ]
+    if settings["selected_models"]:
+        prompt, selected_ids = render_planner_prompt(cfg, instruction, registry)
+        methods_list = (["ik_reach_object_v1"] if settings["use_ik"] else []) + [
+            f"vla_model:{model_id}" for model_id in selected_ids
+        ]
+        methods_str = render_available_models(registry, selected_ids)
+    else:
+        methods_list = [item.strip() for item in methods.split(",") if item.strip()]
+        methods_str = "\n".join(f"* {item}" for item in methods_list)
 
     # Save image
     image_bytes = await image.read()
@@ -739,9 +856,6 @@ async def infer(
     b64 = base64.b64encode(image_bytes).decode()
     mime = image.content_type or "image/jpeg"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-
-    methods_list = [m.strip() for m in methods.split(",") if m.strip()]
-    methods_str = "\n".join(f"* {m}" for m in methods_list)
 
     # --- Infer + verify loop ---
     total_elapsed = 0
@@ -760,6 +874,7 @@ async def infer(
     token_usage_total = {"input": 0, "output": 0, "total": 0}
 
     retry_feedback = ""  # accumulated feedback from failed verifications
+    last_validation_errors = []
 
     async with httpx.AsyncClient(timeout=60) as client:
         for attempt in range(1, max_retries + 1):
@@ -814,7 +929,27 @@ async def infer(
             if was_fixed:
                 bbox_auto_fixed = True
 
-            # Step 4: Verify (if enabled)
+            # Step 4: Enforce saved model capabilities and IK mode locally.
+            if settings["selected_models"]:
+                last_validation_errors = validate_plan(
+                    plan_data, settings["use_ik"], selected_records
+                )
+                attempt_record["validation_errors"] = last_validation_errors
+                if last_validation_errors:
+                    attempt_record["verify_result"] = {
+                        "verified": False,
+                        "reason": "Plan violates selected model capabilities or IK mode",
+                    }
+                    verify_info["history"].append(attempt_record)
+                    verify_info["attempts"] = attempt
+                    retry_feedback = (
+                        "\n\n## Previous Attempt Failed Local Validation\n"
+                        + validation_feedback(last_validation_errors)
+                        + "\nGenerate a corrected plan using only the selected models and exact training tasks."
+                    )
+                    continue
+
+            # Step 5: Verify (if enabled)
             if not verify_enabled:
                 attempt_record["verify_result"] = {"verified": True, "reason": "Verification disabled"}
                 verify_info["history"].append(attempt_record)
@@ -847,6 +982,15 @@ async def infer(
                     f"### Verifier feedback:\n{reason}\n\n"
                     f"Please fix the issues and generate a corrected plan."
                 )
+
+    if last_validation_errors:
+        return {
+            "error": "Generated plan violates selected model capabilities or IK mode",
+            "error_code": "INVALID_PLAN",
+            "validation_errors": last_validation_errors,
+            "verify": verify_info,
+            "elapsed": round(total_elapsed, 2),
+        }
 
     # Token limit info
     model_limit = 1048576
@@ -7421,12 +7565,78 @@ async def run_step(request: Request):
       act_door_open_v1     → (placeholder)
       act_door_close_v1    → (placeholder)
     """
-    if not robot_state["connected"]:
-        return {"ok": False, "error": "Robot not connected"}
-
     data = await request.json()
     method = data.get("method_id", "")
     bbox = data.get("target_bbox")  # [x_center, y_center, w, h] normalized 0-1
+
+    if method == "vla_model":
+        cfg = load_config()
+        settings = planner_settings(cfg)
+        model_id = str(data.get("model_id", ""))
+        description = str(data.get("description", "")).strip()
+        if model_id not in settings["selected_models"]:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_SELECTED", "error": f"Model is not selected: {model_id}"},
+            )
+        record = get_model_record(_load_model_registry(cfg), model_id)
+        if not record or not record.get("selectable"):
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_SELECTABLE", "error": f"Model is not selectable: {model_id}"},
+            )
+        declared = {" ".join(str(task).strip().casefold().split()) for task in record.get("tasks", [])}
+        if " ".join(description.casefold().split()) not in declared:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "code": "TASK_NOT_SUPPORTED",
+                    "error": f"Task is not declared for model {model_id}",
+                },
+            )
+        if any((teleop_state.get("running"), datacollect_state.get("running"), eval_state.get("running"), infer_py_state.get("running"))):
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is owned by another process"},
+            )
+        current_vla = vla_manager.status()
+        if current_vla.get("running"):
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "code": "VLA_ALREADY_RUNNING", "error": "VLA inference is already running"},
+            )
+        model_path = (ROOT / str(record.get("local_path", ""))).resolve()
+        models_root = (ROOT / "models").resolve()
+        if models_root not in model_path.parents or not model_path.exists():
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MODEL_NOT_DOWNLOADED", "error": "Model checkpoint is not available locally"},
+            )
+        if robot_state["connected"]:
+            disconnect_robot()
+            await asyncio.sleep(0.2)
+        max_steps = max(1, min(int(data.get("max_steps", 100)), 1000))
+        resolved_record = {**record, "local_path": str(model_path)}
+        try:
+            command = build_infer_command(
+                python=sys.executable,
+                script=ROOT / "infer_python.py",
+                model=resolved_record,
+                task=description,
+                robot=cfg.get("robot", {}),
+                cameras=cfg.get("robot", {}).get("cameras", {}),
+                max_steps=max_steps,
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "CAMERA_REQUIREMENT_FAILED", "error": str(exc)},
+            )
+        return vla_manager.start(command, model_id, description)
+
+    if not robot_state["connected"]:
+        return {"ok": False, "error": "Robot not connected"}
 
     if method == "ik_reach_object_v1":
         # Move to the bbox center using calibration
@@ -7511,6 +7721,16 @@ async def run_step(request: Request):
 
     else:
         return {"ok": False, "error": f"Unknown method: {method}"}
+
+
+@app.get("/api/run/status")
+async def run_status():
+    return vla_manager.status()
+
+
+@app.post("/api/run/stop")
+async def run_stop():
+    return vla_manager.stop()
 
 
 if __name__ == "__main__":

@@ -45,6 +45,53 @@ default_instruction: pick up the pink bow to the green bowl
 available_methods:
 - ik_reach_object_v1
 - smolVLA_v1
+planner:
+  use_ik: true
+  selected_models:
+  - smolvla_DS4_2B2O_FF_FULL
+  prompt_templates:
+    use_ik: |-
+      You are a robotic task planner for a single-arm robot.
+
+      ## Instruction
+      {instruction}
+
+      ## Selected VLA Models and Exact Training Tasks
+      {available_models}
+
+      ## Planning Rules
+      - Output only valid JSON.
+      - Use only ik_reach_object_v1 and vla_model.
+      - Every vla_model step MUST be immediately preceded by one ik_reach_object_v1 step targeting the same interaction location.
+      - An IK step only moves the arm and cannot interact with an object.
+      - Choose exactly one selected model for each VLA step and use its exact model ID.
+      - The VLA description MUST exactly match one training task declared for that model.
+      - Never invent a model ID or assign an undeclared task.
+      - Use normalized YOLO bounding boxes [x_center, y_center, width, height] for IK targets.
+      - If no selected model supports an action, output {"error":"NO_CAPABLE_MODEL","reason":"brief explanation"}.
+
+      Each step contains step_index, description, target_bbox, method_id, and model_id.
+    no_ik: |-
+      You are a robotic task planner for end-to-end VLA policies.
+
+      ## Instruction
+      {instruction}
+
+      ## Selected VLA Models and Exact Training Tasks
+      {available_models}
+
+      ## Planning Rules
+      - Output only valid JSON.
+      - NEVER emit ik_reach_object_v1, reach-only steps, or hand-written motion primitives.
+      - Every step MUST use method_id vla_model.
+      - Treat each step as one complete end-to-end task that a selected model was trained to perform.
+      - Choose exactly one selected model and use its exact model ID.
+      - The step description MUST exactly match one training task declared for that model.
+      - Prefer a single complete trained task instead of decomposing it.
+      - Never invent a model ID or assign an undeclared task.
+      - If no selected model supports the instruction, output {"error":"NO_CAPABLE_MODEL","reason":"brief explanation"}.
+
+      Each step contains step_index, description, target_bbox, method_id, and model_id.
 prompt_template: "You are a robotic task planner for a Vision-Language-Action (VLA)\
   \ system.\n\n## Task\nConvert a natural language instruction into a step-by-step\
   \ robotic execution plan.\n\n## Input\n{instruction}\n\n## Available Methods\n\n\

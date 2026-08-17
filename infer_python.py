@@ -20,9 +20,6 @@ import signal
 import sys
 import time
 
-import torch
-
-
 def parse_args():
     p = argparse.ArgumentParser(description="Python VLA inference")
     p.add_argument("--model-path", required=True, help="Path to model directory")
@@ -37,10 +34,13 @@ def parse_args():
     p.add_argument("--n-action-steps", type=int, default=0, help="Override n_action_steps (0=use model default)")
     p.add_argument("--device", default="", help="Device: cuda, mps, cpu (auto-detect if empty)")
     p.add_argument("--cache-language", action="store_true", help="Cache language tokens & embeddings (same task text every step)")
+    p.add_argument("--max-steps", type=int, default=0, help="Stop after N control steps (0=run until interrupted)")
     return p.parse_args()
 
 
 def detect_device():
+    import torch
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -52,6 +52,10 @@ def detect_device():
 _running = True
 
 
+def should_continue(running: bool, step: int, max_steps: int) -> bool:
+    return bool(running) and (max_steps <= 0 or step < max_steps)
+
+
 def _signal_handler(sig, frame):
     global _running
     print("\n[infer_python] Caught signal, stopping...")
@@ -60,6 +64,8 @@ def _signal_handler(sig, frame):
 
 def main():
     global _running
+    import torch
+
     args = parse_args()
 
     signal.signal(signal.SIGINT, _signal_handler)
@@ -265,7 +271,7 @@ def main():
     print("[infer_python] Press Ctrl+C to stop", flush=True)
 
     try:
-        while _running:
+        while should_continue(_running, step, args.max_steps):
             t0 = time.time()
 
             # Get observation from robot
@@ -338,6 +344,7 @@ def main():
         print(f"[infer_python] Error: {e}")
         import traceback
         traceback.print_exc()
+        return 1
     finally:
         print(f"[infer_python] Stopping after {step} steps")
         try:
@@ -345,7 +352,8 @@ def main():
             print("[infer_python] Robot disconnected")
         except Exception as e:
             print(f"[infer_python] Disconnect error: {e}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
