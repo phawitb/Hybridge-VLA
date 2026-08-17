@@ -10,3 +10,4 @@ test.py
 *.jpg
 !test_cam0.jpg
 *.pt
+.worktrees/
