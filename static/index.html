@@ -93,6 +93,9 @@
   }
 
   /* Methods chips */
+  .run-three-column { display:grid; grid-template-columns:minmax(260px,1fr) minmax(360px,1.25fr) minmax(280px,1fr); gap:18px; align-items:start; }
+  .run-terminal-column { min-width:0; }
+  @media (max-width:1100px) { .run-three-column { grid-template-columns:1fr; } }
   .methods-wrap { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .method-chip {
     display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
@@ -995,12 +998,7 @@ bump_height = min(overshoot + 2, 10) degrees
       </div>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">Image (top camera)</label>
-      <div id="runImagePreview" style="display:none">
-        <img id="runImage" style="max-width:100%;max-height:300px;border-radius:8px;border:1px solid #d0d0d0">
-      </div>
-    </div>
+    <div id="runImagePreview" style="display:none"><img id="runImage" style="display:none" alt="latest captured image"></div>
 
     <div class="actions" style="margin-bottom:18px">
       <button class="btn" id="runPlanBtn" onclick="runPlan()">Plan</button>
@@ -1008,19 +1006,24 @@ bump_height = min(overshoot + 2, 10) degrees
     </div>
 
     <div id="runFlowSection" style="display:none">
-      <div style="display:flex;gap:20px;flex-wrap:wrap;max-width:960px">
-        <div style="flex:1;min-width:280px">
+      <div class="run-three-column">
+        <div>
+          <div class="form-label" style="margin-bottom:7px">Camera &amp; Plan Overlay</div>
           <canvas id="runBboxCanvas" style="width:100%;border-radius:8px;border:1px solid #d0d0d0"></canvas>
         </div>
-        <div style="flex:0 0 440px;min-width:300px">
+        <div style="min-width:0">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <button class="btn btn-sm" id="runAllBtn" onclick="runAll()">Run All</button>
             <button class="btn btn-sm" id="runStepBtn" onclick="runStep()" disabled>Run Step</button>
             <span id="runExecutionLimits" style="font-size:0.75rem;color:#666"></span>
             <button class="btn btn-sm btn-danger" id="runStopBtn" onclick="runStopVla()" style="display:none">Stop</button>
             <span class="status" id="runStepStatus"></span>
           </div>
-          <pre id="runStepLog" style="display:none;background:#1e1e1e;color:#ddd;border-radius:6px;padding:8px;font-size:0.7rem;max-height:150px;overflow:auto;white-space:pre-wrap"></pre>
           <div class="run-flow" id="runFlowChart"></div>
+        </div>
+        <div class="run-terminal-column">
+          <div class="form-label" style="margin-bottom:7px">Terminal Log</div>
+          <pre id="runStepLog" style="display:none;background:#1e1e1e;color:#ddd;border-radius:6px;padding:10px;font-size:0.7rem;height:520px;overflow:auto;white-space:pre-wrap;margin:0"></pre>
         </div>
       </div>
     </div>
@@ -3953,7 +3956,7 @@ function renderSteps(plan, containerId) {
   const hdr = `<div style="font-size:0.8rem;color:#888;margin-bottom:8px">Task: <strong style="color:#222">${esc(plan.task_id||'')}</strong> &mdash; ${plan.total_steps} steps</div>`;
   const cards = (plan.steps||[]).map((s,i) => {
     const color = COLORS[i%COLORS.length];
-    const bboxStr = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
+    const bboxStr = Array.isArray(s.target_bbox) ? `[${s.target_bbox.map(v=>Number(v).toFixed(3)).join(', ')}]` : 'null';
     return `<div class="step-card">
       <div class="step-dot" style="background:${color}"></div>
       <div class="step-idx">${s.step_index}</div>
@@ -4464,6 +4467,7 @@ let runImageUrl = null;
 let runSelectedStep = -1;
 let runStepsDone = new Set();
 let runVlaPollTimer = null;
+let runSessionState = null;
 
 function buildRunModelSelect() {
   if (!cfg) return;
@@ -4539,10 +4543,15 @@ function runBuildFlow() {
     if (i > 0) html += `<div class="run-arrow"></div><div class="run-arrow-head"></div>`;
     const color = COLORS[i % COLORS.length];
     const selected = i === runSelectedStep;
-    const done = runStepsDone.has(i);
+    const completedByServer = (runSessionState?.completed_steps || []).some(item => stepMatches(item, s));
+    const done = runStepsDone.has(i) || completedByServer;
     const cls = done ? 'done' : selected ? 'selected' : '';
     const bboxStr = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
-    const statusStr = done ? '<div class="run-block-status" style="color:#1e8e3e">Done</div>' : '';
+    const check = verificationForStep(runSessionState?.verification_history || [], s);
+    const active = runSessionState?.running && runSessionState.current_step_index === i;
+    let statusStr = done ? '<div class="run-block-status" style="color:#1e8e3e">Done</div>' : '';
+    if (active) statusStr += `<div class="run-block-status" style="color:#1a73e8">${esc(verifiedRunLabel(runSessionState))}</div>`;
+    if (check) statusStr += `<div class="run-block-status" style="margin-top:5px"><strong>Gemini: ${esc(check.status)}</strong> · cycle ${check.cycle}<br>${esc(check.reason || '')}${check.visible_evidence ? `<br><span style="color:#777">Evidence: ${esc(check.visible_evidence)}</span>` : ''}</div>`;
     html += `<div class="run-block ${cls}" onclick="runSelectStep(${i})">
       <div class="run-block-hdr">
         <div class="run-block-idx" style="background:${color}">${s.step_index}</div>
@@ -4559,6 +4568,17 @@ function runBuildFlow() {
   document.getElementById('runStepBtn').disabled = runSelectedStep < 0;
 }
 
+function stepMatches(a, b) {
+  return Number(a?.step_index) === Number(b?.step_index)
+    && String(a?.description || '') === String(b?.description || '')
+    && String(a?.model_id || '') === String(b?.model_id || '');
+}
+
+function verificationForStep(history, step) {
+  const matches = (history || []).filter(item => stepMatches(item.step, step));
+  return matches.length ? matches[matches.length - 1] : null;
+}
+
 function runSelectStep(i) {
   runSelectedStep = i;
   runBuildFlow();
@@ -4569,10 +4589,24 @@ function runSelectStep(i) {
 
 async function runStep() {
   if (runSelectedStep < 0 || !runPlanData) return;
+  return startRunSession('step');
+}
+
+async function runAll() {
+  if (!runPlanData) return;
+  runSelectedStep = 0;
+  runStepsDone = new Set();
+  runSessionState = null;
+  runBuildFlow();
+  return startRunSession('all');
+}
+
+async function startRunSession(runMode) {
   const step = runPlanData.steps[runSelectedStep];
   const btn = document.getElementById('runStepBtn');
+  const allBtn = document.getElementById('runAllBtn');
   const st = document.getElementById('runStepStatus');
-  btn.disabled = true;
+  btn.disabled = true; allBtn.disabled = true;
   const block = document.querySelectorAll('#runFlowChart .run-block')[runSelectedStep];
   if (block) block.className = 'run-block running';
   st.textContent = `Running step ${step.step_index}: ${step.method_id}...`;
@@ -4582,6 +4616,7 @@ async function runStep() {
       document.getElementById('runInstruction').value.trim(),
       runPlanData,
       runSelectedStep,
+      runMode,
     );
     const r = await fetch('/api/run/session/start', {
       method: 'POST',
@@ -4593,6 +4628,7 @@ async function runStep() {
       st.innerHTML = `<span style="color:#d93025">Step ${step.step_index} failed: ${d.error}</span>`;
       if (block) block.className = 'run-block selected';
       btn.disabled = false;
+      allBtn.disabled = false;
       return;
     }
     document.getElementById('runStopBtn').style.display = '';
@@ -4604,13 +4640,16 @@ async function runStep() {
     if (block) block.className = 'run-block selected';
   }
   btn.disabled = false;
+  allBtn.disabled = false;
 }
 
-function buildRunSessionPayload(originalInstruction, plan, startIndex) {
+function buildRunSessionPayload(originalInstruction, plan, startIndex, runMode) {
+  if (!['all', 'step'].includes(runMode)) throw new Error('Run mode must be all or step.');
   return {
     original_instruction: String(originalInstruction || '').trim(),
     plan,
-    start_index: Number(startIndex),
+    start_index: runMode === 'all' ? 0 : Number(startIndex),
+    run_mode: runMode,
   };
 }
 
@@ -4634,6 +4673,7 @@ function runStateLabel(state) {
 
 function verifiedRunLabel(state) {
   if (state.state === 'needs_human_review') return `Needs human review: ${state.error || 'Unknown reason'}`;
+  if (state.state === 'awaiting_step_selection') return 'Re-plan ready · select a step to continue';
   if (state.phase === 'executing') return `Executing cycle ${state.cycle}/${state.cycles_before_replan} · ${state.actions_per_cycle} actions`;
   if (state.phase === 'verifying') return `Verifying cycle ${state.cycle}/${state.cycles_before_replan} with Gemini`;
   if (state.phase === 'replanning') return `Re-planning remaining work ${state.replan_count}/${state.max_replans}`;
@@ -4647,6 +4687,7 @@ function runPollVlaStep(stepIndex) {
   const poll = async () => {
     try {
       const state = await fetch('/api/run/status').then(r => r.json());
+      runSessionState = state;
       document.getElementById('runStepStatus').textContent = verifiedRunLabel(state);
       const log = document.getElementById('runStepLog');
       log.textContent = (state.lines || []).slice(-100).join('\n');
@@ -4657,15 +4698,13 @@ function runPollVlaStep(stepIndex) {
         runSelectedStep = Math.min(state.current_step_index ?? 0, Math.max(0, state.plan.steps.length - 1));
         runBuildFlow();
       }
+      runBuildFlow();
       if (state.running || state.state === 'starting') return;
       clearInterval(runVlaPollTimer); runVlaPollTimer = null;
       document.getElementById('runStopBtn').style.display = 'none';
       document.getElementById('runStepBtn').disabled = false;
-      if (state.state === 'completed') {
-        runStepsDone = new Set((runPlanData.steps || []).map((_, index) => index));
-      } else {
-        runStepsDone = new Set();
-      }
+      document.getElementById('runAllBtn').disabled = false;
+      runStepsDone = new Set();
       runSelectedStep = Math.min(state.current_step_index ?? stepIndex, Math.max(0, (runPlanData.steps || []).length - 1));
       runBuildFlow();
     } catch (error) {

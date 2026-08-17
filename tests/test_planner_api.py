@@ -290,6 +290,7 @@ def test_run_session_start_snapshots_config_and_full_plan(monkeypatch, tmp_path)
         "original_instruction": "pick up the bow",
         "plan": plan,
         "start_index": 0,
+        "run_mode": "all",
     })
 
     assert response.status_code == 200
@@ -297,7 +298,26 @@ def test_run_session_start_snapshots_config_and_full_plan(monkeypatch, tmp_path)
         "pick up the bow", plan, 0,
         {"actions_per_cycle": 250, "cycles_before_replan": 4, "max_replans": 2},
     )
-    assert all(callable(adapter) for adapter in manager.started[4:])
+    assert all(callable(adapter) for adapter in manager.started[4:7])
+    assert manager.started[7] == "all"
+
+
+def test_run_session_start_rejects_unknown_mode(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    manager = FakeVerifiedManager()
+    monkeypatch.setattr(main, "verified_manager", manager)
+    plan = {"steps": [{
+        "step_index": 1, "description": "pick up the bow", "target_bbox": None,
+        "method_id": "vla_model", "model_id": "model_a",
+    }]}
+
+    response = TestClient(main.app).post("/api/run/session/start", json={
+        "original_instruction": "pick up the bow", "plan": plan,
+        "start_index": 0, "run_mode": "unknown",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_RUN_MODE"
 
 
 def test_run_session_start_rejects_invalid_plan(monkeypatch, tmp_path):
