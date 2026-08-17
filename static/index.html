@@ -3987,7 +3987,8 @@ async function calToggleRobot(){
 
 function calConnectWs(){
   const st=document.getElementById("calStatus");
-  calWs=new WebSocket(`ws://${location.host}/ws/robot`);
+  const proto=location.protocol==="https:"?"wss:":"ws:";
+  calWs=new WebSocket(`${proto}//${location.host}/ws/robot`);
   calWs.onopen=()=>{st.textContent="Connected";st.className="cal-status on"};
   calWs.onmessage=e=>{
     const m=JSON.parse(e.data);
