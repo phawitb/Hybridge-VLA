@@ -319,6 +319,20 @@ def test_run_session_start_rejects_invalid_plan(monkeypatch, tmp_path):
     assert manager.started is None
 
 
+def test_run_session_start_rejects_missing_steps(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    manager = FakeVerifiedManager()
+    monkeypatch.setattr(main, "verified_manager", manager)
+
+    response = TestClient(main.app).post("/api/run/session/start", json={
+        "original_instruction": "pick up the bow", "plan": {}, "start_index": 0,
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_PLAN"
+    assert manager.started is None
+
+
 def test_completion_verifier_treats_invalid_gemini_schema_as_uncertain(monkeypatch):
     monkeypatch.setattr(main, "_capture_verified_frame", lambda step: (b"jpg", "image/jpeg"))
     monkeypatch.setattr(main, "_gemini_image_json", lambda prompt, image, mime: {"raw": '{"done":true}'})

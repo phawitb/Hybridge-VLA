@@ -7751,6 +7751,9 @@ async def run_session_start(request: Request):
     registry = _load_model_registry(cfg)
     selected = [record for record in registry if record.get("id") in settings["selected_models"] and record.get("selectable")]
     plan = data.get("plan")
+    steps = plan.get("steps") if isinstance(plan, dict) else None
+    if not isinstance(steps, list) or not steps:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_PLAN", "error": "Plan must contain at least one step"})
     errors = validate_plan(plan, settings["use_ik"], selected)
     if errors:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_PLAN", "error": "Plan is not executable", "validation_errors": errors})
