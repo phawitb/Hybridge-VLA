@@ -1,11 +1,29 @@
 from planner_config import (
     DEFAULT_NO_IK_PROMPT,
     DEFAULT_USE_IK_PROMPT,
+    execution_loop_settings,
     planner_settings,
     render_available_models,
     render_planner_prompt,
     validate_plan,
 )
+
+
+def test_execution_loop_settings_defaults_and_valid_values():
+    assert execution_loop_settings({}) == {
+        "actions_per_cycle": 100,
+        "cycles_before_replan": 5,
+        "max_replans": 3,
+    }
+    assert execution_loop_settings({"execution_loop": {
+        "actions_per_cycle": 250,
+        "cycles_before_replan": 7,
+        "max_replans": 4,
+    }}) == {
+        "actions_per_cycle": 250,
+        "cycles_before_replan": 7,
+        "max_replans": 4,
+    }
 
 
 def model_record(model_id: str, tasks: list[str], selectable: bool = True) -> dict:

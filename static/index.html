@@ -537,6 +537,25 @@
         </div>
       </div>
 
+      <div class="config-card">
+        <h3>Execution Loop</h3>
+        <p style="font-size:0.82rem;color:#666;margin-bottom:10px">VLA runs in bounded cycles, then Gemini checks a fresh camera image. Settings are snapshotted when a Run starts.</p>
+        <div class="three-col" style="display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:12px">
+          <div class="form-group">
+            <label class="form-label">Actions per cycle</label>
+            <input id="cfgActionsPerCycle" type="number" value="100" min="1" max="1000" step="1">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Cycles before re-plan</label>
+            <input id="cfgCyclesBeforeReplan" type="number" value="5" min="1" max="20" step="1">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Max automatic re-plans</label>
+            <input id="cfgMaxReplans" type="number" value="3" min="1" max="10" step="1">
+          </div>
+        </div>
+      </div>
+
       <div class="actions" style="margin-bottom:18px">
         <button class="btn" onclick="cfgSave()">Save Config</button>
         <span class="status" id="cfgSaveStatus"></span>
@@ -996,7 +1015,7 @@ bump_height = min(overshoot + 2, 10) degrees
         <div style="flex:0 0 440px;min-width:300px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
             <button class="btn btn-sm" id="runStepBtn" onclick="runStep()" disabled>Run Step</button>
-            <label style="font-size:0.75rem;color:#666">VLA steps <input id="runMaxSteps" type="number" value="100" min="1" max="1000" style="width:70px;padding:4px"></label>
+            <span id="runExecutionLimits" style="font-size:0.75rem;color:#666"></span>
             <button class="btn btn-sm btn-danger" id="runStopBtn" onclick="runStopVla()" style="display:none">Stop</button>
             <span class="status" id="runStepStatus"></span>
           </div>
@@ -3284,6 +3303,10 @@ function cfgPopulate() {
   document.getElementById('cfgRobotId').value = cfg.robot_id || '';
   document.getElementById('cfgCamTop').value = cfg.camera_top_index ?? 0;
   document.getElementById('cfgCamWrist').value = cfg.camera_wrist_index ?? 0;
+  const execution = cfg.execution_loop || {};
+  document.getElementById('cfgActionsPerCycle').value = execution.actions_per_cycle ?? 100;
+  document.getElementById('cfgCyclesBeforeReplan').value = execution.cycles_before_replan ?? 5;
+  document.getElementById('cfgMaxReplans').value = execution.max_replans ?? 3;
   const planner = cfg.planner || {};
   cfgSelectedModelIds = [...(planner.selected_models || [])];
   document.getElementById('cfgUseIkPrompt').value = planner.prompt_templates?.use_ik || '';
@@ -3424,6 +3447,16 @@ function buildPlannerPayload({selectedIds, useIk, useIkPrompt, noIkPrompt}) {
   };
 }
 
+function buildExecutionLoopPayload({actionsPerCycle, cyclesBeforeReplan, maxReplans}) {
+  const actions = Number(actionsPerCycle);
+  const cycles = Number(cyclesBeforeReplan);
+  const replans = Number(maxReplans);
+  if (!Number.isInteger(actions) || actions < 1 || actions > 1000) throw new Error('Actions per cycle must be between 1 and 1000.');
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 20) throw new Error('Cycles before re-plan must be between 1 and 20.');
+  if (!Number.isInteger(replans) || replans < 1 || replans > 10) throw new Error('Max automatic re-plans must be between 1 and 10.');
+  return {actions_per_cycle: actions, cycles_before_replan: cycles, max_replans: replans};
+}
+
 function cfgUpdatePromptMode() {
   const useIk = document.querySelector('input[name="cfgIkMode"]:checked')?.value !== 'no';
   document.getElementById('cfgUseIkPromptWrap').style.display = useIk ? '' : 'none';
@@ -3519,6 +3552,11 @@ async function cfgSave() {
       useIkPrompt: document.getElementById('cfgUseIkPrompt').value,
       noIkPrompt: document.getElementById('cfgNoIkPrompt').value,
     });
+    const executionLoop = buildExecutionLoopPayload({
+      actionsPerCycle: document.getElementById('cfgActionsPerCycle').value,
+      cyclesBeforeReplan: document.getElementById('cfgCyclesBeforeReplan').value,
+      maxReplans: document.getElementById('cfgMaxReplans').value,
+    });
     const r = await fetch('/api/config/save', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -3529,6 +3567,7 @@ async function cfgSave() {
         camera_wrist_index: Number(document.getElementById('cfgCamWrist').value),
         default_model: document.getElementById('cfgModel').value,
         planner,
+        execution_loop: executionLoop,
       }),
     });
     const d = await r.json();
@@ -4438,6 +4477,8 @@ function buildRunModelSelect() {
     sel.appendChild(og);
   }
   document.getElementById('runInstruction').value = cfg.default_instruction || '';
+  const limits = cfg.execution_loop || {actions_per_cycle:100, cycles_before_replan:5, max_replans:3};
+  document.getElementById('runExecutionLimits').textContent = `${limits.actions_per_cycle} actions/cycle · ${limits.cycles_before_replan} cycles · ${limits.max_replans} re-plans`;
 }
 
 async function runPlan() {
@@ -4537,10 +4578,12 @@ async function runStep() {
   st.textContent = `Running step ${step.step_index}: ${step.method_id}...`;
 
   try {
-    const payload = buildRunStepPayload(step, parseInt(document.getElementById('runMaxSteps').value) || 100);
-    payload.height_cm = parseFloat(document.getElementById("cbHeight")?.value) || 0;
-    payload.safety_height_cm = parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0;
-    const r = await fetch('/api/run/step', {
+    const payload = buildRunSessionPayload(
+      document.getElementById('runInstruction').value.trim(),
+      runPlanData,
+      runSelectedStep,
+    );
+    const r = await fetch('/api/run/session/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
@@ -4552,21 +4595,23 @@ async function runStep() {
       btn.disabled = false;
       return;
     }
-    if (step.method_id === 'vla_model') {
-      document.getElementById('runStopBtn').style.display = '';
-      document.getElementById('runStepLog').style.display = '';
-      runPollVlaStep(runSelectedStep);
-      return;
-    }
-    runStepsDone.add(runSelectedStep);
-    st.textContent = `Step ${step.step_index} done`;
-    if (runSelectedStep < runPlanData.steps.length - 1) runSelectedStep++;
-    runBuildFlow();
+    document.getElementById('runStopBtn').style.display = '';
+    document.getElementById('runStepLog').style.display = '';
+    runPollVlaStep(runSelectedStep);
+    return;
   } catch(e) {
     st.innerHTML = `<span style="color:#d93025">${e.message}</span>`;
     if (block) block.className = 'run-block selected';
   }
   btn.disabled = false;
+}
+
+function buildRunSessionPayload(originalInstruction, plan, startIndex) {
+  return {
+    original_instruction: String(originalInstruction || '').trim(),
+    plan,
+    start_index: Number(startIndex),
+  };
 }
 
 function buildRunStepPayload(step, maxSteps) {
@@ -4587,27 +4632,42 @@ function runStateLabel(state) {
   return state.state || 'Idle';
 }
 
+function verifiedRunLabel(state) {
+  if (state.state === 'needs_human_review') return `Needs human review: ${state.error || 'Unknown reason'}`;
+  if (state.phase === 'executing') return `Executing cycle ${state.cycle}/${state.cycles_before_replan} · ${state.actions_per_cycle} actions`;
+  if (state.phase === 'verifying') return `Verifying cycle ${state.cycle}/${state.cycles_before_replan} with Gemini`;
+  if (state.phase === 'replanning') return `Re-planning remaining work ${state.replan_count}/${state.max_replans}`;
+  if (state.state === 'completed') return 'Completed';
+  if (state.state === 'stopped') return 'Stopped';
+  return runStateLabel(state);
+}
+
 function runPollVlaStep(stepIndex) {
   if (runVlaPollTimer) clearInterval(runVlaPollTimer);
   const poll = async () => {
     try {
       const state = await fetch('/api/run/status').then(r => r.json());
-      document.getElementById('runStepStatus').textContent = runStateLabel(state);
+      document.getElementById('runStepStatus').textContent = verifiedRunLabel(state);
       const log = document.getElementById('runStepLog');
       log.textContent = (state.lines || []).slice(-100).join('\n');
       log.scrollTop = log.scrollHeight;
+      if (state.plan?.steps && JSON.stringify(state.plan) !== JSON.stringify(runPlanData)) {
+        runPlanData = state.plan;
+        runStepsDone = new Set();
+        runSelectedStep = Math.min(state.current_step_index ?? 0, Math.max(0, state.plan.steps.length - 1));
+        runBuildFlow();
+      }
       if (state.running || state.state === 'starting') return;
       clearInterval(runVlaPollTimer); runVlaPollTimer = null;
       document.getElementById('runStopBtn').style.display = 'none';
       document.getElementById('runStepBtn').disabled = false;
       if (state.state === 'completed') {
-        runStepsDone.add(stepIndex);
-        if (runSelectedStep < runPlanData.steps.length - 1) runSelectedStep++;
-        runBuildFlow();
+        runStepsDone = new Set((runPlanData.steps || []).map((_, index) => index));
       } else {
-        runSelectedStep = stepIndex;
-        runBuildFlow();
+        runStepsDone = new Set();
       }
+      runSelectedStep = Math.min(state.current_step_index ?? stepIndex, Math.max(0, (runPlanData.steps || []).length - 1));
+      runBuildFlow();
     } catch (error) {
       document.getElementById('runStepStatus').textContent = error.message;
     }
