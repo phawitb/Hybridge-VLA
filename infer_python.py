@@ -16,9 +16,12 @@ Usage:
 
 import argparse
 import json
+import os
 import signal
+import select
 import sys
 import time
+from pathlib import Path
 
 
 def prepare_runtime():
@@ -27,6 +30,57 @@ def prepare_runtime():
     import torch
 
     return cv2, torch
+
+
+def cycle_boundary_reached(step: int, cycle_start: int, cycle_steps: int) -> bool:
+    return cycle_steps > 0 and step - cycle_start >= cycle_steps
+
+
+def normalize_cycle_command(value: str) -> str:
+    command = str(value or "").strip().casefold()
+    return command if command in {"continue", "stop"} else "stop"
+
+
+def save_verification_image(observation: dict, camera_names: list[str], target: Path) -> Path:
+    import cv2
+    import numpy as np
+
+    frame = None
+    for name in camera_names:
+        for key in (name, f"observation.images.{name}"):
+            if key in observation:
+                frame = observation[key]
+                break
+        if frame is not None:
+            break
+    if frame is None:
+        raise RuntimeError(f"No camera frame found for: {', '.join(camera_names)}")
+    if hasattr(frame, "detach"):
+        frame = frame.detach().cpu().numpy()
+    frame = np.asarray(frame)
+    if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
+        frame = np.moveaxis(frame, 0, -1)
+    if frame.dtype != np.uint8:
+        scale = 255.0 if frame.size and float(frame.max()) <= 1.0 else 1.0
+        frame = np.clip(frame * scale, 0, 255).astype(np.uint8)
+    if frame.ndim == 3 and frame.shape[-1] == 3:
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.stem + ".tmp" + target.suffix)
+    if not cv2.imwrite(str(temporary), frame):
+        raise RuntimeError("Could not write verification image")
+    temporary.replace(target)
+    return target
+
+
+def wait_for_cycle_command(timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    while _running and time.monotonic() < deadline:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if ready:
+            line = sys.stdin.readline()
+            return normalize_cycle_command(line)
+    return "stop"
 
 
 def parse_args():
@@ -43,7 +97,9 @@ def parse_args():
     p.add_argument("--n-action-steps", type=int, default=0, help="Override n_action_steps (0=use model default)")
     p.add_argument("--device", default="", help="Device: cuda, mps, cpu (auto-detect if empty)")
     p.add_argument("--cache-language", action="store_true", help="Cache language tokens & embeddings (same task text every step)")
-    p.add_argument("--max-steps", type=int, default=0, help="Stop after N control steps (0=run until interrupted)")
+    p.add_argument("--max-steps", type=int, default=0, help="Actions per verification cycle (0=run until interrupted)")
+    p.add_argument("--verification-image", default="", help="JPEG snapshot written at each action-cycle boundary")
+    p.add_argument("--verification-timeout", type=float, default=120.0, help="Seconds to wait for continue/stop before disconnecting")
     return p.parse_args()
 
 
@@ -276,11 +332,12 @@ def main():
 
     period = 1.0 / args.fps
     step = 0
+    cycle_start = 0
     print(f"[infer_python] Starting inference loop at {args.fps} FPS", flush=True)
     print("[infer_python] Press Ctrl+C to stop", flush=True)
 
     try:
-        while should_continue(_running, step, args.max_steps):
+        while _running:
             t0 = time.time()
 
             # Get observation from robot
@@ -348,6 +405,20 @@ def main():
             sleep_time = period - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+            if cycle_boundary_reached(step, cycle_start, args.max_steps):
+                verification_obs = robot.get_observation()
+                target = Path(args.verification_image) if args.verification_image else Path(f"/tmp/hybridge-vla-{os.getpid()}.jpg")
+                save_verification_image(verification_obs, list(cameras_dict), target)
+                print(
+                    "CYCLE_READY " + _json.dumps({"step": step, "image": str(target)}),
+                    flush=True,
+                )
+                command = wait_for_cycle_command(args.verification_timeout)
+                print(f"[infer_python] Verification command: {command}", flush=True)
+                if command != "continue":
+                    break
+                cycle_start = step
 
     except Exception as e:
         print(f"[infer_python] Error: {e}")

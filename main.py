@@ -102,7 +102,7 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
 vla_manager = VlaProcessManager(max_log_lines=500)
-verified_manager = VerifiedExecutionManager()
+verified_manager = VerifiedExecutionManager(on_terminal=vla_manager.stop)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
@@ -7580,6 +7580,14 @@ def _capture_verified_frame(step: dict) -> tuple[bytes, str]:
     """Capture a fresh frame after VLA releases camera ownership."""
     import cv2
 
+    process = vla_manager.status()
+    exported = process.get("verification_image")
+    if process.get("state") == "waiting_for_verification" and exported:
+        path = Path(exported)
+        if path.is_file():
+            return path.read_bytes(), "image/jpeg"
+        raise RuntimeError("Inference verification snapshot is missing")
+
     cfg = load_config()
     record = get_model_record(_load_model_registry(cfg), str(step.get("model_id", "")))
     required = [name.rsplit(".", 1)[-1] for name in (record or {}).get("camera_features", [])]
@@ -7659,30 +7667,49 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
         return {"ok": False, "error": "Model checkpoint is not available locally"}
     if robot_state.get("connected"):
         disconnect_robot()
-    resolved = {**record, "local_path": str(model_path)}
-    try:
-        command = build_infer_command(
-            python=sys.executable,
-            script=ROOT / "infer_python.py",
-            model=resolved,
-            task=str(step.get("description", "")),
-            robot=cfg.get("robot", {}),
-            cameras=cfg.get("robot", {}).get("cameras", {}),
-            max_steps=actions_per_cycle,
-        )
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    started = vla_manager.start(command, str(step.get("model_id", "")), str(step.get("description", "")))
-    if not started.get("ok"):
-        return started
+    active = vla_manager.status()
+    compatible = (
+        active.get("state") == "waiting_for_verification"
+        and active.get("model_id") == str(step.get("model_id", ""))
+        and active.get("task") == str(step.get("description", ""))
+    )
+    previous_ready_count = int(active.get("cycle_ready_count", 0))
+    if compatible:
+        resumed = vla_manager.continue_cycle()
+        if not resumed.get("ok"):
+            return resumed
+    else:
+        if active.get("running"):
+            vla_manager.stop()
+        verification_image = ROOT / "data" / "run_verification" / "latest.jpg"
+        verification_image.parent.mkdir(parents=True, exist_ok=True)
+        resolved = {**record, "local_path": str(model_path)}
+        try:
+            command = build_infer_command(
+                python=sys.executable,
+                script=ROOT / "infer_python.py",
+                model=resolved,
+                task=str(step.get("description", "")),
+                robot=cfg.get("robot", {}),
+                cameras=cfg.get("robot", {}).get("cameras", {}),
+                max_steps=actions_per_cycle,
+                verification_image=verification_image,
+                verification_timeout=120.0,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        started = vla_manager.start(command, str(step.get("model_id", "")), str(step.get("description", "")))
+        if not started.get("ok"):
+            return started
+        previous_ready_count = 0
     while True:
         if stop_event.wait(0.1):
             vla_manager.stop()
             return {"ok": False, "error": "Stopped by user"}
         status = vla_manager.status()
+        if status.get("state") == "waiting_for_verification" and int(status.get("cycle_ready_count", 0)) > previous_ready_count:
+            return {"ok": True, "pid": status.get("pid"), "verification_image": status.get("verification_image")}
         if not status.get("running"):
-            if status.get("state") == "completed":
-                return {"ok": True}
             return {"ok": False, "error": f"VLA process {status.get('state')} (exit {status.get('exit_code')})"}
 
 
@@ -7698,12 +7725,15 @@ Use success only with clear visible evidence. For pick-and-place, the object mus
         parsed = parse_json_response(raw)
         if not isinstance(parsed, dict) or parsed.get("status") not in {"success", "continue", "uncertain"}:
             return {"ok": True, "status": "uncertain", "reason": "Invalid verifier response", "visible_evidence": raw[:500]}
-        return {
+        result = {
             "ok": True,
             "status": parsed["status"],
             "reason": str(parsed.get("reason", "")),
             "visible_evidence": str(parsed.get("visible_evidence", "")),
         }
+        if result["status"] == "success":
+            vla_manager.stop()
+        return result
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

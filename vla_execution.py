@@ -18,6 +18,8 @@ def build_infer_command(
     robot: dict,
     cameras: dict,
     max_steps: int,
+    verification_image: Path | None = None,
+    verification_timeout: float = 120.0,
 ) -> list[str]:
     required_names = [
         feature.rsplit(".", 1)[-1]
@@ -44,6 +46,11 @@ def build_infer_command(
         f"--height={int(first_camera.get('h', first_camera.get('height', 240)))}",
         f"--max-steps={int(max_steps)}",
     ]
+    if verification_image is not None:
+        command.extend([
+            f"--verification-image={verification_image}",
+            f"--verification-timeout={float(verification_timeout)}",
+        ])
     if model.get("policy_type") == "smolvla":
         command.append("--cache-language")
     return command
@@ -59,6 +66,8 @@ class VlaProcessManager:
         self._task: str | None = None
         self._exit_code: int | None = None
         self._lines: list[str] = []
+        self._cycle_ready_count = 0
+        self._verification_image: str | None = None
 
     def start(self, command: list[str], model_id: str, task: str) -> dict:
         with self._lock:
@@ -69,10 +78,12 @@ class VlaProcessManager:
             self._task = task
             self._exit_code = None
             self._lines = []
+            self._cycle_ready_count = 0
+            self._verification_image = None
         try:
             process = subprocess.Popen(
                 command,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -98,6 +109,14 @@ class VlaProcessManager:
                     continue
                 with self._lock:
                     self._lines.append(line)
+                    if line.startswith("CYCLE_READY "):
+                        try:
+                            event = json.loads(line.removeprefix("CYCLE_READY "))
+                            self._cycle_ready_count += 1
+                            self._verification_image = str(event.get("image", ""))
+                            self._state = "waiting_for_verification"
+                        except json.JSONDecodeError:
+                            pass
                     if len(self._lines) > self.max_log_lines:
                         self._lines = self._lines[-self.max_log_lines:]
         exit_code = process.wait()
@@ -116,8 +135,29 @@ class VlaProcessManager:
                 "model_id": self._model_id,
                 "task": self._task,
                 "exit_code": self._exit_code,
+                "pid": self._process.pid if self._process is not None else None,
+                "cycle_ready_count": self._cycle_ready_count,
+                "verification_image": self._verification_image,
                 "lines": list(self._lines),
             }
+
+    def continue_cycle(self) -> dict:
+        with self._lock:
+            process = self._process
+            if self._state != "waiting_for_verification" or process is None or process.poll() is not None:
+                return {"ok": False, "code": "VLA_NOT_WAITING", "error": "VLA process is not waiting for verification"}
+            stream = process.stdin
+            self._state = "running"
+        if stream is None:
+            return {"ok": False, "code": "VLA_CONTROL_UNAVAILABLE", "error": "VLA control channel is unavailable"}
+        try:
+            stream.write(b"continue\n")
+            stream.flush()
+        except (BrokenPipeError, OSError) as exc:
+            with self._lock:
+                self._state = "failed"
+            return {"ok": False, "code": "VLA_CONTROL_FAILED", "error": str(exc)}
+        return {"ok": True, "pid": process.pid}
 
     def stop(self, timeout: float = 5.0) -> dict:
         with self._lock:
