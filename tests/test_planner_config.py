@@ -55,19 +55,34 @@ def test_planner_settings_migrates_legacy_config_to_use_ik():
     assert settings["prompt_templates"]["no_ik"] == DEFAULT_NO_IK_PROMPT
 
 
-def test_planner_settings_preserves_both_custom_templates():
+def test_planner_settings_replaces_saved_template_without_steps_schema():
+    settings = planner_settings({
+        "planner": {
+            "use_ik": False,
+            "prompt_templates": {
+                "no_ik": "Instruction {instruction}; models {available_models}; each step has fields",
+            },
+        }
+    })
+
+    assert settings["prompt_templates"]["no_ik"] == DEFAULT_NO_IK_PROMPT
+
+
+def test_planner_settings_preserves_both_schema_complete_custom_templates():
+    use_ik = 'IK {instruction} {available_models} {"steps": []}'
+    no_ik = 'NO IK {instruction} {available_models} {"steps": []}'
     settings = planner_settings({
         "planner": {
             "use_ik": False,
             "selected_models": ["model_a"],
-            "prompt_templates": {"use_ik": "IK {instruction}", "no_ik": "NO IK {instruction}"},
+            "prompt_templates": {"use_ik": use_ik, "no_ik": no_ik},
         }
     })
 
     assert settings == {
         "use_ik": False,
         "selected_models": ["model_a"],
-        "prompt_templates": {"use_ik": "IK {instruction}", "no_ik": "NO IK {instruction}"},
+        "prompt_templates": {"use_ik": use_ik, "no_ik": no_ik},
     }
 
 
@@ -92,8 +107,8 @@ def test_render_planner_prompt_selects_no_ik_template():
             "use_ik": False,
             "selected_models": ["model_a"],
             "prompt_templates": {
-                "use_ik": "USE {instruction} {available_models}",
-                "no_ik": "NO {instruction} {available_models}",
+                "use_ik": 'USE {instruction} {available_models} {"steps": []}',
+                "no_ik": 'NO {instruction} {available_models} {"steps": []}',
             },
         }
     }

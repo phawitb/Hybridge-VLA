@@ -65,10 +65,16 @@ def planner_settings(config: dict) -> dict:
         "use_ik": bool(planner.get("use_ik", True)),
         "selected_models": list(dict.fromkeys(str(item) for item in selected if str(item).strip())),
         "prompt_templates": {
-            "use_ik": str(prompts.get("use_ik") or DEFAULT_USE_IK_PROMPT),
-            "no_ik": str(prompts.get("no_ik") or DEFAULT_NO_IK_PROMPT),
+            "use_ik": _prompt_with_schema(prompts.get("use_ik"), DEFAULT_USE_IK_PROMPT),
+            "no_ik": _prompt_with_schema(prompts.get("no_ik"), DEFAULT_NO_IK_PROMPT),
         },
     }
+
+
+def _prompt_with_schema(value: object, fallback: str) -> str:
+    prompt = str(value or "")
+    required = ("{instruction}", "{available_models}", '"steps"')
+    return prompt if all(marker in prompt for marker in required) else fallback
 
 
 def _selected_records(records: list[dict], selected_ids: list[str]) -> list[dict]:
