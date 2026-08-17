@@ -181,6 +181,24 @@ def test_infer_accepts_selected_model_exact_training_task(monkeypatch, tmp_path)
     assert response.json()["methods"] == ["vla_model:model_a"]
 
 
+def test_infer_reports_invalid_plan_format_after_all_attempts(monkeypatch, tmp_path):
+    raw_response = '{"step":{"description":"pick up the bow"}}'
+    setup_infer(monkeypatch, tmp_path, raw_response)
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/infer",
+        data={"model": "gemini-test", "instruction": "pick up the bow"},
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+    )
+
+    body = response.json()
+    assert body["error_code"] == "INVALID_PLAN_FORMAT"
+    assert "steps" in body["error"]
+    assert body["raw_response"] == raw_response
+    assert body["plan"] is None
+
+
 class FakeVlaManager:
     def __init__(self):
         self.started = None

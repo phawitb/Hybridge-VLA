@@ -86,4 +86,11 @@ assert.equal(context.runStateLabel({state: 'running', model_id: 'model_a'}), 'Ru
 assert.equal(context.runStateLabel({state: 'failed', exit_code: 1}), 'Failed (exit 1)');
 assert.equal(context.runStateLabel({state: 'completed'}), 'Completed');
 
+const runPlanSource = extractFunction('runPlan');
+assert.ok(
+  runPlanSource.indexOf('if (d.error)') < runPlanSource.indexOf('if (!d.plan || !d.plan.steps)'),
+  'runPlan must surface the backend error before its defensive missing-plan fallback',
+);
+assert.match(runPlanSource, /throw new Error\(d\.error\)/);
+
 console.log('multi-model config UI behavior passes');
