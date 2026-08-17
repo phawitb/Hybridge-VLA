@@ -4,26 +4,26 @@
       {
         "name": "pink bow",
         "bbox": [
-          103,
+          114,
           96,
-          144,
-          134
+          155,
+          125
         ],
         "color_hex": "#FF6B6B"
       },
       {
         "name": "green bowl",
         "bbox": [
-          200,
-          10,
-          268,
-          75
+          215,
+          11,
+          286,
+          77
         ],
         "color_hex": "#4ECDC4"
       }
     ],
     "line_width": 2,
-    "show_label": false,
+    "show_label": true,
     "frame_width": 320,
     "frame_height": 240,
     "cam_index": 1

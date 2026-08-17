@@ -1286,10 +1286,100 @@ async def list_datasets():
                         "fps": info.get("fps", 0),
                         "robot_type": info.get("robot_type", ""),
                         "tasks": task_list,
+                        "cameras": sorted(
+                            key for key, feature in info.get("features", {}).items()
+                            if key.startswith("observation.images.")
+                            and isinstance(feature, dict)
+                            and feature.get("dtype") == "video"
+                        ),
                     })
                 except Exception:
                     pass
     return {"ok": True, "datasets": datasets}
+
+
+@app.post("/api/datasets/{name}/remove-camera")
+async def remove_dataset_camera(name: str, request: Request):
+    """Create a train-ready dataset copy with one video camera removed."""
+    import shutil
+    import pyarrow.parquet as pq
+
+    body = await request.json()
+    camera = str(body.get("camera", "")).strip()
+    output_name = str(body.get("output_name", "")).strip().replace(" ", "-").replace("/", "-")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return {"ok": False, "error": "Invalid source dataset name"}
+    if not output_name or not re.fullmatch(r"[A-Za-z0-9_-]+", output_name):
+        return {"ok": False, "error": "Invalid output name. Use letters, numbers, dash, or underscore."}
+    if not re.fullmatch(r"observation\.images\.[A-Za-z0-9_-]+", camera):
+        return {"ok": False, "error": "Invalid camera key"}
+
+    source_dir = ROOT / "data" / name
+    output_dir = ROOT / "data" / output_name
+    info_path = source_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    if output_dir.exists():
+        return {"ok": False, "error": f"Dataset '{output_name}' already exists"}
+
+    info = json.loads(info_path.read_text())
+    features = info.get("features", {})
+    cameras = sorted(k for k, v in features.items() if k.startswith("observation.images.") and isinstance(v, dict) and v.get("dtype") == "video")
+    if camera not in cameras:
+        return {"ok": False, "error": f"Camera '{camera}' is not present in this dataset"}
+    if len(cameras) < 2:
+        return {"ok": False, "error": "Cannot remove the dataset's only camera"}
+
+    try:
+        shutil.copytree(source_dir, output_dir)
+
+        # The feature schema is what LeRobot uses to construct train/eval inputs.
+        new_info = json.loads((output_dir / "meta" / "info.json").read_text())
+        new_info.get("features", {}).pop(camera, None)
+        (output_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+
+        # Remove aggregate image statistics for the deleted input feature.
+        stats_path = output_dir / "meta" / "stats.json"
+        if stats_path.exists():
+            stats = json.loads(stats_path.read_text())
+            stats.pop(camera, None)
+            stats_path.write_text(json.dumps(stats, indent=4))
+
+        # Episode parquet contains video lookup columns and per-episode image stats.
+        video_prefix = f"videos/{camera}/"
+        stats_prefix = f"stats/{camera}/"
+        for parquet_path in (output_dir / "meta" / "episodes").rglob("*.parquet"):
+            table = pq.read_table(parquet_path)
+            keep_columns = [
+                col for col in table.column_names
+                if not col.startswith(video_prefix) and not col.startswith(stats_prefix)
+            ]
+            pq.write_table(table.select(keep_columns), parquet_path)
+
+        shutil.rmtree(output_dir / "videos" / camera, ignore_errors=True)
+
+        # This provenance file is informational and does not become a model feature.
+        (output_dir / "meta" / "camera_removal.json").write_text(json.dumps({
+            "source_dataset": name,
+            "removed_camera": camera,
+            "remaining_cameras": [cam for cam in cameras if cam != camera],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=4))
+
+        return {
+            "ok": True,
+            "name": output_name,
+            "removed_camera": camera,
+            "remaining_cameras": [cam for cam in cameras if cam != camera],
+            "episodes": new_info.get("total_episodes", 0),
+            "frames": new_info.get("total_frames", 0),
+        }
+    except Exception as e:
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/datasets/{name}/episodes")
@@ -4123,6 +4213,310 @@ async def remove_idle(name: str, request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/datasets/{name}/extend-last-frame")
+async def extend_last_frame(name: str, request: Request):
+    """Extend last frame of each episode by duplicating it for N seconds.
+
+    Copies to a new dataset (output_name) so the original is preserved.
+    Trims last 1s of each episode (stale frames), then duplicates the
+    last valid frame to create idle frames. Rebuilds video files using
+    ffmpeg so the video content matches the parquet data.
+    """
+    import pyarrow.parquet as pq
+    import pyarrow as pa
+    import shutil
+    import subprocess
+    import tempfile
+
+    body = await request.json()
+    seconds = body.get("seconds", 3.0)
+    output_name = body.get("output_name", name + "_extendlf")
+
+    dataset_dir = ROOT / "data" / name
+    info_path = dataset_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+
+    output_dir = ROOT / "data" / output_name
+    if output_dir.exists():
+        return {"ok": False, "error": f"Dataset '{output_name}' already exists"}
+
+    # Copy entire dataset to output
+    shutil.copytree(str(dataset_dir), str(output_dir))
+
+    try:
+        info = json.loads(info_path.read_text())
+        fps = info.get("fps", 30)
+        extra_frames = int(seconds * fps)
+        trim_seconds = 0.3
+        trim_frames = max(1, int(trim_seconds * fps))
+        if extra_frames <= 0:
+            return {"ok": False, "error": "Duration too short"}
+
+        # --- 1. Read episode metadata from ORIGINAL dataset ---
+        orig_ep_dir = dataset_dir / "meta" / "episodes"
+        orig_ep_rows = []
+        if orig_ep_dir.exists():
+            for pf in sorted(orig_ep_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    orig_ep_rows.append({k: v[i] for k, v in d.items()})
+        orig_ep_rows.sort(key=lambda r: r["episode_index"])
+
+        # --- 2. Read all data rows from ORIGINAL dataset ---
+        orig_data_dir = dataset_dir / "data"
+        all_rows = []
+        if orig_data_dir.exists():
+            for pf in sorted(orig_data_dir.rglob("*.parquet")):
+                try:
+                    tbl = pq.read_table(str(pf))
+                except Exception:
+                    continue
+                d = tbl.to_pydict()
+                for i in range(len(d.get("episode_index", []))):
+                    row = {}
+                    for k, v in d.items():
+                        val = v[i]
+                        if hasattr(val, "tolist"):
+                            val = val.tolist()
+                        row[k] = val
+                    all_rows.append(row)
+
+        if not all_rows:
+            shutil.rmtree(str(output_dir), ignore_errors=True)
+            return {"ok": False, "error": "No data found"}
+
+        # --- 3. Group by episode, trim tail, and extend parquet data ---
+        episodes = {}
+        for row in all_rows:
+            ep = row["episode_index"]
+            episodes.setdefault(ep, []).append(row)
+
+        total_added = 0
+        total_trimmed = 0
+        extended_rows = []
+
+        for ep_idx in sorted(episodes.keys()):
+            ep_rows = sorted(episodes[ep_idx], key=lambda r: r["frame_index"])
+
+            # Trim last 1s
+            if len(ep_rows) > trim_frames + 1:
+                orig_len = len(ep_rows)
+                ep_rows = ep_rows[:-trim_frames]
+                total_trimmed += orig_len - len(ep_rows)
+
+            last_row = ep_rows[-1]
+            extended_rows.extend(ep_rows)
+
+            # Duplicate last frame N times
+            for i in range(extra_frames):
+                new_row = {}
+                for k, v in last_row.items():
+                    if isinstance(v, list):
+                        new_row[k] = v[:]
+                    else:
+                        new_row[k] = v
+                extended_rows.append(new_row)
+                total_added += 1
+
+        # --- 4. Re-index ---
+        ep_groups = {}
+        for row in extended_rows:
+            ep_groups.setdefault(row["episode_index"], []).append(row)
+
+        final_rows = []
+        global_idx = 0
+        for ep_idx in sorted(ep_groups.keys()):
+            ep_rows = ep_groups[ep_idx]
+            for fi, row in enumerate(ep_rows):
+                row["frame_index"] = fi
+                row["index"] = global_idx
+                row["timestamp"] = fi / fps
+                global_idx += 1
+            final_rows.extend(ep_rows)
+
+        # --- 5. Rebuild video files with ffmpeg ---
+        # For each camera, build new video: for each episode, take original
+        # segment (trimmed), extract last frame, loop it for extend duration
+        cameras = ["observation.images.top", "observation.images.wrist"]
+        for cam in cameras:
+            # Find original video files per (chunk_index, file_index)
+            orig_videos = {}
+            for epr in orig_ep_rows:
+                ck = epr.get(f"videos/{cam}/chunk_index", 0)
+                fi = epr.get(f"videos/{cam}/file_index", 0)
+                orig_videos[(ck, fi)] = dataset_dir / "videos" / cam / f"chunk-{ck:03d}" / f"file-{fi:03d}.mp4"
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                segment_files = []
+                for ep_idx in sorted(episodes.keys()):
+                    epr = next((r for r in orig_ep_rows if r["episode_index"] == ep_idx), None)
+                    if not epr:
+                        continue
+                    ck = epr.get(f"videos/{cam}/chunk_index", 0)
+                    fi = epr.get(f"videos/{cam}/file_index", 0)
+                    src_video = orig_videos.get((ck, fi))
+                    if not src_video or not src_video.exists():
+                        continue
+
+                    from_ts = epr.get(f"videos/{cam}/from_timestamp", 0.0)
+                    to_ts = epr.get(f"videos/{cam}/to_timestamp", 0.0)
+                    # Trimmed end timestamp
+                    trimmed_to = to_ts - trim_seconds
+                    if trimmed_to <= from_ts:
+                        trimmed_to = to_ts - 1.0 / fps  # at least one frame
+
+                    seg_path = os.path.join(tmpdir, f"seg_{ep_idx:04d}.mp4")
+                    last_frame_path = os.path.join(tmpdir, f"last_{ep_idx:04d}.png")
+                    ext_path = os.path.join(tmpdir, f"ext_{ep_idx:04d}.mp4")
+
+                    # Extract trimmed segment (use -t duration, not -to absolute)
+                    seg_duration = trimmed_to - from_ts
+                    subprocess.run([
+                        "ffmpeg", "-y", "-loglevel", "error",
+                        "-ss", str(from_ts), "-i", str(src_video),
+                        "-t", str(seg_duration),
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                        "-pix_fmt", "yuv420p", "-r", str(fps),
+                        seg_path
+                    ], check=True)
+
+                    # Extract last frame as image (seek to trimmed end - 1 frame)
+                    last_ts = max(from_ts, trimmed_to - 1.0 / fps)
+                    subprocess.run([
+                        "ffmpeg", "-y", "-loglevel", "error",
+                        "-ss", str(last_ts), "-i", str(src_video),
+                        "-vframes", "1", "-q:v", "1",
+                        last_frame_path
+                    ], check=True)
+
+                    # Create looped last frame video for extend duration
+                    subprocess.run([
+                        "ffmpeg", "-y", "-loglevel", "error",
+                        "-loop", "1", "-i", last_frame_path,
+                        "-t", str(seconds),
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                        "-pix_fmt", "yuv420p", "-r", str(fps),
+                        ext_path
+                    ], check=True)
+
+                    # Concatenate: segment + extended
+                    concat_path = os.path.join(tmpdir, f"concat_{ep_idx:04d}.mp4")
+                    concat_list = os.path.join(tmpdir, f"list_{ep_idx:04d}.txt")
+                    with open(concat_list, "w") as f:
+                        f.write(f"file '{seg_path}'\nfile '{ext_path}'\n")
+                    subprocess.run([
+                        "ffmpeg", "-y", "-loglevel", "error",
+                        "-f", "concat", "-safe", "0", "-i", concat_list,
+                        "-c", "copy", concat_path
+                    ], check=True)
+                    segment_files.append(concat_path)
+
+                if segment_files:
+                    # Concatenate all episodes into one video
+                    final_list = os.path.join(tmpdir, "final_list.txt")
+                    with open(final_list, "w") as f:
+                        for sf in segment_files:
+                            f.write(f"file '{sf}'\n")
+
+                    # Output to new dataset video dir
+                    out_video_dir = output_dir / "videos" / cam / "chunk-000"
+                    out_video_dir.mkdir(parents=True, exist_ok=True)
+                    out_video = out_video_dir / "file-000.mp4"
+                    # Re-encode to AV1 to match original format
+                    subprocess.run([
+                        "ffmpeg", "-y", "-loglevel", "error",
+                        "-f", "concat", "-safe", "0", "-i", final_list,
+                        "-c:v", "libsvtav1", "-crf", "30",
+                        "-pix_fmt", "yuv420p", "-r", str(fps),
+                        "-g", str(fps * 10),
+                        str(out_video)
+                    ], check=True)
+
+                    # Remove other video files in this camera dir if any
+                    for vf in out_video_dir.glob("*.mp4"):
+                        if vf.name != "file-000.mp4":
+                            vf.unlink()
+
+        # --- 6. Update episode metadata with new timestamps ---
+        new_ep_rows = []
+        running_ts = 0.0
+        for ep_idx in sorted(ep_groups.keys()):
+            ep_len = len(ep_groups[ep_idx])
+            ep_duration = ep_len / fps
+            epr = next((r for r in orig_ep_rows if r["episode_index"] == ep_idx), None)
+            if epr:
+                new_epr = dict(epr)
+            else:
+                new_epr = {"episode_index": ep_idx}
+
+            new_epr["dataset_from_index"] = ep_groups[ep_idx][0]["index"]
+            new_epr["dataset_to_index"] = ep_groups[ep_idx][-1]["index"] + 1
+            new_epr["length"] = ep_len
+
+            for cam in cameras:
+                ft_key = f"videos/{cam}/from_timestamp"
+                tt_key = f"videos/{cam}/to_timestamp"
+                ck_key = f"videos/{cam}/chunk_index"
+                fi_key = f"videos/{cam}/file_index"
+                new_epr[ft_key] = running_ts
+                new_epr[tt_key] = running_ts + ep_duration
+                new_epr[ck_key] = 0
+                new_epr[fi_key] = 0
+
+            running_ts += ep_duration
+            new_ep_rows.append(new_epr)
+
+        # --- 7. Write parquet data ---
+        out_data_dir = output_dir / "data"
+        if out_data_dir.exists():
+            shutil.rmtree(out_data_dir)
+        data_out = out_data_dir / "chunk-000"
+        data_out.mkdir(parents=True, exist_ok=True)
+        if final_rows:
+            cols = {k: [r[k] for r in final_rows] for k in final_rows[0]}
+            pq.write_table(pa.table(cols), str(data_out / "file-000.parquet"))
+
+        # Write episode metadata
+        out_ep_dir = output_dir / "meta" / "episodes"
+        if out_ep_dir.exists():
+            shutil.rmtree(out_ep_dir)
+        ep_out = out_ep_dir / "chunk-000"
+        ep_out.mkdir(parents=True, exist_ok=True)
+        if new_ep_rows:
+            cols = {k: [r[k] for r in new_ep_rows] for k in new_ep_rows[0]}
+            pq.write_table(pa.table(cols), str(ep_out / "file-000.parquet"))
+
+        # --- 8. Update info.json ---
+        out_info_path = output_dir / "meta" / "info.json"
+        info["total_frames"] = len(final_rows)
+        out_info_path.write_text(json.dumps(info, indent=4))
+
+        # --- 9. Regenerate stats.json ---
+        _compute_stats_json(final_rows, output_dir)
+
+        num_eps = len(ep_groups)
+        print(f"[Dataset] Extended last frame: trimmed {total_trimmed} tail frames, added {total_added} frames ({seconds}s each) to {num_eps} episodes -> {output_name}")
+        return {
+            "ok": True,
+            "added_frames": total_added,
+            "trimmed_frames": total_trimmed,
+            "episodes": num_eps,
+            "total_frames": len(final_rows),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        # Clean up failed output
+        if output_dir.exists() and output_name != name:
+            shutil.rmtree(str(output_dir), ignore_errors=True)
+        return {"ok": False, "error": str(e)}
+
+
 def _detect_segments(frames_action, fps):
     """Detect pick/place segments from gripper data (port of JS vizDetectSegments).
 
@@ -6652,24 +7046,10 @@ async def eval_start(request: Request):
     robot_cfg = cfg.get("robot", {})
     all_cams = robot_cfg.get("cameras", {})
 
-    # Build cameras config string
-    # Always include all cameras so the model gets all expected inputs.
-    # When 1 camera is selected, disabled cameras get a dummy index and
-    # fakecam_inject.py sends black frames for them.
-    black_cam_indices = []
+    # Match rollout inputs to the model's training schema. A one-camera model
+    # must receive only that camera key, not a second synthetic black camera.
     selected_cams = _eval_filter_cameras(all_cams, cam_select)
-    if cam_select.startswith('1-') and len(all_cams) > 1:
-        # Use a high dummy index (99) for disabled cameras — fakecam will intercept
-        DUMMY_INDEX = 99
-        cams = {}
-        for cam_name, cam_c in all_cams.items():
-            if cam_name in selected_cams:
-                cams[cam_name] = cam_c
-            else:
-                cams[cam_name] = {**cam_c, 'index': DUMMY_INDEX}
-                black_cam_indices.append(DUMMY_INDEX)
-    else:
-        cams = all_cams
+    cams = selected_cams
 
     cam_parts = []
     fourcc_part = f", fourcc: {fourcc}" if fourcc else ""
@@ -6717,13 +7097,9 @@ async def eval_start(request: Request):
             existing = {"bbox_overlay": bbox_data}
         params_path.write_text(json.dumps(existing, indent=2))
 
-    if use_fakecam or use_bbox or black_cam_indices:
+    if use_fakecam or use_bbox:
         inject_args = ["python", "fakecam_inject.py"]
-        if use_fakecam or use_bbox:
-            inject_args += ["--params-file", "fakecam_params.json"]
-        if black_cam_indices:
-            inject_args += ["--black-cameras", ",".join(str(i) for i in black_cam_indices),
-                            "--black-cam-width", str(cam_width), "--black-cam-height", str(cam_height)]
+        inject_args += ["--params-file", "fakecam_params.json"]
         cmd = inject_args + ["--"] + cmd
 
     try:
@@ -7139,4 +7515,4 @@ async def run_step(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8006, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8007, reload=True)

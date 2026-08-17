@@ -1259,6 +1259,8 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm" id="vizEditTaskBtn" onclick="vizEditTask()" style="display:none;background:#5c6bc0;color:#fff">Edit Task</button>
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <button class="btn btn-sm" id="vizRemoveIdleBtn" onclick="vizRemoveIdle()" style="display:none;background:#795548;color:#fff">Remove Idle</button>
+      <button class="btn btn-sm" id="vizExtendLastBtn" onclick="vizExtendLastFrame()" style="display:none;background:#546e7a;color:#fff">Extend Last Frame</button>
+      <button class="btn btn-sm" id="vizRemoveCameraBtn" onclick="vizShowRemoveCamera()" style="display:none;background:#c62828;color:#fff">Remove Camera</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
       <button class="btn btn-sm" id="vizTrainBtn" onclick="vizShowTrainGuide()" style="display:none;background:#34a853;color:#fff">Training</button>
@@ -3050,6 +3052,23 @@ conda run -n lerobot uvicorn train_api:app \
         </div>
       </div>
 
+      <!-- Findings -->
+      <div class="config-card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0;cursor:pointer" onclick="evalFindingsToggle()">Issues Found During Evaluation <span id="evalFindingsToggleIcon" style="font-size:0.7rem;margin-left:6px">&#9660;</span></h3>
+          <button id="evalFindingsEditBtn" class="btn btn-sm" onclick="evalFindingsEdit()" style="background:#1a73e8;font-size:0.72rem;padding:2px 10px">Edit</button>
+        </div>
+        <div id="evalFindingsView" style="font-size:0.84rem;line-height:1.6;color:#444"></div>
+        <div id="evalFindingsEditor" style="display:none">
+          <textarea id="evalFindingsTextarea" style="width:100%;min-height:300px;border:1px solid #1a73e8;border-radius:4px;padding:8px;font-size:0.82rem;font-family:monospace;resize:vertical;outline:none;line-height:1.5"></textarea>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="btn btn-sm" onclick="evalFindingsSave()" style="background:#34a853;color:#fff;font-size:0.75rem;padding:3px 14px">Save</button>
+            <button class="btn btn-sm" onclick="evalFindingsCancel()" style="background:#eee;color:#333;font-size:0.75rem;padding:3px 14px">Cancel</button>
+          </div>
+          <p style="font-size:0.72rem;color:#999;margin:6px 0 0">Supports Markdown: # heading, ## subheading, **bold**, - list item, etc.</p>
+        </div>
+      </div>
+
       <!-- Manual entry -->
       <div class="config-card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -4755,6 +4774,7 @@ let vizEpStart = 0;  // video start timestamp for current episode
 let vizEpEnd = 0;    // video end timestamp
 let vizFrameCount = 0;
 let vizFps = 30;
+let vizCurrentCameras = [];
 
 async function vizRefreshDatasets() {
   const sel = document.getElementById('vizDatasetSelect');
@@ -4781,6 +4801,8 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   document.getElementById('vizEditTaskBtn').style.display = name ? '' : 'none';
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizRemoveIdleBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizExtendLastBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizRemoveCameraBtn').style.display = 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
   document.getElementById('vizTrainBtn').style.display = name ? '' : 'none';
@@ -4792,6 +4814,10 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
     const d = await r.json();
     if (!d.ok) return;
     const info = d.info;
+    vizCurrentCameras = Object.entries(info.features || {})
+      .filter(([key, feature]) => key.startsWith('observation.images.') && feature && feature.dtype === 'video')
+      .map(([key]) => key);
+    document.getElementById('vizRemoveCameraBtn').style.display = vizCurrentCameras.length > 1 ? '' : 'none';
     vizFps = info.fps || 30;
     // Info grid
     const grid = document.getElementById('vizInfoGrid');
@@ -4944,6 +4970,76 @@ function vizSelectAll() {
   vizUpdateDeleteBtn();
 }
 
+function vizShowRemoveCamera() {
+  if (!vizCurrentDataset || vizCurrentCameras.length < 2) return;
+  const defaultName = `${vizCurrentDataset}-wrist-only`;
+  const options = vizCurrentCameras.map(cam => {
+    const label = cam.split('.').pop();
+    return `<option value="${cam}">${label} (${cam})</option>`;
+  }).join('');
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:8px;color:#c62828">Remove Camera &amp; Generate</h3>
+    <p style="font-size:0.84rem;color:#666;line-height:1.5;margin-bottom:14px">
+      Creates a new dataset and removes the selected camera from videos, feature schema,
+      statistics, and episode metadata. The original dataset is not changed.
+    </p>
+    <label class="form-label">Camera to remove</label>
+    <select id="removeCameraSelect" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;margin-bottom:12px" onchange="vizUpdateRemoveCameraName()">${options}</select>
+    <label class="form-label">New dataset name</label>
+    <input id="removeCameraOutput" value="${defaultName}" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;margin-bottom:16px">
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#eee;color:#444">Cancel</button>
+      <button class="btn btn-sm" id="removeCameraConfirmBtn" onclick="vizDoRemoveCamera()" style="background:#c62828;color:#fff">Generate Dataset</button>
+    </div>
+    <div id="removeCameraStatus" style="font-size:0.82rem;margin-top:10px"></div>
+  `;
+  document.getElementById('modalOverlay').classList.add('visible');
+  // Prefer removing top for the common wrist-only workflow.
+  const select = document.getElementById('removeCameraSelect');
+  if (vizCurrentCameras.includes('observation.images.top')) select.value = 'observation.images.top';
+  vizUpdateRemoveCameraName();
+}
+
+function vizUpdateRemoveCameraName() {
+  const camera = document.getElementById('removeCameraSelect')?.value || '';
+  const remaining = vizCurrentCameras.filter(cam => cam !== camera).map(cam => cam.split('.').pop());
+  const input = document.getElementById('removeCameraOutput');
+  if (input) input.value = `${vizCurrentDataset}-${remaining.join('-')}-only`;
+}
+
+async function vizDoRemoveCamera() {
+  const camera = document.getElementById('removeCameraSelect').value;
+  const outputName = document.getElementById('removeCameraOutput').value.trim();
+  const btn = document.getElementById('removeCameraConfirmBtn');
+  const status = document.getElementById('removeCameraStatus');
+  if (!outputName) { status.textContent = 'Enter a new dataset name.'; status.style.color = '#c62828'; return; }
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  status.textContent = 'Copying dataset and removing camera metadata...';
+  status.style.color = '#666';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/remove-camera`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({camera, output_name: outputName}),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Generate failed');
+    status.textContent = `Created ${d.name} with ${d.remaining_cameras.map(c => c.split('.').pop()).join(', ')} camera.`;
+    status.style.color = '#2e7d32';
+    await vizRefreshDatasets();
+    document.getElementById('vizDatasetSelect').value = d.name;
+    document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    setTimeout(closeModal, 900);
+  } catch(e) {
+    status.textContent = e.message;
+    status.style.color = '#c62828';
+    btn.disabled = false;
+    btn.textContent = 'Generate Dataset';
+  }
+}
+
 async function vizEditTaskSelected() {
   const checked = [...document.querySelectorAll('.viz-ep-cb:checked')].map(cb => parseInt(cb.dataset.ep));
   if (!checked.length) return;
@@ -5022,6 +5118,38 @@ async function vizRemoveIdle() {
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
   btn.textContent = 'Remove Idle';
+}
+
+async function vizExtendLastFrame() {
+  if (!vizCurrentDataset) return;
+  const defaultName = vizCurrentDataset + '_extendlf';
+  const newName = prompt('New dataset name:', defaultName);
+  if (!newName) return;
+  const seconds = prompt('Extend last frame duration (seconds):', '3');
+  if (seconds === null) return;
+  const sec = parseFloat(seconds);
+  if (isNaN(sec) || sec <= 0) { alert('Invalid duration'); return; }
+  if (!confirm(`Create "${newName}" from "${vizCurrentDataset}" with last frame extended by ${sec} seconds.\n\nThis duplicates the last frame to create idle frames so the robot learns to stop after task completion.`)) return;
+
+  const btn = document.getElementById('vizExtendLastBtn');
+  btn.disabled = true;
+  btn.textContent = 'Extending...';
+  try {
+    const r = await fetch(`/api/datasets/${vizCurrentDataset}/extend-last-frame`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({seconds: sec, output_name: newName}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      alert(`Created "${newName}":\n• Trimmed ${d.trimmed_frames} tail frames (1s)\n• Added ${d.added_frames} idle frames (${sec}s)\n• ${d.episodes} episodes, ${d.total_frames} total frames`);
+      vizRefreshDatasets();
+    } else {
+      alert('Error: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = 'Extend Last Frame';
 }
 
 async function vizSplitDataset() {
@@ -5310,6 +5438,7 @@ async function vizDoDeleteDataset() {
       document.getElementById('vizEditTaskBtn').style.display = 'none';
       document.getElementById('vizDeleteDsBtn').style.display = 'none';
       document.getElementById('vizRemoveIdleBtn').style.display = 'none';
+      document.getElementById('vizExtendLastBtn').style.display = 'none';
       document.getElementById('vizPushHfBtn').style.display = 'none';
       document.getElementById('vizTrainBtn').style.display = 'none';
       vizRefreshDatasets();
@@ -7432,9 +7561,10 @@ async function vizLoadEpisode() {
   // Some recordings have from_timestamp that includes pre-roll (idle) time before
   // actual motion starts. Use to_timestamp - data_duration as the effective video
   // start to align video frames with trajectory data correctly.
-  const topKey = 'videos/observation.images.top';
-  const origFrom = epMeta[`${topKey}/from_timestamp`] ?? 0;
-  const origTo = epMeta[`${topKey}/to_timestamp`] ?? 0;
+  const timingCamera = vizCurrentCameras[0] || 'observation.images.top';
+  const timingKey = `videos/${timingCamera}`;
+  const origFrom = epMeta[`${timingKey}/from_timestamp`] ?? 0;
+  const origTo = epMeta[`${timingKey}/to_timestamp`] ?? 0;
   const epLength = epMeta['length'] || 0;
   const dataDuration = epLength > 0 ? epLength / vizFps : 0;
   if (dataDuration > 0 && origTo > origFrom) {
@@ -7454,7 +7584,7 @@ async function vizLoadEpisode() {
   const augEp = vizAugInfo && vizAugInfo.episodes ? vizAugInfo.episodes[ep] : null;
   const showOriginal = augEp && !augEp.is_original && augEp.source_video;
 
-  ['observation.images.top', 'observation.images.wrist'].forEach(cam => {
+  vizCurrentCameras.forEach(cam => {
     const label = cam.split('.').pop();
     const camKey = `videos/${cam}`;
     const chunkIdx = epMeta[`${camKey}/chunk_index`] ?? 0;
@@ -8886,27 +9016,22 @@ function evalUpdateCmd() {
 
   const camCountVal = document.getElementById('evalCamCount').value;
   const fourccPart = fourcc ? `, fourcc: ${fourcc}` : '';
-  const DUMMY = 99;
   let camerasStr;
-  let blackCamArgs = '';
-  // Always pass both cameras so the model gets all expected inputs.
-  // Disabled camera uses dummy index 99 → fakecam_inject sends black frames.
+  // Keep rollout camera keys identical to the dataset/model feature schema.
   if (camCountVal === '1-wrist') {
-    camerasStr = `'{top: {type: opencv, index_or_path: ${DUMMY}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
-    blackCamArgs = ` --black-cameras ${DUMMY} --black-cam-width ${width} --black-cam-height ${height}`;
+    camerasStr = `'{wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
   } else if (camCountVal === '1-top') {
-    camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${DUMMY}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
-    blackCamArgs = ` --black-cameras ${DUMMY} --black-cam-width ${width} --black-cam-height ${height}`;
+    camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
   } else {
     camerasStr = `'{top: {type: opencv, index_or_path: ${camTop}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}, wrist: {type: opencv, index_or_path: ${camWrist}, width: ${width}, height: ${height}, fps: ${fps}${fourccPart}}}'`;
   }
   const useBbox = document.getElementById('evalUseBbox').checked;
-  let needsFakecam = useFakecam || useBbox || blackCamArgs;
+  let needsFakecam = useFakecam || useBbox;
   let cmd = '';
   if (needsFakecam) {
     cmd = 'python fakecam_inject.py';
     if (useFakecam || useBbox) cmd += ' --params-file fakecam_params.json';
-    cmd += blackCamArgs + ' -- \\\n  ';
+    cmd += ' -- \\\n  ';
   }
   cmd += `lerobot-rollout \\\n`;
   cmd += `  --robot.type=so101_follower \\\n`;
@@ -10661,6 +10786,144 @@ function evalNoteCancel(noteId) {
   document.getElementById(noteId + '_editing').style.display = 'none';
   document.getElementById(noteId + '_expanded').style.display = 'block';
 }
+
+// ── Eval Findings (editable markdown notes) ──
+const EVAL_FINDINGS_KEY = 'eval_findings_md';
+const EVAL_FINDINGS_DEFAULT = `## 1. Idle Frames Significantly Affect SmolVLA
+
+- Scenario: **One fixed bowl + one fixed object** (object can appear in any rotation).
+- Trained and compared **ACT** and **SmolVLA**.
+- **ACT** worked well from the beginning.
+- **SmolVLA** often stayed idle for **30–60 seconds**, and sometimes did not move at all.
+- Suspected the **idle frames** at the beginning of each episode were the cause.
+- Removed idle frames, retrained, and evaluated again.
+- **Results:**
+  - Robot started moving immediately after inference.
+  - Performance improved significantly.
+  - **SmolVLA outperformed ACT**, even with only **20 training episodes**.
+
+## 2. Robot Continues Moving After Task Completion
+
+- Both **ACT** and **SmolVLA** sometimes continue moving after completing the task.
+- The robot may even attempt to grasp an empty location after successfully placing the object.
+- Possible cause:
+  - Data collection stops immediately after task completion.
+  - The model never learns what to do after finishing the task (e.g., remain still or return to a home position).
+
+## 3. Handling Distractor Objects with Bounding Boxes
+
+- During training, the dataset contains **only one object**.
+- During inference, **additional distractor objects** are introduced.
+- Without bounding boxes:
+  - The robot becomes confused.
+  - It attempts to grasp any visible object, regardless of the task instruction.
+- Proposed solution:
+  - Detect the target object only in the **first frame**.
+  - Overlay the **target and goal bounding boxes** on all subsequent frames.
+- Current results:
+  - Models trained with bounding boxes are more robust to distractor objects.
+  - If the target bounding box is missing, the robot **does not move**, instead of grasping the wrong object.
+- Ongoing work: Continue evaluating the effectiveness of bounding boxes in more scenarios.`;
+
+function evalFindingsGet() {
+  return localStorage.getItem(EVAL_FINDINGS_KEY) || EVAL_FINDINGS_DEFAULT;
+}
+function evalFindingsMdToHtml(md) {
+  // Simple markdown to HTML converter
+  let html = '';
+  const lines = md.split('\n');
+  let inUl = false, inSubUl = false;
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    if (!trimmed) {
+      if (inSubUl) { html += '</ul></li>'; inSubUl = false; }
+      if (inUl) { html += '</ul>'; inUl = false; }
+      html += '<br>';
+      continue;
+    }
+    // Headings
+    const h2 = trimmed.match(/^##\s+(.+)/);
+    const h1 = trimmed.match(/^#\s+(.+)/);
+    if (h2) {
+      if (inSubUl) { html += '</ul></li>'; inSubUl = false; }
+      if (inUl) { html += '</ul>'; inUl = false; }
+      html += `<h4 style="margin:12px 0 6px;color:#1a73e8;font-size:0.9rem">${evalFindingsInline(h2[1])}</h4>`;
+      continue;
+    }
+    if (h1) {
+      if (inSubUl) { html += '</ul></li>'; inSubUl = false; }
+      if (inUl) { html += '</ul>'; inUl = false; }
+      html += `<h3 style="margin:14px 0 8px">${evalFindingsInline(h1[1])}</h3>`;
+      continue;
+    }
+    // Sub-list item (4+ spaces or 2+ spaces + -)
+    const subItem = trimmed.match(/^(?:\s{2,}|\t)[-*]\s+(.+)/);
+    if (subItem) {
+      if (!inSubUl) { html += '<ul style="margin:2px 0;padding-left:18px">'; inSubUl = true; }
+      html += `<li>${evalFindingsInline(subItem[1])}</li>`;
+      continue;
+    }
+    // List item
+    const item = trimmed.match(/^[-*]\s+(.+)/);
+    if (item) {
+      if (inSubUl) { html += '</ul></li>'; inSubUl = false; }
+      if (!inUl) { html += '<ul style="margin:0 0 8px;padding-left:20px">'; inUl = true; }
+      html += `<li>${evalFindingsInline(item[1])}</li>`;
+      continue;
+    }
+    // Plain text
+    if (inSubUl) { html += '</ul></li>'; inSubUl = false; }
+    if (inUl) { html += '</ul>'; inUl = false; }
+    html += `<p style="margin:4px 0">${evalFindingsInline(trimmed)}</p>`;
+  }
+  if (inSubUl) html += '</ul></li>';
+  if (inUl) html += '</ul>';
+  return html;
+}
+function evalFindingsInline(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code style="background:#f0f0f0;padding:1px 4px;border-radius:2px;font-size:0.8em">$1</code>');
+}
+function evalFindingsRender() {
+  const md = evalFindingsGet();
+  document.getElementById('evalFindingsView').innerHTML = evalFindingsMdToHtml(md);
+}
+function evalFindingsToggle() {
+  const view = document.getElementById('evalFindingsView');
+  const editor = document.getElementById('evalFindingsEditor');
+  const icon = document.getElementById('evalFindingsToggleIcon');
+  const btn = document.getElementById('evalFindingsEditBtn');
+  const collapsed = view.style.display === 'none';
+  view.style.display = collapsed ? '' : 'none';
+  editor.style.display = 'none';
+  btn.style.display = collapsed ? '' : 'none';
+  icon.innerHTML = collapsed ? '&#9660;' : '&#9654;';
+}
+function evalFindingsEdit() {
+  document.getElementById('evalFindingsView').style.display = 'none';
+  document.getElementById('evalFindingsEditor').style.display = '';
+  document.getElementById('evalFindingsTextarea').value = evalFindingsGet();
+  document.getElementById('evalFindingsEditBtn').style.display = 'none';
+}
+function evalFindingsSave() {
+  const val = document.getElementById('evalFindingsTextarea').value;
+  localStorage.setItem(EVAL_FINDINGS_KEY, val);
+  document.getElementById('evalFindingsEditor').style.display = 'none';
+  document.getElementById('evalFindingsView').style.display = '';
+  document.getElementById('evalFindingsEditBtn').style.display = '';
+  evalFindingsRender();
+}
+function evalFindingsCancel() {
+  document.getElementById('evalFindingsEditor').style.display = 'none';
+  document.getElementById('evalFindingsView').style.display = '';
+  document.getElementById('evalFindingsEditBtn').style.display = '';
+}
+
+// Render findings on load
+document.addEventListener('DOMContentLoaded', evalFindingsRender);
 
 function evalResultsToggleViewMode() {
   evalResViewMode = !evalResViewMode;
