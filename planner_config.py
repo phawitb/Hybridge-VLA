@@ -5,6 +5,42 @@ from __future__ import annotations
 import json
 
 
+EXECUTION_LOOP_LIMITS = {
+    "actions_per_cycle": (100, 1, 1000),
+    "cycles_before_replan": (5, 1, 20),
+    "max_replans": (3, 1, 10),
+}
+
+
+def execution_loop_settings(config: dict) -> dict:
+    incoming = config.get("execution_loop")
+    if not isinstance(incoming, dict):
+        incoming = {}
+    settings = {}
+    for key, (default, minimum, maximum) in EXECUTION_LOOP_LIMITS.items():
+        try:
+            value = int(incoming.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        settings[key] = value if minimum <= value <= maximum else default
+    return settings
+
+
+def validate_execution_loop_settings(incoming: object) -> dict:
+    if not isinstance(incoming, dict):
+        raise ValueError("Execution loop settings must be an object")
+    settings = {}
+    for key, (default, minimum, maximum) in EXECUTION_LOOP_LIMITS.items():
+        try:
+            value = int(incoming.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer") from exc
+        if not minimum <= value <= maximum:
+            raise ValueError(f"{key} must be between {minimum} and {maximum}")
+        settings[key] = value
+    return settings
+
+
 DEFAULT_USE_IK_PROMPT = """You are a robotic task planner for a single-arm robot.
 
 ## Instruction

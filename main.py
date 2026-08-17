@@ -24,11 +24,13 @@ from fastapi.staticfiles import StaticFiles
 
 from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
 from planner_config import (
+    execution_loop_settings,
     planner_settings,
     render_available_models,
     render_planner_prompt,
     validate_plan,
     validation_feedback,
+    validate_execution_loop_settings,
 )
 from vla_execution import VlaProcessManager, build_infer_command
 
@@ -337,6 +339,7 @@ async def get_config():
         "prompt_template": cfg.get("prompt_template", ""),
         "planner": planner_settings(cfg),
         "verify": cfg.get("verify", {"enabled": True, "max_retries": 3}),
+        "execution_loop": execution_loop_settings(cfg),
         "robot_port": robot_cfg.get("port", ""),
         "robot_id": robot_cfg.get("id", ""),
         "camera_top_index": cams.get("top", {}).get("index", 0),
@@ -403,6 +406,15 @@ async def save_config(request: Request):
             "selected_models": list(dict.fromkeys(str(item) for item in selected)),
             "prompt_templates": {"use_ik": use_prompt, "no_ik": no_prompt},
         }
+
+    if "execution_loop" in data:
+        try:
+            cfg["execution_loop"] = validate_execution_loop_settings(data["execution_loop"])
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "INVALID_EXECUTION_LOOP", "error": str(exc)},
+            )
 
     if "robot_port" in data:
         cfg.setdefault("robot", {})["port"] = data["robot_port"]

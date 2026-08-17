@@ -50,6 +50,44 @@ def test_config_returns_planner_settings(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json()["planner"]["selected_models"] == ["model_a"]
     assert response.json()["planner"]["use_ik"] is True
+    assert response.json()["execution_loop"] == {
+        "actions_per_cycle": 100,
+        "cycles_before_replan": 5,
+        "max_replans": 3,
+    }
+
+
+def test_config_save_persists_execution_loop_settings(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    response = client.post("/api/config/save", json={"execution_loop": {
+        "actions_per_cycle": 250,
+        "cycles_before_replan": 7,
+        "max_replans": 4,
+    }})
+
+    assert response.status_code == 200
+    saved = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    assert saved["execution_loop"] == {
+        "actions_per_cycle": 250,
+        "cycles_before_replan": 7,
+        "max_replans": 4,
+    }
+
+
+def test_config_save_rejects_execution_loop_values_outside_ranges(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    client = TestClient(main.app)
+
+    response = client.post("/api/config/save", json={"execution_loop": {
+        "actions_per_cycle": 0,
+        "cycles_before_replan": 21,
+        "max_replans": 11,
+    }})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_EXECUTION_LOOP"
 
 
 def test_config_save_rejects_empty_selected_models(monkeypatch, tmp_path):
