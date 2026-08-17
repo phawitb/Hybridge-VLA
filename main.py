@@ -33,6 +33,7 @@ from planner_config import (
     validate_execution_loop_settings,
 )
 from vla_execution import VlaProcessManager, build_infer_command
+from verified_execution import VerifiedExecutionManager
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
@@ -101,6 +102,7 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
 vla_manager = VlaProcessManager(max_log_lines=500)
+verified_manager = VerifiedExecutionManager()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
@@ -7574,6 +7576,195 @@ async def calibrate_save_all(request: Request):
 
 # ══════════ Run Step ══════════
 
+def _capture_verified_frame(step: dict) -> tuple[bytes, str]:
+    """Capture a fresh frame after VLA releases camera ownership."""
+    import cv2
+
+    cfg = load_config()
+    record = get_model_record(_load_model_registry(cfg), str(step.get("model_id", "")))
+    required = [name.rsplit(".", 1)[-1] for name in (record or {}).get("camera_features", [])]
+    camera_name = "top" if "top" in required else (required[0] if required else "top")
+    camera_cfg = cfg.get("robot", {}).get("cameras", {}).get(camera_name, {})
+    capture = cv2.VideoCapture(int(camera_cfg.get("index", 0)))
+    try:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(camera_cfg.get("w", camera_cfg.get("width", 640))))
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(camera_cfg.get("h", camera_cfg.get("height", 480))))
+        frame = None
+        for _ in range(30):
+            ok, candidate = capture.read()
+            if ok and candidate is not None:
+                frame = candidate
+        if frame is None:
+            raise RuntimeError(f"Could not capture verification frame from {camera_name} camera")
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise RuntimeError("Could not encode verification frame")
+        return encoded.tobytes(), "image/jpeg"
+    finally:
+        capture.release()
+
+
+def _gemini_image_json(prompt: str, image_bytes: bytes, mime: str) -> dict:
+    cfg = load_config()
+    model = cfg["gemini"]["default_model"]
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {"contents": [{"parts": [
+        {"inlineData": {"mimeType": mime, "data": base64.b64encode(image_bytes).decode("ascii")}},
+        {"text": prompt},
+    ]}]}
+    with httpx.Client(timeout=60) as client:
+        response = client.post(url, json=payload)
+    if response.status_code != 200:
+        message = response.json().get("error", {}).get("message", response.text[:300])
+        raise RuntimeError(f"Gemini HTTP {response.status_code}: {message}")
+    return {"raw": extract_text(response.json()), "data": response.json()}
+
+
+def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threading.Event) -> dict:
+    if step.get("method_id") == "ik_reach_object_v1":
+        if stop_event.is_set():
+            return {"ok": False, "error": "Stopped by user"}
+        if not calib_state.get("homography"):
+            return {"ok": False, "error": "Not calibrated — go to Calibrate tab first"}
+        bbox = step.get("target_bbox")
+        if not isinstance(bbox, list) or len(bbox) < 2:
+            return {"ok": False, "error": "IK step has no target_bbox"}
+        if not robot_state.get("connected"):
+            try:
+                connect_robot()
+            except Exception as exc:
+                return {"ok": False, "error": f"Robot connection failed: {exc}"}
+        cfg = load_config()
+        camera = cfg.get("robot", {}).get("cameras", {}).get("top", {})
+        pixel = [bbox[0] * camera.get("w", camera.get("width", 640)), bbox[1] * camera.get("h", camera.get("height", 480))]
+        target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=0.0)
+        if target is None:
+            return {"ok": False, "error": "IK interpolation failed"}
+        current = robot_get_positions()
+        target["gripper"] = current["gripper"]
+        robot_send_positions(target)
+        return {"ok": True}
+    if step.get("method_id") != "vla_model":
+        return {"ok": False, "error": f"Automatic execution is not supported for {step.get('method_id')}"}
+    cfg = load_config()
+    record = get_model_record(_load_model_registry(cfg), str(step.get("model_id", "")))
+    if not record or not record.get("selectable"):
+        return {"ok": False, "error": "Selected model is not executable"}
+    model_path = (ROOT / str(record.get("local_path", ""))).resolve()
+    models_root = (ROOT / "models").resolve()
+    if models_root not in model_path.parents or not model_path.exists():
+        return {"ok": False, "error": "Model checkpoint is not available locally"}
+    if robot_state.get("connected"):
+        disconnect_robot()
+    resolved = {**record, "local_path": str(model_path)}
+    try:
+        command = build_infer_command(
+            python=sys.executable,
+            script=ROOT / "infer_python.py",
+            model=resolved,
+            task=str(step.get("description", "")),
+            robot=cfg.get("robot", {}),
+            cameras=cfg.get("robot", {}).get("cameras", {}),
+            max_steps=actions_per_cycle,
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    started = vla_manager.start(command, str(step.get("model_id", "")), str(step.get("description", "")))
+    if not started.get("ok"):
+        return started
+    while True:
+        if stop_event.wait(0.1):
+            vla_manager.stop()
+            return {"ok": False, "error": "Stopped by user"}
+        status = vla_manager.status()
+        if not status.get("running"):
+            if status.get("state") == "completed":
+                return {"ok": True}
+            return {"ok": False, "error": f"VLA process {status.get('state')} (exit {status.get('exit_code')})"}
+
+
+def _verified_completion(step: dict) -> dict:
+    try:
+        image_bytes, mime = _capture_verified_frame(step)
+        prompt = f"""You verify whether a robot task is visibly complete.
+Task: {step.get('description', '')}
+Return ONLY JSON: {{"status":"success|continue|uncertain","reason":"brief reason","visible_evidence":"what is visible"}}.
+Use success only with clear visible evidence. For pick-and-place, the object must be visibly released at the requested destination; holding it above or near the destination is not success.
+"""
+        raw = _gemini_image_json(prompt, image_bytes, mime)["raw"]
+        parsed = parse_json_response(raw)
+        if not isinstance(parsed, dict) or parsed.get("status") not in {"success", "continue", "uncertain"}:
+            return {"ok": True, "status": "uncertain", "reason": "Invalid verifier response", "visible_evidence": raw[:500]}
+        return {
+            "ok": True,
+            "status": parsed["status"],
+            "reason": str(parsed.get("reason", "")),
+            "visible_evidence": str(parsed.get("visible_evidence", "")),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _verified_replan(context: dict) -> dict:
+    failed_step = context["failed_step"]
+    try:
+        cfg = load_config()
+        registry = _load_model_registry(cfg)
+        settings = planner_settings(cfg)
+        selected = [record for record in registry if record.get("id") in settings["selected_models"] and record.get("selectable")]
+        image_bytes, mime = _capture_verified_frame(failed_step)
+        completed_json = json.dumps(context["completed_steps"], ensure_ascii=False)
+        history_json = json.dumps(context["verification_history"], ensure_ascii=False)
+        planner_prompt, _ = render_planner_prompt(cfg, context["original_instruction"], registry)
+        prompt = f"""{planner_prompt}
+
+## Re-plan Remaining Work Only
+Completed steps (NEVER repeat these): {completed_json}
+Failed step after its execution cycles: {json.dumps(failed_step, ensure_ascii=False)}
+Verification history: {history_json}
+Generate a replacement plan containing ONLY unfinished work. Output only the required plan JSON.
+"""
+        raw = _gemini_image_json(prompt, image_bytes, mime)["raw"]
+        plan = parse_json_response(raw)
+        if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list) or not plan["steps"]:
+            return {"ok": False, "error": "Re-plan did not return a steps array"}
+        errors = validate_plan(plan, settings["use_ik"], selected)
+        completed_tasks = {" ".join(str(item.get("description", "")).casefold().split()) for item in context["completed_steps"]}
+        repeated = [item for item in plan["steps"] if " ".join(str(item.get("description", "")).casefold().split()) in completed_tasks]
+        if repeated:
+            errors.append({"code": "COMPLETED_STEP_REPEATED", "message": "Re-plan repeated a completed step", "step_index": repeated[0].get("step_index")})
+        if errors:
+            return {"ok": False, "error": "Invalid re-plan", "validation_errors": errors}
+        return {"ok": True, "plan": plan}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/run/session/start")
+async def run_session_start(request: Request):
+    data = await request.json()
+    cfg = load_config()
+    settings = planner_settings(cfg)
+    registry = _load_model_registry(cfg)
+    selected = [record for record in registry if record.get("id") in settings["selected_models"] and record.get("selectable")]
+    plan = data.get("plan")
+    errors = validate_plan(plan, settings["use_ik"], selected)
+    if errors:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_PLAN", "error": "Plan is not executable", "validation_errors": errors})
+    return verified_manager.start(
+        str(data.get("original_instruction", "")),
+        plan,
+        int(data.get("start_index", 0)),
+        execution_loop_settings(cfg),
+        _verified_execute_step,
+        _verified_completion,
+        _verified_replan,
+    )
+
+
 @app.post("/api/run/step")
 async def run_step(request: Request):
     """Execute a single plan step on the robot.
@@ -7747,11 +7938,16 @@ async def run_step(request: Request):
 
 @app.get("/api/run/status")
 async def run_status():
+    verified = verified_manager.status()
+    if verified.get("state") != "idle":
+        verified["lines"] = vla_manager.status().get("lines", [])
+        return verified
     return vla_manager.status()
 
 
 @app.post("/api/run/stop")
 async def run_stop():
+    verified_manager.stop()
     return vla_manager.stop()
 
 

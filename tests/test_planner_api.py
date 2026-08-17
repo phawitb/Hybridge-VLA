@@ -1,5 +1,6 @@
 from copy import deepcopy
 import io
+import json
 
 import yaml
 from fastapi.testclient import TestClient
@@ -251,6 +252,105 @@ class FakeVlaManager:
 
     def stop(self):
         return {"ok": True, "state": "stopped"}
+
+
+class FakeVerifiedManager:
+    def __init__(self):
+        self.started = None
+        self.stopped = False
+
+    def start(self, *args):
+        self.started = args
+        return {"ok": True, "state": "running"}
+
+    def status(self):
+        return {"ok": True, "state": "stopped" if self.stopped else ("running" if self.started else "idle"), "running": bool(self.started) and not self.stopped}
+
+    def stop(self):
+        self.stopped = True
+        return {"ok": True, "state": "stopped"}
+
+
+def test_run_session_start_snapshots_config_and_full_plan(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    config["planner"]["use_ik"] = False
+    config["execution_loop"] = {"actions_per_cycle": 250, "cycles_before_replan": 4, "max_replans": 2}
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    manager = FakeVerifiedManager()
+    monkeypatch.setattr(main, "verified_manager", manager)
+    client = TestClient(main.app)
+    plan = {"task_id": "pick", "total_steps": 1, "steps": [{
+        "step_index": 1, "description": "pick up the bow", "target_bbox": None,
+        "method_id": "vla_model", "model_id": "model_a",
+    }]}
+
+    response = client.post("/api/run/session/start", json={
+        "original_instruction": "pick up the bow",
+        "plan": plan,
+        "start_index": 0,
+    })
+
+    assert response.status_code == 200
+    assert manager.started[0:4] == (
+        "pick up the bow", plan, 0,
+        {"actions_per_cycle": 250, "cycles_before_replan": 4, "max_replans": 2},
+    )
+    assert all(callable(adapter) for adapter in manager.started[4:])
+
+
+def test_run_session_start_rejects_invalid_plan(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    manager = FakeVerifiedManager()
+    monkeypatch.setattr(main, "verified_manager", manager)
+    client = TestClient(main.app)
+
+    response = client.post("/api/run/session/start", json={
+        "original_instruction": "open drawer",
+        "plan": {"steps": [{
+            "step_index": 1, "description": "open drawer", "target_bbox": None,
+            "method_id": "vla_model", "model_id": "model_a",
+        }]},
+        "start_index": 0,
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_PLAN"
+    assert manager.started is None
+
+
+def test_completion_verifier_treats_invalid_gemini_schema_as_uncertain(monkeypatch):
+    monkeypatch.setattr(main, "_capture_verified_frame", lambda step: (b"jpg", "image/jpeg"))
+    monkeypatch.setattr(main, "_gemini_image_json", lambda prompt, image, mime: {"raw": '{"done":true}'})
+
+    result = main._verified_completion({"description": "pick up the bow"})
+
+    assert result["ok"] is True
+    assert result["status"] == "uncertain"
+
+
+def test_replan_rejects_completed_task_repetition(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    config["planner"]["use_ik"] = False
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    monkeypatch.setattr(main, "_capture_verified_frame", lambda step: (b"jpg", "image/jpeg"))
+    monkeypatch.setattr(main, "_gemini_image_json", lambda prompt, image, mime: {"raw": json.dumps({
+        "task_id": "repeat", "total_steps": 1, "steps": [{
+            "step_index": 1, "description": "pick up the bow", "target_bbox": None,
+            "method_id": "vla_model", "model_id": "model_a",
+        }],
+    })})
+
+    result = main._verified_replan({
+        "original_instruction": "pick up the bow",
+        "completed_steps": [{"step_index": 1, "description": "pick up the bow"}],
+        "failed_step": {"step_index": 2, "description": "pick up the bow", "model_id": "model_a"},
+        "verification_history": [],
+    })
+
+    assert result["ok"] is False
+    assert result["validation_errors"][0]["code"] == "COMPLETED_STEP_REPEATED"
 
 
 def test_run_step_starts_selected_model_with_exact_declared_task(monkeypatch, tmp_path):
