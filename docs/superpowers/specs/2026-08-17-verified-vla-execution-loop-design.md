@@ -6,13 +6,17 @@ Replace the current assumption that a VLA step is complete after 100 control ste
 
 ## Execution State Machine
 
-Each `vla_model` plan step starts with cycle number one. One cycle launches the selected model for the configured number of control steps (default 100). When the inference process exits successfully, the server reconnects only the cameras needed for verification, captures a fresh frame, and asks Gemini to classify the requested task as one of:
+Each `vla_model` plan step starts with cycle number one. The selected model is loaded once into a persistent inference process. One cycle sends the configured number of control steps (default 100). At the cycle boundary the process stops sending new actions but keeps the model, robot connection, camera connection, and motor torque alive, holding the last commanded pose while Gemini verifies the task.
+
+The inference process writes its latest configured-camera observation to a session snapshot and reports `waiting_for_verification` over its control channel. The server reads that snapshot without opening the camera a second time. It then asks Gemini to classify the requested task as one of:
 
 - `success`: visible evidence shows the requested task is complete.
 - `continue`: visible evidence shows the task is incomplete and another execution cycle is appropriate.
 - `uncertain`: the image does not provide enough evidence; treat this like `continue`.
 
-On `success`, the current plan step is marked complete and execution advances to the next step. On `continue` or `uncertain`, the same model and exact training-task instruction run for another 100 steps. The model process is disconnected between cycles so camera ownership can safely transfer to the verifier.
+On `success`, the server tells the persistent process to stop, allowing a controlled disconnect, marks the current plan step complete, and advances to the next step. On `continue` or `uncertain`, the server sends `continue` to the same process, which immediately performs another configured action cycle without reloading the model or reconnecting hardware.
+
+If the next plan step uses a different task or model, the old process is stopped cleanly before the new process starts. A verification wait has a 120-second safety timeout; if the server disappears or sends no command, inference disconnects the robot rather than holding torque indefinitely.
 
 The Stop action cancels the active model process and the surrounding execution loop. A stopped run must never restart itself or advance the plan.
 
@@ -51,7 +55,7 @@ The Run UI displays the current execution phase, for example `Executing cycle 2/
 
 ## Completion Verification
 
-Gemini receives the task text and a fresh image from the model's configured camera. The verification prompt requires JSON with `status`, `reason`, and `visible_evidence`. Responses outside the allowed schema are classified as `uncertain`, retained in history, and consume one cycle. Verification is conservative: absence of clear visible evidence cannot produce `success`.
+Gemini receives the task text and the latest observation captured by the persistent inference process at the cycle boundary. The verification prompt requires JSON with `status`, `reason`, and `visible_evidence`. Responses outside the allowed schema are classified as `uncertain`, retained in history, and consume one cycle. Verification is conservative: absence of clear visible evidence cannot produce `success`.
 
 For pick-and-place, success requires visible evidence that the target object has been released at the requested destination; merely holding the object above or near the destination is not success.
 
@@ -60,7 +64,8 @@ For pick-and-place, success requires visible evidence that the target object has
 - The configured action limit is enforced for every cycle; no unbounded inference process is introduced.
 - The configured cycle and automatic re-plan limits are enforced for every Run session.
 - Process failure, camera capture failure, invalid re-plan, or API failure results in `needs_human_review` with a specific error.
-- Hardware ownership remains exclusive between inference and verification camera capture.
+- Hardware ownership remains exclusively inside the persistent inference process while a task is active; the server verifies the exported observation snapshot.
+- Motor torque remains enabled only while waiting for verification and is released on success, Stop, process failure, task/model change, or the 120-second command timeout.
 - Stop is checked before every launch, verification, retry, and re-plan transition.
 - The existing manual Stop endpoint remains idempotent.
 
@@ -70,5 +75,6 @@ For pick-and-place, success requires visible evidence that the target object has
 - Config tests cover defaults, persistence, range validation, and per-session setting snapshots.
 - API tests cover starting, polling, stopping, fresh-image verification, accepted replacement plans, rejected replacement plans, and completed-step context.
 - Process tests retain the exact 100-step command bound.
+- Process tests cover cycle-boundary pause, snapshot publication, `continue`, controlled `stop`, model reuse, and verification-command timeout.
 - UI tests cover phase labels, updated plans, automatic advancement, `needs_human_review`, and Stop behavior.
 - A no-hardware integration test uses fake process, camera, and Gemini adapters to exercise the complete cycle and re-plan flow deterministically.
