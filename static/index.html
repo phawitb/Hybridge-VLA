@@ -986,8 +986,11 @@ bump_height = min(overshoot + 2, 10) degrees
         <div style="flex:0 0 440px;min-width:300px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
             <button class="btn btn-sm" id="runStepBtn" onclick="runStep()" disabled>Run Step</button>
+            <label style="font-size:0.75rem;color:#666">VLA steps <input id="runMaxSteps" type="number" value="100" min="1" max="1000" style="width:70px;padding:4px"></label>
+            <button class="btn btn-sm btn-danger" id="runStopBtn" onclick="runStopVla()" style="display:none">Stop</button>
             <span class="status" id="runStepStatus"></span>
           </div>
+          <pre id="runStepLog" style="display:none;background:#1e1e1e;color:#ddd;border-radius:6px;padding:8px;font-size:0.7rem;max-height:150px;overflow:auto;white-space:pre-wrap"></pre>
           <div class="run-flow" id="runFlowChart"></div>
         </div>
       </div>
@@ -3763,7 +3766,6 @@ function setupEvents() {
   document.getElementById('instruction').addEventListener('input', rebuildPrompt);
   // Method input enter
   document.getElementById('methodInput').addEventListener('keydown', e => { if(e.key==='Enter') addMethod(); });
-  document.getElementById('cfgMethodInput').addEventListener('keydown', e => { if(e.key==='Enter') cfgAddMethod(); });
   // Submit
   document.getElementById('submitBtn').addEventListener('click', submit);
   document.getElementById('instruction').addEventListener('keydown', e => { if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) submit(); });
@@ -3897,7 +3899,7 @@ function renderSteps(plan, containerId) {
       <div class="step-idx">${s.step_index}</div>
       <div class="step-body">
         <div class="step-desc">${esc(s.description)}</div>
-        <div class="step-method">${esc(s.method_id)}</div>
+        <div class="step-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div>
         <div class="step-bbox">bbox: ${bboxStr}</div>
       </div>
     </div>`;
@@ -3971,7 +3973,7 @@ function openModal(id) {
     const color=COLORS[i%COLORS.length];
     const bb = s.target_bbox ? `[${s.target_bbox.map(v=>v.toFixed(3)).join(', ')}]` : 'null';
     return `<div class="step-card"><div class="step-dot" style="background:${color}"></div><div class="step-idx">${s.step_index}</div>
-      <div class="step-body"><div class="step-desc">${esc(s.description)}</div><div class="step-method">${esc(s.method_id)}</div><div class="step-bbox">bbox: ${bb}</div></div></div>`;
+      <div class="step-body"><div class="step-desc">${esc(s.description)}</div><div class="step-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div><div class="step-bbox">bbox: ${bb}</div></div></div>`;
   }).join('');
 
   const methodsHtml = (r.methods||[]).map(m=>`<span class="method-chip">${m}</span>`).join(' ');
@@ -4401,6 +4403,7 @@ let runImageFile = null;
 let runImageUrl = null;
 let runSelectedStep = -1;
 let runStepsDone = new Set();
+let runVlaPollTimer = null;
 
 function buildRunModelSelect() {
   if (!cfg) return;
@@ -4440,16 +4443,9 @@ async function runPlan() {
 
   st.textContent='Planning...'; st.className='status';
 
-  const methodStr = (cfg.available_methods||[]).map(m => `* ${m}`).join('\n');
-  const prompt = cfg.prompt_template
-    .replace('{instruction}', instruction)
-    .replace('{available_methods}', methodStr);
-
   const fd = new FormData();
   fd.append('model', document.getElementById('runModel').value);
   fd.append('instruction', instruction);
-  fd.append('methods', (cfg.available_methods||[]).join(','));
-  fd.append('prompt', prompt);
   fd.append('image', runImageFile);
 
   try {
@@ -4490,7 +4486,7 @@ function runBuildFlow() {
         <div class="run-block-idx" style="background:${color}">${s.step_index}</div>
         <div class="run-block-body">
           <div class="run-block-desc">${esc(s.description)}</div>
-          <div class="run-block-method">${esc(s.method_id)}</div>
+          <div class="run-block-method">${esc(s.method_id)}${s.model_id ? ` · ${esc(s.model_id)}` : ''}</div>
           <div class="run-block-bbox">bbox: ${bboxStr}</div>
           ${statusStr}
         </div>
@@ -4520,22 +4516,25 @@ async function runStep() {
   st.textContent = `Running step ${step.step_index}: ${step.method_id}...`;
 
   try {
+    const payload = buildRunStepPayload(step, parseInt(document.getElementById('runMaxSteps').value) || 100);
+    payload.height_cm = parseFloat(document.getElementById("cbHeight")?.value) || 0;
+    payload.safety_height_cm = parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0;
     const r = await fetch('/api/run/step', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        method_id: step.method_id,
-        target_bbox: step.target_bbox,
-        description: step.description,
-        height_cm: parseFloat(document.getElementById("cbHeight")?.value) || 0,
-        safety_height_cm: parseFloat(document.getElementById("cbSafetyHeight")?.value) || 0,
-      }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (!d.ok) {
       st.innerHTML = `<span style="color:#d93025">Step ${step.step_index} failed: ${d.error}</span>`;
       if (block) block.className = 'run-block selected';
       btn.disabled = false;
+      return;
+    }
+    if (step.method_id === 'vla_model') {
+      document.getElementById('runStopBtn').style.display = '';
+      document.getElementById('runStepLog').style.display = '';
+      runPollVlaStep(runSelectedStep);
       return;
     }
     runStepsDone.add(runSelectedStep);
@@ -4547,6 +4546,57 @@ async function runStep() {
     if (block) block.className = 'run-block selected';
   }
   btn.disabled = false;
+}
+
+function buildRunStepPayload(step, maxSteps) {
+  return {
+    method_id: step.method_id,
+    model_id: step.model_id || null,
+    description: step.description,
+    target_bbox: step.target_bbox ?? null,
+    max_steps: Math.max(1, Math.min(parseInt(maxSteps) || 100, 1000)),
+  };
+}
+
+function runStateLabel(state) {
+  if (state.state === 'running' || state.state === 'starting') return `Running ${state.model_id || 'model'}`;
+  if (state.state === 'completed') return 'Completed';
+  if (state.state === 'failed') return `Failed (exit ${state.exit_code ?? 'unknown'})`;
+  if (state.state === 'stopped') return 'Stopped';
+  return state.state || 'Idle';
+}
+
+function runPollVlaStep(stepIndex) {
+  if (runVlaPollTimer) clearInterval(runVlaPollTimer);
+  const poll = async () => {
+    try {
+      const state = await fetch('/api/run/status').then(r => r.json());
+      document.getElementById('runStepStatus').textContent = runStateLabel(state);
+      const log = document.getElementById('runStepLog');
+      log.textContent = (state.lines || []).slice(-100).join('\n');
+      log.scrollTop = log.scrollHeight;
+      if (state.running || state.state === 'starting') return;
+      clearInterval(runVlaPollTimer); runVlaPollTimer = null;
+      document.getElementById('runStopBtn').style.display = 'none';
+      document.getElementById('runStepBtn').disabled = false;
+      if (state.state === 'completed') {
+        runStepsDone.add(stepIndex);
+        if (runSelectedStep < runPlanData.steps.length - 1) runSelectedStep++;
+        runBuildFlow();
+      } else {
+        runSelectedStep = stepIndex;
+        runBuildFlow();
+      }
+    } catch (error) {
+      document.getElementById('runStepStatus').textContent = error.message;
+    }
+  };
+  poll();
+  runVlaPollTimer = setInterval(poll, 500);
+}
+
+async function runStopVla() {
+  await fetch('/api/run/stop', {method:'POST'});
 }
 
 // ══════════ Data Collection ══════════

@@ -41,7 +41,7 @@ function extractFunction(name) {
 
 const context = { console };
 vm.createContext(context);
-for (const name of ['selectableModelIds', 'buildPlannerPayload']) {
+for (const name of ['selectableModelIds', 'buildPlannerPayload', 'buildRunStepPayload', 'runStateLabel']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
 
@@ -68,5 +68,22 @@ assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
   selected_models: ['a', 'b'],
   prompt_templates: {use_ik: 'A', no_ik: 'B'},
 });
+
+assert.deepEqual(JSON.parse(JSON.stringify(context.buildRunStepPayload({
+  method_id: 'vla_model',
+  model_id: 'model_a',
+  description: 'pick up the bow',
+  target_bbox: null,
+}, 100))), {
+  method_id: 'vla_model',
+  model_id: 'model_a',
+  description: 'pick up the bow',
+  target_bbox: null,
+  max_steps: 100,
+});
+
+assert.equal(context.runStateLabel({state: 'running', model_id: 'model_a'}), 'Running model_a');
+assert.equal(context.runStateLabel({state: 'failed', exit_code: 1}), 'Failed (exit 1)');
+assert.equal(context.runStateLabel({state: 'completed'}), 'Completed');
 
 console.log('multi-model config UI behavior passes');
