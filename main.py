@@ -983,6 +983,16 @@ async def infer(
                     f"Please fix the issues and generate a corrected plan."
                 )
 
+    if not isinstance(plan_data, dict) or not isinstance(plan_data.get("steps"), list):
+        return {
+            "error": "Planner returned an invalid format: expected a top-level steps array.",
+            "error_code": "INVALID_PLAN_FORMAT",
+            "plan": None,
+            "raw_response": raw_text,
+            "verify": verify_info,
+            "elapsed": round(total_elapsed, 2),
+        }
+
     if last_validation_errors:
         return {
             "error": "Generated plan violates selected model capabilities or IK mode",
