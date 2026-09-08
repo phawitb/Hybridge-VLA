@@ -726,6 +726,68 @@ def test_task_move_waits_for_measured_convergence(monkeypatch):
     assert abs(measured["shoulder_pan"] - 10.0) <= 0.2
 
 
+def test_pick_place_accepts_small_arm_servo_residual(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured.update(elbow_flex=96.04, gripper=50.0)
+    clock = iter(range(0, 10000, 10))
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 93.98,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 50.0,
+            },
+        }
+
+    def sticky_elbow_send(command, owner=None):
+        assert owner == "generate3d"
+        for name, value in command.items():
+            if name != "elbow_flex":
+                measured[name] = value
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", sticky_elbow_send)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: float(next(clock)))
+
+    main._g3d_execute_pick_place(
+        OBJECTS[0], OBJECTS[1], [800, 600], 1.0, 10.0,
+        threading.Event(), lambda phase, joints: None,
+    )
+
+    assert abs(measured["elbow_flex"] - 93.98) == pytest.approx(2.06)
+
+
+def test_real_plan_keeps_strict_gripper_tolerance(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["gripper"] = 52.06
+    target = {**measured, "gripper": 50.0}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match=r"gripper\(target=50.00, measured=52.06, error=2.06\)"):
+        main._g3d_execute_real_plan(
+            [{
+                "phase": "opening_gripper",
+                "joints": target,
+                "n_steps": 1,
+                "convergence_names": ["gripper"],
+                "tolerance_deg": main.G3D_TASK_GRIPPER_TOLERANCE,
+            }],
+            threading.Event(),
+            lambda phase, joints: None,
+        )
+
+
 def test_waypoint_timeout_scales_with_joint_delta_and_stays_bounded():
     current = {name: 0.0 for name in main.ROBOT_JOINTS}
 

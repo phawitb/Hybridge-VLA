@@ -6828,6 +6828,8 @@ G3D_TASK_JOINT_LIMITS = {
     "gripper": (0.0, 100.0),
 }
 G3D_TASK_OPEN_GRIPPER = 50.0
+G3D_TASK_ARM_TOLERANCE_DEG = 2.5
+G3D_TASK_GRIPPER_TOLERANCE = 2.0
 
 
 def _g3d_validate_joint_target(joints: dict) -> None:
@@ -6908,16 +6910,16 @@ def _g3d_build_pick_place_plan(
         _g3d_validate_joint_target(waypoint)
 
     return [
-        {"phase": "raising_to_safety", "joints": raised, "n_steps": 15, "convergence_names": arm_names},
-        {"phase": "moving_to_source", "joints": source_approach, "n_steps": 15, "convergence_names": arm_names},
-        {"phase": "opening_gripper", "joints": opened_at_source, "n_steps": 10, "convergence_names": ["gripper"]},
-        {"phase": "descending_to_source", "joints": source_pick, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "raising_to_safety", "joints": raised, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "moving_to_source", "joints": source_approach, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "opening_gripper", "joints": opened_at_source, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
+        {"phase": "descending_to_source", "joints": source_pick, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "grasping", "joints": source_grasped, "kind": "grip", "command_cycles": 10},
-        {"phase": "lifting_source", "joints": source_lifted, "n_steps": 15, "convergence_names": arm_names},
-        {"phase": "moving_to_target", "joints": target_approach, "n_steps": 15, "convergence_names": arm_names},
-        {"phase": "placing", "joints": target_place, "n_steps": 15, "convergence_names": arm_names},
-        {"phase": "releasing", "joints": released, "n_steps": 10, "convergence_names": ["gripper"]},
-        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "lifting_source", "joints": source_lifted, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "moving_to_target", "joints": target_approach, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "placing", "joints": target_place, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "releasing", "joints": released, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
+        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
     ]
 
 
@@ -6932,6 +6934,7 @@ def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publis
         elif not _g3d_task_move(
             step["joints"], step["phase"], stop_event, publish,
             n_steps=step.get("n_steps", 15),
+            tolerance_deg=step.get("tolerance_deg", 2.0),
             convergence_names=step.get("convergence_names"),
         ):
             return
