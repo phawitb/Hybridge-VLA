@@ -56,6 +56,14 @@ const context = {
       {name: 'teal bowl', center_pixel: [509, 91]},
     ],
     imageSize: [800, 600],
+    currentJoints: {
+      shoulder_pan: 4,
+      shoulder_lift: -12,
+      elbow_flex: 18,
+      wrist_flex: 25,
+      wrist_roll: 3,
+      gripper: 35,
+    },
     detectionId: 'det-1',
     robot: {},
     instructionAuto: true,
@@ -119,6 +127,14 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   safety_height_cm: 10,
   enforce_workspace: true,
   execution_mode: 'simulation',
+  initial_joints: {
+    shoulder_pan: 4,
+    shoulder_lift: -12,
+    elbow_flex: 18,
+    wrist_flex: 25,
+    wrist_roll: 3,
+    gripper: 35,
+  },
 });
 elements.g3dExecutionReal.checked = true;
 assert.equal(context.g3dBuildTaskPayload().execution_mode, 'real');
@@ -151,6 +167,7 @@ context.g3dApplyTaskStatus({
   joints: {shoulder_pan: 8.5, gripper: 0},
 });
 assert.equal(applied.length, 1);
+assert.deepEqual(JSON.parse(JSON.stringify(context.G3D.currentJoints)), {shoulder_pan: 8.5, gripper: 0});
 assert.equal(elements.g3dRunTaskBtn.disabled, true);
 assert.equal(elements.g3dStopTaskBtn.style.display, '');
 assert.match(elements.g3dTaskStatus.textContent, /Moving to target/);

@@ -203,6 +203,79 @@ def test_generate3d_task_defaults_to_simulation_without_robot_hardware(monkeypat
     assert manager.status()["joints"] is not None
 
 
+def test_generate3d_simulation_uses_requested_current_pose_without_hardware(monkeypatch):
+    manager = setup_task_api(monkeypatch)
+    requested = {
+        "shoulder_pan": 4.0,
+        "shoulder_lift": -12.0,
+        "elbow_flex": 18.0,
+        "wrist_flex": 25.0,
+        "wrist_roll": 3.0,
+        "gripper": 35.0,
+    }
+    captured = []
+    monkeypatch.setattr(main, "robot_get_positions", lambda: (_ for _ in ()).throw(AssertionError("simulation read hardware")))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("simulation wrote hardware")))
+    monkeypatch.setattr(main, "_g3d_build_pick_place_plan", lambda *args, **kwargs: captured.append(dict(args[5])) or [])
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+        "execution_mode": "simulation",
+        "initial_joints": requested,
+    })
+    wait_until(lambda: not manager.status()["running"])
+
+    assert response.status_code == 200
+    assert captured == [requested]
+    assert manager.status()["joints"] == requested
+
+
+def test_generate3d_simulation_publishes_initial_pose_before_motion(monkeypatch):
+    initial = {name: float(index * 5) for index, name in enumerate(main.ROBOT_JOINTS)}
+    target = {**initial, "shoulder_pan": 20.0}
+    published = []
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_simulation(
+        [{"phase": "moving_to_source", "joints": target, "n_steps": 2}],
+        initial,
+        threading.Event(),
+        lambda phase, joints: published.append((phase, dict(joints))),
+    )
+
+    assert published[0] == ("starting", initial)
+    assert published[1][0] == "moving_to_source"
+
+
+def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    initial["gripper"] = 35.0
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, height_cm=0, calibration=None: {
+        "position_3d": [0.0, height_cm / 100, 0.0],
+        "joints": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": -height_cm,
+            "elbow_flex": 20.0,
+            "wrist_flex": 30.0,
+            "wrist_roll": 0.0,
+            "gripper": 35.0,
+        },
+    })
+
+    plan = main._g3d_build_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 1.0, 10.0, initial,
+    )
+    by_phase = {step["phase"]: step["joints"] for step in plan}
+
+    assert by_phase["opening_gripper"]["gripper"] == 50.0
+    assert by_phase["descending_to_source"]["gripper"] == 50.0
+    assert by_phase["releasing"]["gripper"] == 50.0
+    assert by_phase["lifting_after_release"]["gripper"] == 50.0
+
+
 def test_generate3d_task_rejects_unknown_execution_mode(monkeypatch):
     setup_task_api(monkeypatch)
     client = TestClient(main.app)
@@ -550,7 +623,7 @@ def test_pick_place_motion_publishes_measured_joints_for_each_phase(monkeypatch)
         "releasing",
         "lifting_after_release",
     ]
-    assert sent[-1]["gripper"] == 100.0
+    assert sent[-1]["gripper"] == main.G3D_TASK_OPEN_GRIPPER
     assert published[-1][1] == measured
 
     carrying = [joints for phase, joints in published if phase in {"lifting_source", "moving_to_target", "placing"}]
@@ -594,7 +667,7 @@ def test_pick_place_can_hold_current_joints_outside_planned_range_during_prepara
     assert sent
     assert sent[0]["shoulder_lift"] == -93.23
     assert sent[0]["gripper"] == 105.0
-    assert sent[-1]["gripper"] == 100.0
+    assert sent[-1]["gripper"] == main.G3D_TASK_OPEN_GRIPPER
 
 
 def test_pick_place_rejects_invalid_current_state_before_first_command(monkeypatch):
@@ -721,4 +794,4 @@ def test_pick_place_accepts_gripper_stopping_on_grasped_object(monkeypatch):
     )
 
     assert any(command["gripper"] == 0.0 for command in sent)
-    assert sent[-1]["gripper"] == 100.0
+    assert sent[-1]["gripper"] == main.G3D_TASK_OPEN_GRIPPER

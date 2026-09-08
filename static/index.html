@@ -11950,6 +11950,7 @@ const G3D = {
   objects: [],
   scene: null, camera: null, renderer: null, controls: null,
   robot: null, sceneObjects: [], inited: false,
+  currentJoints: {shoulder_pan:0, shoulder_lift:0, elbow_flex:0, wrist_flex:0, wrist_roll:0, gripper:50},
   taskPollTimer: null,
   taskRunning: false,
   instructionAuto: true,
@@ -12677,7 +12678,7 @@ function g3dInitScene() {
   G3D.robot = simCreateRobotArm(0x4488bb, 1.0);
   G3D.robot.rotation.x = -Math.PI / 2;
   G3D.scene.add(G3D.robot);
-  simApplyJoints(G3D.robot, [0, 0, 0, 0, 0, 50]);
+  simApplyJoints(G3D.robot, g3dJointArray(G3D.currentJoints));
 
   function loop() {
     requestAnimationFrame(loop);
@@ -12741,7 +12742,8 @@ function g3dPreviewObject(idx) {
   const obj = G3D.objects[idx];
   if (!obj || !obj.predicted_joints) return;
   g3dInitScene();
-  simApplyJoints(G3D.robot, g3dJointArray(obj.predicted_joints));
+  G3D.currentJoints = {...obj.predicted_joints};
+  simApplyJoints(G3D.robot, g3dJointArray(G3D.currentJoints));
   const p = obj.position_3d || [0, 0, 0];
   document.getElementById('g3dSceneInfo').textContent = `${obj.name}: x ${p[0].toFixed(3)}, z ${p[2].toFixed(3)}`;
 }
@@ -12778,13 +12780,15 @@ document.getElementById('g3dTaskInstruction').addEventListener('input', () => {
 });
 
 function g3dBuildTaskPayload() {
+  const executionMode = document.getElementById('g3dExecutionReal').checked ? 'real' : 'simulation';
   return {
     instruction: document.getElementById('g3dTaskInstruction').value.trim(),
     detection_id: G3D.detectionId,
     target_height_cm: parseFloat(document.getElementById('g3dTargetHeight').value) || 0,
     safety_height_cm: parseFloat(document.getElementById('g3dSafetyHeight').value) || 0,
     enforce_workspace: document.getElementById('g3dEnforceWorkspace').checked,
-    execution_mode: document.getElementById('g3dExecutionReal').checked ? 'real' : 'simulation',
+    execution_mode: executionMode,
+    ...(executionMode === 'simulation' ? {initial_joints:{...G3D.currentJoints}} : {}),
   };
 }
 
@@ -12816,7 +12820,8 @@ function g3dApplyTaskStatus(state) {
   stopButton.style.display = state.running ? '' : 'none';
   if (state.joints) {
     g3dInitScene();
-    simApplyJoints(G3D.robot, g3dJointArray(state.joints));
+    G3D.currentJoints = {...state.joints};
+    simApplyJoints(G3D.robot, g3dJointArray(G3D.currentJoints));
   }
   if (state.state === 'completed') status.textContent = 'Task completed';
   else if (state.state === 'failed') status.textContent = `Failed: ${state.error || 'Unknown error'}`;
@@ -12900,7 +12905,8 @@ async function g3dUseCurrentRobotState() {
     const r = await fetch('/api/generate3d/current-state');
     const d = await r.json();
     if (!d.ok) { st.textContent = d.error || 'Robot not connected'; return; }
-    simApplyJoints(G3D.robot, g3dJointArray(d.joints));
+    G3D.currentJoints = {...d.joints};
+    simApplyJoints(G3D.robot, g3dJointArray(G3D.currentJoints));
     const p = d.position_3d || [0, 0, 0];
     st.textContent = `Robot x:${p[0].toFixed(3)} z:${p[2].toFixed(3)}`;
   } catch (e) {

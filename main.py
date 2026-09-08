@@ -6827,6 +6827,7 @@ G3D_TASK_JOINT_LIMITS = {
     "wrist_roll": (-45.0, 45.0),
     "gripper": (0.0, 100.0),
 }
+G3D_TASK_OPEN_GRIPPER = 50.0
 
 
 def _g3d_validate_joint_target(joints: dict) -> None:
@@ -6890,19 +6891,19 @@ def _g3d_build_pick_place_plan(
         ),
     }
     source_approach = {**source_safe["joints"], "gripper": current["gripper"]}
-    opened_at_source = {**source_safe["joints"], "gripper": 100.0}
+    opened_at_source = {**source_safe["joints"], "gripper": G3D_TASK_OPEN_GRIPPER}
     _g3d_validate_preparation_target(raised, current)
     _g3d_validate_preparation_target(source_approach, current)
     _g3d_validate_joint_target(opened_at_source)
 
-    source_pick = {**source_low["joints"], "gripper": 100.0}
+    source_pick = {**source_low["joints"], "gripper": G3D_TASK_OPEN_GRIPPER}
     arm_names = ROBOT_JOINTS[:5]
     source_grasped = {**source_low["joints"], "gripper": 0.0}
     source_lifted = {**source_safe["joints"], "gripper": 0.0}
     target_approach = {**target_safe["joints"], "gripper": 0.0}
     target_place = {**target_low["joints"], "gripper": 0.0}
-    released = {**target_low["joints"], "gripper": 100.0}
-    final_waypoint = {**target_safe["joints"], "gripper": 100.0}
+    released = {**target_low["joints"], "gripper": G3D_TASK_OPEN_GRIPPER}
+    final_waypoint = {**target_safe["joints"], "gripper": G3D_TASK_OPEN_GRIPPER}
     for waypoint in (source_pick, source_grasped, source_lifted, target_approach, target_place, released, final_waypoint):
         _g3d_validate_joint_target(waypoint)
 
@@ -6938,6 +6939,7 @@ def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publis
 
 def _g3d_execute_simulation(plan: list[dict], initial_joints: dict, stop_event: threading.Event, publish) -> None:
     current = {name: float(initial_joints[name]) for name in ROBOT_JOINTS}
+    publish("starting", current)
     for step in plan:
         target = step["joints"]
         n_steps = max(1, int(step.get("n_steps", step.get("command_cycles", 10))))
@@ -6954,12 +6956,18 @@ def _g3d_execute_simulation(plan: list[dict], initial_joints: dict, stop_event: 
         current = {name: float(target[name]) for name in ROBOT_JOINTS}
 
 
-def _g3d_simulation_initial_joints(calibration: dict) -> dict:
-    for point in calibration.get("points", []):
-        joints = point.get("joints") if isinstance(point, dict) else None
-        if isinstance(joints, dict) and all(name in joints for name in ROBOT_JOINTS):
-            return {name: float(joints[name]) for name in ROBOT_JOINTS}
-    return {name: (50.0 if name == "gripper" else 0.0) for name in ROBOT_JOINTS}
+def _g3d_simulation_initial_joints(requested=None) -> dict:
+    if requested is None:
+        return {name: (50.0 if name == "gripper" else 0.0) for name in ROBOT_JOINTS}
+    if not isinstance(requested, dict):
+        raise ValueError("Simulation initial joints must be an object")
+    try:
+        joints = {name: float(requested[name]) for name in ROBOT_JOINTS}
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("Simulation initial joints must contain all robot joints")
+    if not all(math.isfinite(value) for value in joints.values()):
+        raise ValueError("Simulation initial joints must be finite numbers")
+    return joints
 
 
 def _g3d_execute_pick_place(
@@ -7049,6 +7057,10 @@ async def generate3d_task_start(request: Request):
     target_height_cm = max(0.0, min(target_height_cm, 30.0))
     safety_height_cm = max(target_height_cm, min(safety_height_cm, 40.0))
     calibration_snapshot = copy.deepcopy(g3d_calib_state)
+    try:
+        simulation_initial_joints = None if use_real_robot else _g3d_simulation_initial_joints(data.get("initial_joints"))
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_INITIAL_JOINTS", "error": str(exc)})
 
     hardware_acquired = False
     if use_real_robot and not acquire_robot_operation("generate3d"):
@@ -7070,7 +7082,7 @@ async def generate3d_task_start(request: Request):
                 )
             finally:
                 release_robot_operation("generate3d")
-        initial_joints = _g3d_simulation_initial_joints(calibration_snapshot)
+        initial_joints = simulation_initial_joints
         plan = _g3d_build_pick_place_plan(
             resolved_source,
             resolved_target,
