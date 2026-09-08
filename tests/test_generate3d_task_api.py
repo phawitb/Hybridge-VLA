@@ -227,6 +227,52 @@ def test_generate3d_detection_update_recomputes_bbox_center_and_world_position(m
     assert main.g3d_detection_state["objects"] == data["objects"]
 
 
+def test_generate3d_manual_detection_creates_scene_without_gemini(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, height_cm=0, calibration=None: {
+        "position_3d": [pixel[0] / 1000, 0.0, pixel[1] / 1000],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    main._g3d_invalidate_detection()
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/detection/manual", json={
+        "image_size": [800, 600],
+        "objects": [{
+            "name": "manual cube",
+            "bbox": [100, 120, 300, 320],
+            "color_hex": "#1a73e8",
+            "shape_3d": "box",
+            "estimated_size_cm": [3, 4, 5],
+        }],
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["detection_id"]
+    assert data["objects"][0]["center_pixel"] == [200.0, 220.0]
+    assert data["objects"][0]["position_3d"] == [0.2, 0.0, 0.22]
+    assert main.g3d_detection_state["image_size"] == [800, 600]
+    assert main.g3d_detection_state["calibration_revision"] == main._g3d_calibration_revision()
+
+
+def test_generate3d_manual_detection_rejects_duplicate_names(monkeypatch):
+    setup_task_api(monkeypatch)
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/detection/manual", json={
+        "image_size": [800, 600],
+        "objects": [
+            {"name": "cube", "bbox": [100, 100, 200, 200]},
+            {"name": " Cube ", "bbox": [300, 100, 400, 200]},
+        ],
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "DUPLICATE_OBJECT_NAME"
+
+
 def test_generate3d_detection_update_rejects_duplicate_names(monkeypatch):
     setup_task_api(monkeypatch)
     client = TestClient(main.app)

@@ -12209,12 +12209,21 @@ function g3dRenderedSceneIsCurrent() {
   return G3D.renderedGeneration === G3D.sceneGeneration && G3D.renderedDetectionId === G3D.detectionId;
 }
 
+function g3dCanAddObject() {
+  return !!G3D.imageElement
+    && Array.isArray(G3D.imageSize)
+    && G3D.imageSize.length >= 2
+    && g3dRenderedSceneIsCurrent()
+    && !G3D.taskRunning
+    && !G3D.editSyncing
+    && !G3D.sceneBusy;
+}
+
 function g3dCanRunTask() {
   return !G3D.taskRunning
     && !G3D.sceneBusy
     && !G3D.editSyncing
     && G3D.editsValid !== false
-    && G3D.hasRawDetection
     && !!G3D.detectionId
     && G3D.objects.length >= 2
     && g3dRenderedSceneIsCurrent();
@@ -12230,7 +12239,7 @@ function g3dSetSceneBusy(busy) {
   if (capture) capture.disabled = !!busy || G3D.taskRunning;
   if (input) input.disabled = !!busy || G3D.taskRunning;
   if (detect) detect.disabled = !!busy || G3D.taskRunning || !G3D.imageFile;
-  if (add) add.disabled = !!busy || G3D.taskRunning || !G3D.detectionId;
+  if (add) add.disabled = !g3dCanAddObject();
   if (run) run.disabled = !g3dCanRunTask();
   if (document.getElementById('g3dObjectsList')) g3dRenderObjectsList();
 }
@@ -12279,8 +12288,8 @@ function g3dDrawInputImage(b64, generation=G3D.sceneGeneration, detectionId=G3D.
       canvas.height = img.height;
       canvas.style.display = 'block';
       document.getElementById('g3dImagePlaceholder').style.display = 'none';
-      document.getElementById('g3dAddObjectBtn').disabled = !G3D.detectionId;
-      document.getElementById('g3dEditHint').style.display = G3D.detectionId ? 'block' : 'none';
+      document.getElementById('g3dAddObjectBtn').disabled = false;
+      document.getElementById('g3dEditHint').style.display = 'block';
       g3dRedrawImage();
       resolve(true);
     };
@@ -12372,7 +12381,7 @@ function g3dHitObject(point) {
 }
 
 function g3dToggleAddObject() {
-  if (!G3D.detectionId || !g3dRenderedSceneIsCurrent() || G3D.taskRunning || G3D.editSyncing || G3D.sceneBusy) return;
+  if (!g3dCanAddObject()) return;
   G3D.addObjectMode = !G3D.addObjectMode;
   const button = document.getElementById('g3dAddObjectBtn');
   button.textContent = G3D.addObjectMode ? 'Cancel drawing' : '+ Add Object';
@@ -12383,7 +12392,7 @@ function g3dToggleAddObject() {
 }
 
 function g3dEditorPointerDown(event) {
-  if (!G3D.detectionId || !g3dRenderedSceneIsCurrent() || G3D.taskRunning || G3D.editSyncing || G3D.sceneBusy) return;
+  if (!g3dCanAddObject()) return;
   const point = g3dCanvasPoint(event);
   if (G3D.addObjectMode) {
     G3D.editDrag = {mode:'create', start:point, current:point};
@@ -12449,9 +12458,10 @@ async function g3dEditorPointerUp(event) {
 }
 
 async function g3dSyncEditedObjects() {
-  if (!G3D.detectionId || G3D.editSyncing) return false;
+  if (G3D.editSyncing || !Array.isArray(G3D.imageSize) || G3D.imageSize.length < 2) return false;
   const generation = G3D.sceneGeneration;
   const submittedDetectionId = G3D.detectionId;
+  const creatingManualScene = !submittedDetectionId;
   G3D.editSyncing = true;
   G3D.editsValid = false;
   g3dSetTaskReady(false);
@@ -12460,10 +12470,12 @@ async function g3dSyncEditedObjects() {
   const status = document.getElementById('g3dSimStatus');
   status.textContent = 'Updating objects...';
   try {
-    const response = await fetch('/api/generate3d/detection/update', {
+    const response = await fetch(creatingManualScene ? '/api/generate3d/detection/manual' : '/api/generate3d/detection/update', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({detection_id:submittedDetectionId, objects:G3D.objects}),
+      body:JSON.stringify(creatingManualScene
+        ? {image_size:G3D.imageSize, objects:G3D.objects}
+        : {detection_id:submittedDetectionId, objects:G3D.objects}),
     });
     const data = await response.json();
     if (!g3dSceneIsCurrent(generation, submittedDetectionId)) return false;
@@ -12490,7 +12502,7 @@ async function g3dSyncEditedObjects() {
     G3D.editSyncing = false;
     g3dRenderObjectsList();
     g3dSetSceneBusy(false);
-    g3dSetTaskReady(G3D.hasRawDetection && G3D.objects.length >= 2);
+    g3dSetTaskReady(G3D.objects.length >= 2);
   }
 }
 
@@ -12580,7 +12592,7 @@ async function g3dDetectObjects() {
     g3dPlotObjects(G3D.objects);
     document.getElementById('g3dRawWrap').style.display = d.gemini_raw ? 'block' : 'none';
     document.getElementById('g3dRaw').textContent = d.gemini_raw || '';
-    g3dSetTaskReady(G3D.hasRawDetection && G3D.objects.length >= 2);
+    g3dSetTaskReady(G3D.objects.length >= 2);
     st.textContent = `Generated ${G3D.objects.length} objects (${d.elapsed}s)`;
   } catch (e) {
     if (g3dSceneIsCurrent(generation)) st.textContent = e.message;

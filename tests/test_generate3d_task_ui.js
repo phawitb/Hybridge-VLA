@@ -68,7 +68,7 @@ const context = {
   console,
 };
 vm.createContext(context);
-for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dApplyTaskStatus']) {
+for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanAddObject', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dApplyTaskStatus']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
 
@@ -78,6 +78,12 @@ assert.equal(context.g3dSceneIsCurrent(4, 'older'), false);
 assert.equal(context.g3dRenderedSceneIsCurrent(), true);
 context.G3D.renderedDetectionId = 'older';
 assert.equal(context.g3dRenderedSceneIsCurrent(), false);
+context.G3D.renderedDetectionId = 'det-1';
+context.G3D.imageElement = {};
+context.G3D.detectionId = null;
+context.G3D.renderedDetectionId = null;
+assert.equal(context.g3dCanAddObject(), true);
+context.G3D.detectionId = 'det-1';
 context.G3D.renderedDetectionId = 'det-1';
 assert.equal(context.g3dCanRunTask(), true);
 context.G3D.sceneBusy = true;
@@ -138,6 +144,7 @@ assert.equal(elements.g3dTaskStatus.textContent, 'Task completed');
 assert.match(extractFunction('g3dResumeTaskStatus'), /g3dPollTaskStatus/);
 
 assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(/);
+assert.match(extractFunction('g3dSyncEditedObjects'), /\/api\/generate3d\/detection\/manual/);
 assert.match(extractFunction('g3dRunTask'), /\/api\/generate3d\/task\/start/);
 assert.match(extractFunction('g3dStopTask'), /\/api\/generate3d\/task\/stop/);
 

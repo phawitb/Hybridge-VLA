@@ -7111,34 +7111,26 @@ No explanations, no markdown."""
     }
 
 
-@app.post("/api/generate3d/detection/update")
-async def generate3d_detection_update(request: Request):
-    """Validate edited object boxes and rebuild their calibrated positions."""
-    data = await request.json()
-    detection_id = str(data.get("detection_id", "")).strip()
-    if not detection_id or detection_id != g3d_detection_state.get("id"):
-        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Detected objects changed; reload them before editing"})
-    if g3d_task_manager.status().get("running"):
-        return JSONResponse(status_code=409, content={"ok": False, "code": "TASK_RUNNING", "error": "Stop the robot task before editing objects"})
-    if g3d_detection_state.get("calibration_revision") != _g3d_calibration_revision():
-        _g3d_invalidate_detection()
-        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Calibration changed; run Detect & Generate again"})
-
-    records = data.get("objects")
-    image_size = g3d_detection_state.get("image_size")
+def _g3d_rebuild_detection_objects(records, image_size):
     if not isinstance(records, list) or len(records) > 50 or not isinstance(image_size, list) or len(image_size) < 2:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECTS", "error": "Object list is invalid"})
-    img_w, img_h = int(image_size[0]), int(image_size[1])
+        raise TaskResolutionError("INVALID_OBJECTS", "Object list is invalid")
+    try:
+        width, height = float(image_size[0]), float(image_size[1])
+        if not all(math.isfinite(value) and 1 <= value <= 10000 for value in (width, height)):
+            raise ValueError
+        img_w, img_h = int(width), int(height)
+    except (TypeError, ValueError, OverflowError):
+        raise TaskResolutionError("INVALID_IMAGE_SIZE", "Image size is invalid")
     names = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
-            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECT", "error": f"Object {index + 1} is invalid"})
+            raise TaskResolutionError("INVALID_OBJECT", f"Object {index + 1} is invalid")
         name = " ".join(str(record.get("name", "")).strip().split())
         if not name or len(name) > 100:
-            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECT_NAME", "error": f"Object {index + 1} needs a name"})
+            raise TaskResolutionError("INVALID_OBJECT_NAME", f"Object {index + 1} needs a name")
         normalized_name = name.casefold()
         if normalized_name in names:
-            return JSONResponse(status_code=400, content={"ok": False, "code": "DUPLICATE_OBJECT_NAME", "error": "Object names must be unique"})
+            raise TaskResolutionError("DUPLICATE_OBJECT_NAME", "Object names must be unique")
         names.append(normalized_name)
 
     rebuilt = []
@@ -7158,11 +7150,11 @@ async def generate3d_detection_update(request: Request):
                 raise ValueError
             bbox = [round(x1), round(y1), round(x2), round(y2)]
         except (TypeError, ValueError, OverflowError):
-            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_BBOX", "error": f"Object {name} has an invalid bounding box"})
+            raise TaskResolutionError("INVALID_BBOX", f"Object {name} has an invalid bounding box")
         center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
         prediction = _g3d_predict_from_pixel(center, image_size=image_size)
         if not prediction:
-            return JSONResponse(status_code=400, content={"ok": False, "code": "PREDICTION_FAILED", "error": f"Could not position object {name}"})
+            raise TaskResolutionError("PREDICTION_FAILED", f"Could not position object {name}")
         size = record.get("estimated_size_cm")
         if not isinstance(size, list) or len(size) < 3:
             size = [3, 3, 3]
@@ -7198,14 +7190,54 @@ async def generate3d_detection_update(request: Request):
             "estimated_size_cm": size,
             "confidence": confidence,
         })
+    return rebuilt, [img_w, img_h]
 
-    new_detection_id = uuid.uuid4().hex
+
+def _g3d_store_detection(objects, image_size):
+    detection_id = uuid.uuid4().hex
     g3d_detection_state.update({
-        "id": new_detection_id,
-        "objects": rebuilt,
-        "image_size": [img_w, img_h],
+        "id": detection_id,
+        "objects": objects,
+        "image_size": image_size,
         "calibration_revision": _g3d_calibration_revision(),
     })
+    return detection_id
+
+
+@app.post("/api/generate3d/detection/manual")
+async def generate3d_detection_manual(request: Request):
+    if not g3d_calib_state.get("model"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "NOT_CALIBRATED", "error": "Generate 3D calibration is not computed"})
+    if g3d_task_manager.status().get("running"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "TASK_RUNNING", "error": "Stop the task before editing objects"})
+    data = await request.json()
+    try:
+        rebuilt, image_size = _g3d_rebuild_detection_objects(data.get("objects"), data.get("image_size"))
+    except TaskResolutionError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+    detection_id = _g3d_store_detection(rebuilt, image_size)
+    return {"ok": True, "objects": rebuilt, "detection_id": detection_id}
+
+
+@app.post("/api/generate3d/detection/update")
+async def generate3d_detection_update(request: Request):
+    """Validate edited object boxes and rebuild their calibrated positions."""
+    data = await request.json()
+    detection_id = str(data.get("detection_id", "")).strip()
+    if not detection_id or detection_id != g3d_detection_state.get("id"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Detected objects changed; reload them before editing"})
+    if g3d_task_manager.status().get("running"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "TASK_RUNNING", "error": "Stop the robot task before editing objects"})
+    if g3d_detection_state.get("calibration_revision") != _g3d_calibration_revision():
+        _g3d_invalidate_detection()
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Calibration changed; run Detect & Generate again"})
+
+    try:
+        rebuilt, image_size = _g3d_rebuild_detection_objects(data.get("objects"), g3d_detection_state.get("image_size"))
+    except TaskResolutionError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+
+    new_detection_id = _g3d_store_detection(rebuilt, image_size)
     return {"ok": True, "objects": rebuilt, "detection_id": new_detection_id}
 
 
