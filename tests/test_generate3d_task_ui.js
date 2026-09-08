@@ -26,12 +26,13 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 
 const elements = {
   g3dTaskInstruction: {value: ''},
+  g3dEnforceWorkspace: {checked: true},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
   g3dTaskStatus: {textContent: '', style: {}},
@@ -94,7 +95,10 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   detection_id: 'det-1',
   target_height_cm: 1,
   safety_height_cm: 10,
+  enforce_workspace: true,
 });
+elements.g3dEnforceWorkspace.checked = false;
+assert.equal(context.g3dBuildTaskPayload().enforce_workspace, false);
 
 elements.g3dTaskInstruction.value = 'custom instruction';
 context.G3D.instructionAuto = false;

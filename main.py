@@ -6255,6 +6255,7 @@ async def calibrate_move_to(request: Request):
 # ══════════ Generate 3D calibration + image-to-world mapping ══════════
 
 G3D_CALIB_FILE = ROOT / "data" / "generate3d_calibration.json"
+G3D_WORKSPACE_MARGIN = 0.03
 
 g3d_calib_state = {
     "points": [],
@@ -6326,18 +6327,28 @@ def _g3d_point_in_calibrated_workspace(pixel, image_size) -> bool:
         return False
     width, height = _g3d_image_size(image_size)
     point = (float(pixel[0]) / width, float(pixel[1]) / height)
-    sign = None
+    crosses = []
     for index, start in enumerate(hull):
         end = hull[(index + 1) % len(hull)]
         cross = (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0])
-        if abs(cross) <= 1e-9:
-            continue
-        current_sign = cross > 0
-        if sign is None:
-            sign = current_sign
-        elif current_sign != sign:
-            return False
-    return True
+        crosses.append(cross)
+    if all(cross >= -1e-9 for cross in crosses) or all(cross <= 1e-9 for cross in crosses):
+        return True
+
+    minimum_distance = math.inf
+    for index, start in enumerate(hull):
+        end = hull[(index + 1) % len(hull)]
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1e-18:
+            distance = math.hypot(point[0] - start[0], point[1] - start[1])
+        else:
+            projection = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared
+            projection = max(0.0, min(1.0, projection))
+            nearest = (start[0] + projection * dx, start[1] + projection * dy)
+            distance = math.hypot(point[0] - nearest[0], point[1] - nearest[1])
+        minimum_distance = min(minimum_distance, distance)
+    return minimum_distance <= G3D_WORKSPACE_MARGIN
 
 
 def load_g3d_calibration():
@@ -6926,7 +6937,8 @@ async def generate3d_task_start(request: Request):
         source, target = resolve_pick_place_objects(instruction, objects)
     except TaskResolutionError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
-    if not all(_g3d_point_in_calibrated_workspace(obj["center_pixel"], image_size) for obj in (source, target)):
+    enforce_workspace = data.get("enforce_workspace", True) is not False
+    if enforce_workspace and not all(_g3d_point_in_calibrated_workspace(obj["center_pixel"], image_size) for obj in (source, target)):
         return JSONResponse(status_code=400, content={
             "ok": False,
             "code": "OUTSIDE_CALIBRATED_WORKSPACE",

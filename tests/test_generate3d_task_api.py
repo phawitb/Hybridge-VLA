@@ -144,11 +144,49 @@ def test_generate3d_task_start_rejects_object_outside_calibrated_workspace(monke
     assert response.json()["code"] == "OUTSIDE_CALIBRATED_WORKSPACE"
 
 
+def test_generate3d_task_start_can_disable_workspace_enforcement(monkeypatch):
+    manager = setup_task_api(monkeypatch)
+    main.g3d_calib_state["points"] = [
+        {"pixel": [0, 0]},
+        {"pixel": [300, 0]},
+        {"pixel": [0, 300]},
+    ]
+    main.g3d_detection_state["calibration_revision"] = main._g3d_calibration_revision()
+    monkeypatch.setattr(main, "_g3d_execute_pick_place", lambda *args, **kwargs: None)
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+        "enforce_workspace": False,
+    })
+    wait_until(lambda: not manager.status()["running"])
+
+    assert response.status_code == 200
+    assert manager.status()["state"] == "completed"
+
+
 def test_calibrated_workspace_hull_normalizes_different_image_sizes(monkeypatch):
     setup_task_api(monkeypatch)
 
     assert main._g3d_point_in_calibrated_workspace([800, 300], [1600, 1200]) is True
     assert main._g3d_point_in_calibrated_workspace([1700, 300], [1600, 1200]) is False
+
+
+def test_calibrated_workspace_allows_small_margin_around_sample_hull(monkeypatch):
+    setup_task_api(monkeypatch)
+    main.g3d_calib_state["last_image_size"] = [640, 480]
+    main.g3d_calib_state["points"] = [
+        {"pixel": [275, 224]},
+        {"pixel": [401, 176]},
+        {"pixel": [503, 105]},
+        {"pixel": [585, 214]},
+        {"pixel": [337, 357]},
+        {"pixel": [463, 283]},
+    ]
+
+    assert main._g3d_point_in_calibrated_workspace([508.5, 95], [640, 480]) is True
+    assert main._g3d_point_in_calibrated_workspace([331.5, 186], [640, 480]) is True
 
 
 def test_generate3d_calibration_mutation_invalidates_detection(monkeypatch):
