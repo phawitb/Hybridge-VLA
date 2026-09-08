@@ -629,6 +629,36 @@ def test_task_move_waits_for_measured_convergence(monkeypatch):
     assert abs(measured["shoulder_pan"] - 10.0) <= 0.2
 
 
+def test_waypoint_timeout_scales_with_joint_delta_and_stays_bounded():
+    current = {name: 0.0 for name in main.ROBOT_JOINTS}
+
+    small = main._g3d_waypoint_timeout(current, {**current, "shoulder_pan": 5.0}, main.ROBOT_JOINTS[:5])
+    large = main._g3d_waypoint_timeout(current, {**current, "shoulder_pan": 100.0}, main.ROBOT_JOINTS[:5])
+
+    assert small == 3.5
+    assert large == 8.0
+
+
+def test_task_move_timeout_reports_unconverged_joint_details(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    target = {**measured, "shoulder_pan": 10.0}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        main._g3d_task_move(target, "moving_to_source", threading.Event(), lambda phase, joints: None, n_steps=1)
+
+    message = str(exc_info.value)
+    assert "moving_to_source" in message
+    assert "shoulder_pan" in message
+    assert "target=10.00" in message
+    assert "measured=0.00" in message
+    assert "error=10.00" in message
+
+
 def test_pick_place_accepts_gripper_stopping_on_grasped_object(monkeypatch):
     measured = {name: 0.0 for name in main.ROBOT_JOINTS}
     measured["gripper"] = 100.0

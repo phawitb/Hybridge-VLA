@@ -6741,6 +6741,16 @@ async def generate3d_current_state():
     return {"ok": True, "joints": joints, "position_3d": _g3d_position_from_joints(joints)}
 
 
+def _g3d_waypoint_timeout(current: dict, target: dict, checked_names) -> float:
+    deltas = [
+        abs(float(target[name]) - float(current[name]))
+        for name in checked_names
+        if name in current and name in target
+    ]
+    max_delta = max(deltas, default=0.0)
+    return max(3.0, min(8.0, 3.0 + max_delta / 10.0))
+
+
 def _g3d_task_move(
     target: dict,
     phase: str,
@@ -6748,7 +6758,7 @@ def _g3d_task_move(
     publish,
     n_steps: int = 15,
     tolerance_deg: float = 2.0,
-    waypoint_timeout: float = 2.0,
+    waypoint_timeout: float | None = None,
     convergence_names=None,
 ) -> bool:
     current = robot_get_positions()
@@ -6765,7 +6775,8 @@ def _g3d_task_move(
                 if name == "gripper"
                 else round(current[name] + ratio * (target[name] - current[name]), 2)
             )
-        deadline = time.monotonic() + waypoint_timeout
+        timeout = _g3d_waypoint_timeout(current, waypoint, checked_names) if waypoint_timeout is None else float(waypoint_timeout)
+        deadline = time.monotonic() + timeout
         while True:
             if stop_event.is_set():
                 return False
@@ -6776,7 +6787,17 @@ def _g3d_task_move(
             if all(abs(float(measured[name]) - float(waypoint[name])) <= tolerance_deg for name in checked_names):
                 break
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Robot did not reach the {phase} waypoint before timeout")
+                residuals = []
+                for name in checked_names:
+                    target_value = float(waypoint[name])
+                    measured_value = float(measured[name])
+                    error = abs(measured_value - target_value)
+                    if error > tolerance_deg:
+                        residuals.append(
+                            f"{name}(target={target_value:.2f}, measured={measured_value:.2f}, error={error:.2f})"
+                        )
+                details = ", ".join(residuals) or "no measured joint converged"
+                raise RuntimeError(f"Robot did not reach the {phase} waypoint before timeout: {details}")
     return True
 
 
