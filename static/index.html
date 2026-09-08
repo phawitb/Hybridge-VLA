@@ -2311,6 +2311,16 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <div class="collapse-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="cursor:pointer;font-size:0.8rem;color:#1a73e8;user-select:none">Gemini Raw Output &#9660;</div>
             <pre id="g3dRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
           </div>
+          <div id="g3dTaskControls" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid #e5e5e5">
+            <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
+            <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl">
+            <div id="g3dTaskHint" style="font-size:0.74rem;color:#777;margin-top:5px">Mention exactly two detected object names: source first, target second.</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+              <button class="btn btn-sm" id="g3dRunTaskBtn" onclick="g3dRunTask()" disabled>Run Task</button>
+              <button class="btn btn-sm btn-danger" id="g3dStopTaskBtn" onclick="g3dStopTask()" style="display:none">Stop</button>
+              <span id="g3dTaskStatus" style="font-size:0.8rem;color:#666"></span>
+            </div>
+          </div>
         </div>
 
         <div class="config-card">
@@ -3788,6 +3798,7 @@ function setupEvents() {
       }
       if (el.dataset.tab === 'generate3d') {
         g3dLoadCalibrationStatus();
+        g3dResumeTaskStatus();
         setTimeout(() => {
           if (G3D.inited) {
             const canvas = document.getElementById('g3dCanvas');
@@ -3813,6 +3824,7 @@ function setupEvents() {
       if (el.dataset.inner === 'sim-objdet') odLoadDatasets();
       if (el.dataset.inner === 'g3d-sim') {
         g3dInitScene();
+        g3dResumeTaskStatus();
         setTimeout(() => {
           const canvas = document.getElementById('g3dCanvas');
           G3D.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
@@ -11916,9 +11928,12 @@ const G3D = {
   imageSize: null,
   imageFile: null,
   imageB64: '',
+  detectionId: null,
   objects: [],
   scene: null, camera: null, renderer: null, controls: null,
   robot: null, sceneObjects: [], inited: false,
+  taskPollTimer: null,
+  taskRunning: false,
 };
 
 const G3D_COLORS = ['#e8453c', '#1a73e8', '#34a853', '#f9ab00', '#9c27b0', '#00acc1', '#ff7043', '#607d8b'];
@@ -12174,6 +12189,9 @@ async function g3dCaptureSceneImage() {
     G3D.imageFile = g3dB64ToFile(d.image, 'topview.jpg');
     G3D.imageB64 = d.image;
     G3D.imageSize = [d.image_width, d.image_height];
+    G3D.objects = [];
+    G3D.detectionId = null;
+    g3dSetTaskReady(false);
     g3dDrawInputImage(d.image);
     document.getElementById('g3dDetectBtn').disabled = false;
     st.textContent = `Captured ${d.image_width}x${d.image_height}`;
@@ -12218,6 +12236,9 @@ document.getElementById('g3dImageInput').addEventListener('change', function() {
   reader.onload = () => {
     const dataUrl = reader.result;
     G3D.imageB64 = String(dataUrl).split(',')[1] || '';
+    G3D.objects = [];
+    G3D.detectionId = null;
+    g3dSetTaskReady(false);
     g3dDrawInputImage(G3D.imageB64);
     document.getElementById('g3dDetectBtn').disabled = false;
     document.getElementById('g3dSimStatus').textContent = file.name;
@@ -12238,6 +12259,7 @@ async function g3dDetectObjects() {
     const d = await r.json();
     if (!d.ok) { st.textContent = d.error || 'Detection failed'; btn.disabled = false; return; }
     G3D.objects = d.objects || [];
+    G3D.detectionId = d.detection_id || null;
     G3D.imageB64 = d.frame_image_b64 || G3D.imageB64;
     G3D.imageSize = [d.image_width, d.image_height];
     g3dDrawInputImage(G3D.imageB64, G3D.objects);
@@ -12245,6 +12267,7 @@ async function g3dDetectObjects() {
     g3dPlotObjects(G3D.objects);
     document.getElementById('g3dRawWrap').style.display = d.gemini_raw ? 'block' : 'none';
     document.getElementById('g3dRaw').textContent = d.gemini_raw || '';
+    g3dSetTaskReady(!!d.gemini_raw && G3D.objects.length >= 2);
     st.textContent = `Generated ${G3D.objects.length} objects (${d.elapsed}s)`;
   } catch (e) {
     st.textContent = e.message;
@@ -12379,6 +12402,130 @@ function g3dPreviewObject(idx) {
   document.getElementById('g3dSceneInfo').textContent = `${obj.name}: x ${p[0].toFixed(3)}, z ${p[2].toFixed(3)}`;
 }
 
+function g3dSetTaskReady(ready) {
+  const controls = document.getElementById('g3dTaskControls');
+  const button = document.getElementById('g3dRunTaskBtn');
+  if (!controls || !button) return;
+  controls.style.display = ready || G3D.taskRunning ? 'block' : 'none';
+  button.disabled = !ready || !!G3D.taskRunning;
+  if (!ready) document.getElementById('g3dTaskStatus').textContent = '';
+  if (ready) {
+    const names = G3D.objects.map(object => object.name).filter(Boolean);
+    document.getElementById('g3dTaskHint').textContent = `Use exactly two names, source first: ${names.join(', ')}`;
+    if (names.length >= 2 && !document.getElementById('g3dTaskInstruction').value.trim()) {
+      document.getElementById('g3dTaskInstruction').placeholder = `pick up ${names[0]} to ${names[1]}`;
+    }
+  }
+}
+
+function g3dBuildTaskPayload() {
+  return {
+    instruction: document.getElementById('g3dTaskInstruction').value.trim(),
+    detection_id: G3D.detectionId,
+    target_height_cm: parseFloat(document.getElementById('g3dTargetHeight').value) || 0,
+    safety_height_cm: parseFloat(document.getElementById('g3dSafetyHeight').value) || 0,
+  };
+}
+
+function g3dTaskPhaseLabel(phase) {
+  const labels = {
+    starting: 'Starting',
+    opening_gripper: 'Opening gripper',
+    raising_to_safety: 'Raising to safety height',
+    moving_to_source: 'Moving to source',
+    descending_to_source: 'Descending to source',
+    grasping: 'Grasping source',
+    lifting_source: 'Lifting source',
+    moving_to_target: 'Moving to target',
+    placing: 'Placing at target',
+    releasing: 'Releasing object',
+    lifting_after_release: 'Lifting after release',
+  };
+  return labels[phase] || phase || 'Idle';
+}
+
+function g3dApplyTaskStatus(state) {
+  const status = document.getElementById('g3dTaskStatus');
+  const runButton = document.getElementById('g3dRunTaskBtn');
+  const stopButton = document.getElementById('g3dStopTaskBtn');
+  G3D.taskRunning = !!state.running;
+  if (state.state && state.state !== 'idle') document.getElementById('g3dTaskControls').style.display = 'block';
+  runButton.disabled = !!state.running || G3D.objects.length < 2;
+  stopButton.style.display = state.running ? '' : 'none';
+  if (state.joints) {
+    g3dInitScene();
+    simApplyJoints(G3D.robot, g3dJointArray(state.joints));
+  }
+  if (state.state === 'completed') status.textContent = 'Task completed';
+  else if (state.state === 'failed') status.textContent = `Failed: ${state.error || 'Unknown error'}`;
+  else if (state.state === 'stopped') status.textContent = 'Task stopped';
+  else status.textContent = g3dTaskPhaseLabel(state.phase);
+  if (state.source && state.target) {
+    document.getElementById('g3dSceneInfo').textContent = `${state.source.name} → ${state.target.name} · ${g3dTaskPhaseLabel(state.phase)}`;
+  }
+}
+
+async function g3dPollTaskStatus() {
+  try {
+    const state = await fetch('/api/generate3d/task/status').then(response => response.json());
+    g3dApplyTaskStatus(state);
+    if (!state.running && G3D.taskPollTimer) {
+      clearInterval(G3D.taskPollTimer);
+      G3D.taskPollTimer = null;
+    }
+  } catch (error) {
+    document.getElementById('g3dTaskStatus').textContent = error.message;
+  }
+}
+
+async function g3dResumeTaskStatus() {
+  try {
+    const state = await fetch('/api/generate3d/task/status').then(response => response.json());
+    if (state.state === 'idle') return;
+    g3dApplyTaskStatus(state);
+    if (state.running && !G3D.taskPollTimer) {
+      G3D.taskPollTimer = setInterval(g3dPollTaskStatus, 100);
+    }
+  } catch (_) {}
+}
+
+async function g3dRunTask() {
+  const payload = g3dBuildTaskPayload();
+  const status = document.getElementById('g3dTaskStatus');
+  if (!payload.instruction) {
+    status.textContent = 'Enter a task instruction.';
+    return;
+  }
+  document.getElementById('g3dRunTaskBtn').disabled = true;
+  status.textContent = 'Starting...';
+  try {
+    const response = await fetch('/api/generate3d/task/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const state = await response.json();
+    if (!response.ok || !state.ok) throw new Error(state.error || 'Could not start task');
+    g3dApplyTaskStatus(state);
+    if (G3D.taskPollTimer) clearInterval(G3D.taskPollTimer);
+    G3D.taskPollTimer = setInterval(g3dPollTaskStatus, 100);
+    g3dPollTaskStatus();
+  } catch (error) {
+    status.textContent = error.message;
+    document.getElementById('g3dRunTaskBtn').disabled = false;
+  }
+}
+
+async function g3dStopTask() {
+  document.getElementById('g3dTaskStatus').textContent = 'Stopping...';
+  try {
+    const state = await fetch('/api/generate3d/task/stop', {method:'POST'}).then(response => response.json());
+    g3dApplyTaskStatus(state);
+  } catch (error) {
+    document.getElementById('g3dTaskStatus').textContent = error.message;
+  }
+}
+
 async function g3dUseCurrentRobotState() {
   g3dInitScene();
   const st = document.getElementById('g3dSimStatus');
@@ -12396,6 +12543,7 @@ async function g3dUseCurrentRobotState() {
 }
 
 g3dLoadCalibrationStatus();
+g3dResumeTaskStatus();
 
 // ════════════════════════════════════════════════════
 // ══ Object Detection subtab

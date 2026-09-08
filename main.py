@@ -1,11 +1,14 @@
 import asyncio
 import base64
+import copy
+import hashlib
 import io
 import json
 import math
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -22,6 +25,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSock
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from generate3d_task import Generate3DTaskManager, TaskResolutionError, resolve_pick_place_objects
 from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
 from planner_config import (
     execution_loop_settings,
@@ -37,6 +41,30 @@ from verified_execution import VerifiedExecutionManager
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
+
+robot_io_lock = threading.RLock()
+robot_operation_lock = threading.Lock()
+robot_operation_owner = None
+
+
+class RobotBusyError(RuntimeError):
+    pass
+
+
+def acquire_robot_operation(owner: str) -> bool:
+    global robot_operation_owner
+    with robot_operation_lock:
+        if robot_operation_owner is not None:
+            return False
+        robot_operation_owner = owner
+        return True
+
+
+def release_robot_operation(owner: str) -> None:
+    global robot_operation_owner
+    with robot_operation_lock:
+        if robot_operation_owner == owner:
+            robot_operation_owner = None
 
 
 def load_config():
@@ -102,7 +130,15 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
 vla_manager = VlaProcessManager(max_log_lines=500)
-verified_manager = VerifiedExecutionManager(on_terminal=vla_manager.stop)
+
+
+def _verified_run_terminal():
+    vla_manager.stop()
+    release_robot_operation("verified_run")
+
+
+verified_manager = VerifiedExecutionManager(on_terminal=_verified_run_terminal)
+g3d_task_manager = Generate3DTaskManager()
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="images")
 app.mount("/data", StaticFiles(directory=str(ROOT / "data")), name="dataset-files")
@@ -1162,6 +1198,8 @@ def connect_robot():
 
 def disconnect_robot():
     """Disconnect robot + release cameras. Waits for camera threads to finish."""
+    if robot_operation_owner == "generate3d" and g3d_task_manager.status().get("running"):
+        g3d_task_manager.stop()
     # Signal all camera threads to stop
     for name, st in list(cam_state.items()):
         st["running"] = False
@@ -1171,30 +1209,37 @@ def disconnect_robot():
     cam_state.clear()
 
     # Disconnect robot
-    rob = robot_state["robot"]
-    if rob:
-        try:
-            rob.disconnect()
-        except Exception:
-            pass
-    robot_state["robot"] = None
-    robot_state["connected"] = False
+    with robot_io_lock:
+        rob = robot_state["robot"]
+        if rob:
+            try:
+                rob.disconnect()
+            except Exception:
+                pass
+        robot_state["robot"] = None
+        robot_state["connected"] = False
     print("[Camera Calibrate] Robot disconnected")
 
 
 def robot_get_positions():
-    rob = robot_state["robot"]
-    obs = rob.get_observation()
-    return {j: round(float(obs[f"{j}.pos"]), 2) for j in ROBOT_JOINTS}
+    with robot_io_lock:
+        rob = robot_state["robot"]
+        obs = rob.get_observation()
+        return {j: round(float(obs[f"{j}.pos"]), 2) for j in ROBOT_JOINTS}
 
 
-def robot_send_positions(positions):
-    rob = robot_state["robot"]
-    obs = rob.get_observation()
-    action = {f"{j}.pos": float(obs[f"{j}.pos"]) for j in ROBOT_JOINTS}
-    for j, v in positions.items():
-        action[f"{j}.pos"] = float(v)
-    rob.send_action(action)
+def robot_send_positions(positions, owner=None):
+    with robot_operation_lock:
+        active_owner = robot_operation_owner
+    if active_owner is not None and active_owner != owner:
+        raise RobotBusyError(f"Robot hardware is busy with {active_owner}")
+    with robot_io_lock:
+        rob = robot_state["robot"]
+        obs = rob.get_observation()
+        action = {f"{j}.pos": float(obs[f"{j}.pos"]) for j in ROBOT_JOINTS}
+        for j, v in positions.items():
+            action[f"{j}.pos"] = float(v)
+        rob.send_action(action)
 
 
 @app.websocket("/ws/robot")
@@ -1250,11 +1295,15 @@ async def ws_robot(websocket: WebSocket):
             elif t == "read":
                 await websocket.send_json({"type": "positions", "data": robot_get_positions()})
             elif t == "torque":
-                rob = robot_state["robot"]
-                if data["enabled"]:
-                    rob.bus.enable_torque()
-                else:
-                    rob.bus.disable_torque()
+                with robot_operation_lock:
+                    if robot_operation_owner is not None:
+                        raise RobotBusyError(f"Robot hardware is busy with {robot_operation_owner}")
+                with robot_io_lock:
+                    rob = robot_state["robot"]
+                    if data["enabled"]:
+                        rob.bus.enable_torque()
+                    else:
+                        rob.bus.disable_torque()
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -6160,66 +6209,47 @@ async def calibrate_move_to(request: Request):
     target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=height_cm)
     if target is None:
         return {"ok": False, "error": "Interpolation failed — need 4 valid calibration points"}
+    if not acquire_robot_operation("calibration"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
+    try:
+        current = robot_get_positions()
+        target["gripper"] = current["gripper"]
+        safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
+        sl_safe = safe_target["shoulder_lift"] if safe_target else target["shoulder_lift"]
+        sl_start = current["shoulder_lift"]
+        sl_end = target["shoulder_lift"]
+        path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
 
-    current = robot_get_positions()
+        if path_safe:
+            robot_send_positions(target, owner="calibration")
+            return {
+                "ok": True, "pixel": pixel, "target_joints": target,
+                "path": "direct", "safety_height_cm": safety_cm,
+            }
 
-    # Preserve current gripper position — reach does not touch gripper
-    target["gripper"] = current["gripper"]
-
-    # Compute the safety threshold for shoulder_lift
-    # Lower shoulder_lift = arm higher.  sl_safe is the max allowed value.
-    safe_target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=safety_cm)
-    sl_safe = safe_target["shoulder_lift"] if safe_target else target["shoulder_lift"]
-
-    sl_start = current["shoulder_lift"]
-    sl_end = target["shoulder_lift"]
-
-    # Check if the direct linear path is already safe
-    # (both endpoints and everything in between stay ≤ sl_safe)
-    path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
-
-    if path_safe:
-        # Direct move — no safety concern
-        robot_send_positions(target)
+        sl_max = max(sl_start, sl_end)
+        overshoot = max(0.0, sl_max - sl_safe)
+        bump_height = min(overshoot + 2.0, 10.0)
+        joint_names = list(current.keys())
+        step_ms = 40
+        for i in range(1, n_steps + 1):
+            t = i / n_steps
+            wp = {}
+            for j in joint_names:
+                wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
+            bump = bump_height * math.sin(math.pi * t)
+            wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
+            robot_send_positions(wp, owner="calibration")
+            await asyncio.sleep(step_ms / 1000.0)
+        robot_send_positions(target, owner="calibration")
         return {
             "ok": True, "pixel": pixel, "target_joints": target,
-            "path": "direct", "safety_height_cm": safety_cm,
+            "path": "arc", "n_steps": n_steps,
+            "bump_height": round(bump_height, 2),
+            "safety_height_cm": safety_cm,
         }
-
-    # ── Smooth arc path ──
-    # All joints: linear interpolation current → target
-    # shoulder_lift: linear - bump(t)
-    #   bump(t) = bump_height × sin(πt)   → 0 at endpoints, max at midpoint
-    # bump_height = just enough to clear safety + small margin
-
-    sl_max = max(sl_start, sl_end)
-    overshoot = max(0.0, sl_max - sl_safe)
-    bump_height = min(overshoot + 2.0, 10.0)  # cap at 10° to prevent folding backward
-
-    joint_names = list(current.keys())
-    step_ms = 40
-
-    for i in range(1, n_steps + 1):
-        t = i / n_steps
-        wp = {}
-        for j in joint_names:
-            wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
-
-        bump = bump_height * math.sin(math.pi * t)
-        wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
-
-        robot_send_positions(wp)
-        await asyncio.sleep(step_ms / 1000.0)
-
-    # Final — ensure exact target
-    robot_send_positions(target)
-
-    return {
-        "ok": True, "pixel": pixel, "target_joints": target,
-        "path": "arc", "n_steps": n_steps,
-        "bump_height": round(bump_height, 2),
-        "safety_height_cm": safety_cm,
-    }
+    finally:
+        release_robot_operation("calibration")
 
 
 # ══════════ Generate 3D calibration + image-to-world mapping ══════════
@@ -6231,6 +6261,83 @@ g3d_calib_state = {
     "model": None,
     "last_image_size": None,
 }
+g3d_detection_state = {"id": None, "objects": [], "image_size": None, "calibration_revision": None}
+
+
+def _g3d_calibration_revision() -> str:
+    snapshot = {
+        "points": g3d_calib_state.get("points", []),
+        "model": g3d_calib_state.get("model"),
+        "last_image_size": g3d_calib_state.get("last_image_size"),
+    }
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _g3d_invalidate_detection() -> None:
+    g3d_detection_state.update({
+        "id": None,
+        "objects": [],
+        "image_size": None,
+        "calibration_revision": None,
+    })
+
+
+def _g3d_calibration_hull() -> list[tuple[float, float]]:
+    calibration_size = _g3d_image_size(
+        (g3d_calib_state.get("model") or {}).get("image_size")
+        or g3d_calib_state.get("last_image_size")
+    )
+    width, height = calibration_size
+    points = []
+    for record in g3d_calib_state.get("points", []):
+        pixel = record.get("pixel") if isinstance(record, dict) else None
+        if isinstance(pixel, (list, tuple)) and len(pixel) >= 2:
+            try:
+                point = (float(pixel[0]) / width, float(pixel[1]) / height)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if all(math.isfinite(value) for value in point):
+                points.append(point)
+    points = sorted(set(points))
+    if len(points) < 3:
+        return []
+
+    def cross(origin, a, b):
+        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
+
+    lower = []
+    for point in points:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    upper = []
+    for point in reversed(points):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    hull = lower[:-1] + upper[:-1]
+    return hull if len(hull) >= 3 else []
+
+
+def _g3d_point_in_calibrated_workspace(pixel, image_size) -> bool:
+    hull = _g3d_calibration_hull()
+    if not hull:
+        return False
+    width, height = _g3d_image_size(image_size)
+    point = (float(pixel[0]) / width, float(pixel[1]) / height)
+    sign = None
+    for index, start in enumerate(hull):
+        end = hull[(index + 1) % len(hull)]
+        cross = (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0])
+        if abs(cross) <= 1e-9:
+            continue
+        current_sign = cross > 0
+        if sign is None:
+            sign = current_sign
+        elif current_sign != sign:
+            return False
+    return True
 
 
 def load_g3d_calibration():
@@ -6322,7 +6429,7 @@ def _g3d_fit_model(points, model_type="auto", image_size=None):
     }, None
 
 
-def _g3d_ik_solve(target_pos):
+def _g3d_ik_solve(target_pos, calibration=None):
     """Numerical IK solver using multi-start L-BFGS-B.
     Tries all calibration points as starting guesses and picks the best result.
     target_pos: [x, y, z] in URDF frame (Z-up).
@@ -6330,7 +6437,8 @@ def _g3d_ik_solve(target_pos):
     from scipy.optimize import minimize
 
     target = np.array(target_pos, dtype=np.float64)
-    points = g3d_calib_state.get("points", [])
+    calibration = calibration or g3d_calib_state
+    points = calibration.get("points", [])
     if not points:
         return None
 
@@ -6363,8 +6471,9 @@ def _g3d_ik_solve(target_pos):
     return best_q
 
 
-def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
-    model = g3d_calib_state.get("model")
+def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=None):
+    calibration = calibration or g3d_calib_state
+    model = calibration.get("model")
     if not model:
         return None
     image_size = _g3d_image_size(image_size)
@@ -6372,7 +6481,7 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
     world_xz = basis @ np.array(model["world_coeff"], dtype=np.float64)
 
     # Compute default height (y in Three.js) from calibration points mean
-    points = g3d_calib_state.get("points", [])
+    points = calibration.get("points", [])
     if points:
         default_y = float(np.mean([p["position_3d"][1] for p in points]))
     else:
@@ -6389,7 +6498,7 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0):
     target_urdf = [target_3d[0], -target_3d[2], target_3d[1]]
 
     # Use multi-start IK solver
-    ik_result = _g3d_ik_solve(target_urdf)
+    ik_result = _g3d_ik_solve(target_urdf, calibration=calibration)
 
     if ik_result is not None:
         joints = {}
@@ -6476,6 +6585,7 @@ async def generate3d_calibration_capture():
         return {"ok": False, "error": "No frame available"}
     h, w = f.shape[:2]
     g3d_calib_state["last_image_size"] = [int(w), int(h)]
+    _g3d_invalidate_detection()
     save_g3d_calibration()
     _, jpg = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 90])
     b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
@@ -6505,6 +6615,7 @@ async def generate3d_calibration_save_point(request: Request):
     }
     g3d_calib_state.setdefault("points", []).append(point)
     g3d_calib_state["model"] = None
+    _g3d_invalidate_detection()
     save_g3d_calibration()
     return {"ok": True, "point": point, "points": g3d_calib_state["points"]}
 
@@ -6518,6 +6629,7 @@ async def generate3d_calibration_delete_point(request: Request):
         return {"ok": False, "error": "Invalid point index"}
     points.pop(idx)
     g3d_calib_state["model"] = None
+    _g3d_invalidate_detection()
     save_g3d_calibration()
     return {"ok": True, "points": points}
 
@@ -6534,6 +6646,7 @@ async def generate3d_calibration_compute(request: Request):
     if error:
         return {"ok": False, "error": error}
     g3d_calib_state["model"] = model
+    _g3d_invalidate_detection()
     save_g3d_calibration()
     return {"ok": True, "model": model}
 
@@ -6542,6 +6655,7 @@ async def generate3d_calibration_compute(request: Request):
 async def generate3d_calibration_reset():
     g3d_calib_state["points"] = []
     g3d_calib_state["model"] = None
+    _g3d_invalidate_detection()
     save_g3d_calibration()
     return {"ok": True}
 
@@ -6566,44 +6680,46 @@ async def generate3d_calibration_move_to(request: Request):
     pred = _g3d_predict_from_pixel(pixel, image_size=image_size, height_cm=height_cm)
     if not pred:
         return {"ok": False, "error": "Prediction failed"}
+    if not acquire_robot_operation("generate3d_calibration"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
+    try:
+        target = pred["joints"]
+        current = robot_get_positions()
+        target["gripper"] = current["gripper"]
+        safe_pred = _g3d_predict_from_pixel(pixel, image_size=image_size, height_cm=safety_cm)
+        sl_safe = safe_pred["joints"]["shoulder_lift"] if safe_pred else target["shoulder_lift"]
+        sl_start = current["shoulder_lift"]
+        sl_end = target["shoulder_lift"]
+        path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
 
-    target = pred["joints"]
-    current = robot_get_positions()
-    target["gripper"] = current["gripper"]
+        if path_safe:
+            robot_send_positions(target, owner="generate3d_calibration")
+            return {
+                "ok": True, "pixel": pixel, "position_3d": pred["position_3d"],
+                "target_joints": target, "path": "direct", "safety_height_cm": safety_cm,
+            }
 
-    safe_pred = _g3d_predict_from_pixel(pixel, image_size=image_size, height_cm=safety_cm)
-    sl_safe = safe_pred["joints"]["shoulder_lift"] if safe_pred else target["shoulder_lift"]
-    sl_start = current["shoulder_lift"]
-    sl_end = target["shoulder_lift"]
-    path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
-
-    if path_safe:
-        robot_send_positions(target)
+        sl_max = max(sl_start, sl_end)
+        overshoot = max(0.0, sl_max - sl_safe)
+        bump_height = min(overshoot + 2.0, 10.0)
+        joint_names = list(current.keys())
+        for i in range(1, n_steps + 1):
+            t = i / n_steps
+            wp = {}
+            for j in joint_names:
+                wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
+            bump = bump_height * math.sin(math.pi * t)
+            wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
+            robot_send_positions(wp, owner="generate3d_calibration")
+            await asyncio.sleep(0.04)
+        robot_send_positions(target, owner="generate3d_calibration")
         return {
             "ok": True, "pixel": pixel, "position_3d": pred["position_3d"],
-            "target_joints": target, "path": "direct", "safety_height_cm": safety_cm,
+            "target_joints": target, "path": "arc", "n_steps": n_steps,
+            "bump_height": round(bump_height, 2), "safety_height_cm": safety_cm,
         }
-
-    sl_max = max(sl_start, sl_end)
-    overshoot = max(0.0, sl_max - sl_safe)
-    bump_height = min(overshoot + 2.0, 10.0)
-    joint_names = list(current.keys())
-    for i in range(1, n_steps + 1):
-        t = i / n_steps
-        wp = {}
-        for j in joint_names:
-            wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
-        bump = bump_height * math.sin(math.pi * t)
-        wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
-        robot_send_positions(wp)
-        await asyncio.sleep(0.04)
-    robot_send_positions(target)
-
-    return {
-        "ok": True, "pixel": pixel, "position_3d": pred["position_3d"],
-        "target_joints": target, "path": "arc", "n_steps": n_steps,
-        "bump_height": round(bump_height, 2), "safety_height_cm": safety_cm,
-    }
+    finally:
+        release_robot_operation("generate3d_calibration")
 
 
 @app.get("/api/generate3d/current-state")
@@ -6612,6 +6728,260 @@ async def generate3d_current_state():
         return {"ok": False, "error": "Robot not connected"}
     joints = robot_get_positions()
     return {"ok": True, "joints": joints, "position_3d": _g3d_position_from_joints(joints)}
+
+
+def _g3d_task_move(
+    target: dict,
+    phase: str,
+    stop_event: threading.Event,
+    publish,
+    n_steps: int = 15,
+    tolerance_deg: float = 2.0,
+    waypoint_timeout: float = 2.0,
+    convergence_names=None,
+) -> bool:
+    current = robot_get_positions()
+    names = [name for name in ROBOT_JOINTS if name in current and name in target]
+    checked_names = names if convergence_names is None else [name for name in convergence_names if name in names]
+    for index in range(1, n_steps + 1):
+        if stop_event.is_set():
+            return False
+        ratio = index / n_steps
+        waypoint = dict(current)
+        for name in names:
+            waypoint[name] = (
+                float(target[name])
+                if name == "gripper"
+                else round(current[name] + ratio * (target[name] - current[name]), 2)
+            )
+        deadline = time.monotonic() + waypoint_timeout
+        while True:
+            if stop_event.is_set():
+                return False
+            robot_send_positions(waypoint, owner="generate3d")
+            time.sleep(0.04)
+            measured = robot_get_positions()
+            publish(phase, measured)
+            if all(abs(float(measured[name]) - float(waypoint[name])) <= tolerance_deg for name in checked_names):
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Robot did not reach the {phase} waypoint before timeout")
+    return True
+
+
+def _g3d_task_grip(
+    value: float,
+    phase: str,
+    stop_event: threading.Event,
+    publish,
+    command_cycles: int = 10,
+) -> bool:
+    """Command a grasp for a bounded period without requiring full closure."""
+    for _ in range(command_cycles):
+        if stop_event.is_set():
+            return False
+        command = {**robot_get_positions(), "gripper": float(value)}
+        robot_send_positions(command, owner="generate3d")
+        time.sleep(0.04)
+        publish(phase, robot_get_positions())
+    return True
+
+
+G3D_TASK_JOINT_LIMITS = {
+    "shoulder_pan": (-90.0, 90.0),
+    "shoulder_lift": (-60.0, 60.0),
+    "elbow_flex": (-30.0, 100.0),
+    "wrist_flex": (-10.0, 90.0),
+    "wrist_roll": (-45.0, 45.0),
+    "gripper": (0.0, 100.0),
+}
+
+
+def _g3d_validate_joint_target(joints: dict) -> None:
+    for name, (minimum, maximum) in G3D_TASK_JOINT_LIMITS.items():
+        try:
+            value = float(joints[name])
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError(f"Invalid predicted joint: {name}")
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise RuntimeError(f"Predicted joint is outside the safe range: {name}={value}")
+
+
+def _g3d_execute_pick_place(
+    source: dict,
+    target: dict,
+    image_size: list,
+    target_height_cm: float,
+    safety_height_cm: float,
+    stop_event: threading.Event,
+    publish,
+    calibration=None,
+) -> None:
+    source_pixel = source.get("center_pixel")
+    target_pixel = target.get("center_pixel")
+    if not isinstance(source_pixel, list) or len(source_pixel) < 2:
+        raise RuntimeError("Source object has no center pixel")
+    if not isinstance(target_pixel, list) or len(target_pixel) < 2:
+        raise RuntimeError("Target object has no center pixel")
+
+    source_low = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
+    source_safe = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=safety_height_cm, calibration=calibration)
+    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
+    target_safe = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=safety_height_cm, calibration=calibration)
+    if not all((source_low, source_safe, target_low, target_safe)):
+        raise RuntimeError("Could not calculate a safe pick-and-place path")
+    for prediction in (source_low, source_safe, target_low, target_safe):
+        _g3d_validate_joint_target(prediction["joints"])
+
+    current = robot_get_positions()
+    opened = {**current, "gripper": 100.0}
+    if not _g3d_task_move(opened, "opening_gripper", stop_event, publish, n_steps=10):
+        return
+    measured = robot_get_positions()
+    raised = {
+        **measured,
+        "shoulder_lift": min(
+            measured["shoulder_lift"],
+            float(source_safe["joints"]["shoulder_lift"]),
+        ),
+        "gripper": 100.0,
+    }
+    _g3d_validate_joint_target(raised)
+    if not _g3d_task_move(raised, "raising_to_safety", stop_event, publish):
+        return
+
+    for prediction, phase in (
+        (source_safe, "moving_to_source"),
+        (source_low, "descending_to_source"),
+    ):
+        waypoint = {**prediction["joints"], "gripper": 100.0}
+        if not _g3d_task_move(waypoint, phase, stop_event, publish):
+            return
+
+    grasped = {**robot_get_positions(), "gripper": 0.0}
+    if not _g3d_task_grip(grasped["gripper"], "grasping", stop_event, publish):
+        return
+
+    arm_names = ROBOT_JOINTS[:5]
+    for prediction, phase in (
+        (source_safe, "lifting_source"),
+        (target_safe, "moving_to_target"),
+        (target_low, "placing"),
+    ):
+        waypoint = {**prediction["joints"], "gripper": 0.0}
+        if not _g3d_task_move(waypoint, phase, stop_event, publish, convergence_names=arm_names):
+            return
+
+    released = {**robot_get_positions(), "gripper": 100.0}
+    if not _g3d_task_move(released, "releasing", stop_event, publish, n_steps=10):
+        return
+    final_waypoint = {**target_safe["joints"], "gripper": 100.0}
+    _g3d_task_move(final_waypoint, "lifting_after_release", stop_event, publish)
+
+
+@app.post("/api/generate3d/task/start")
+async def generate3d_task_start(request: Request):
+    data = await request.json()
+    if not robot_state["connected"]:
+        return JSONResponse(status_code=409, content={"ok": False, "code": "ROBOT_NOT_CONNECTED", "error": "Robot not connected"})
+    if not g3d_calib_state.get("model"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "NOT_CALIBRATED", "error": "Generate 3D calibration is not computed"})
+    if vla_manager.status().get("running") or any((
+        teleop_state.get("running"),
+        datacollect_state.get("running"),
+        eval_state.get("running"),
+        infer_py_state.get("running"),
+    )):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is owned by another process"})
+
+    instruction = str(data.get("instruction", "")).strip()
+    detection_id = str(data.get("detection_id", "")).strip()
+    if not detection_id or detection_id != g3d_detection_state.get("id"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Detected objects are stale; run Detect & Generate again"})
+    if g3d_detection_state.get("calibration_revision") != _g3d_calibration_revision():
+        _g3d_invalidate_detection()
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Calibration changed; run Detect & Generate again"})
+    objects = g3d_detection_state.get("objects")
+    image_size = g3d_detection_state.get("image_size")
+    if not instruction:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INSTRUCTION_REQUIRED", "error": "Task instruction is required"})
+    if not isinstance(objects, list) or len(objects) < 2:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "OBJECTS_REQUIRED", "error": "Detect at least two objects first"})
+    if not isinstance(image_size, list) or len(image_size) < 2:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "IMAGE_SIZE_REQUIRED", "error": "Detect objects again before running"})
+    try:
+        width, height = float(image_size[0]), float(image_size[1])
+        if not all(math.isfinite(value) and value > 0 for value in (width, height)):
+            raise ValueError
+        for obj in objects:
+            pixel = obj.get("center_pixel") if isinstance(obj, dict) else None
+            if not isinstance(pixel, list) or len(pixel) < 2:
+                raise ValueError
+            x, y = float(pixel[0]), float(pixel[1])
+            if not all(math.isfinite(value) for value in (x, y)) or not (0 <= x < width and 0 <= y < height):
+                raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_DETECTION", "error": "Detected object coordinates are invalid; detect objects again"})
+    try:
+        source, target = resolve_pick_place_objects(instruction, objects)
+    except TaskResolutionError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+    if not all(_g3d_point_in_calibrated_workspace(obj["center_pixel"], image_size) for obj in (source, target)):
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "code": "OUTSIDE_CALIBRATED_WORKSPACE",
+            "error": "Source and target must be inside the calibrated workspace",
+        })
+
+    try:
+        target_height_cm = float(data.get("target_height_cm", 0.0))
+        safety_height_cm = float(data.get("safety_height_cm", 10.0))
+        if not math.isfinite(target_height_cm) or not math.isfinite(safety_height_cm):
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_HEIGHT", "error": "Target and safety heights must be finite numbers"})
+    target_height_cm = max(0.0, min(target_height_cm, 30.0))
+    safety_height_cm = max(target_height_cm, min(safety_height_cm, 40.0))
+    calibration_snapshot = copy.deepcopy(g3d_calib_state)
+
+    if not acquire_robot_operation("generate3d"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
+
+    def execute(resolved_source, resolved_target, stop_event, publish):
+        try:
+            return _g3d_execute_pick_place(
+                resolved_source,
+                resolved_target,
+                image_size,
+                target_height_cm,
+                safety_height_cm,
+                stop_event,
+                publish,
+                calibration=calibration_snapshot,
+            )
+        finally:
+            release_robot_operation("generate3d")
+
+    try:
+        result = g3d_task_manager.start(instruction, source, target, execute)
+    except Exception:
+        release_robot_operation("generate3d")
+        raise
+    if not result.get("ok"):
+        release_robot_operation("generate3d")
+        return JSONResponse(status_code=409, content=result)
+    return result
+
+
+@app.get("/api/generate3d/task/status")
+async def generate3d_task_status():
+    return g3d_task_manager.status()
+
+
+@app.post("/api/generate3d/task/stop")
+async def generate3d_task_stop():
+    await asyncio.to_thread(g3d_task_manager.stop)
+    return g3d_task_manager.status()
 
 
 @app.post("/api/generate3d/detect-image")
@@ -6694,12 +7064,19 @@ No explanations, no markdown."""
             "confidence": float(obj.get("confidence", 1.0)),
         })
 
+    detection_id = uuid.uuid4().hex
+    g3d_detection_state["id"] = detection_id
+    g3d_detection_state["objects"] = objects
+    g3d_detection_state["image_size"] = [img_w, img_h]
+    g3d_detection_state["calibration_revision"] = _g3d_calibration_revision()
+
     return {
         "ok": True,
         "image_width": img_w,
         "image_height": img_h,
         "frame_image_b64": b64,
         "objects": objects,
+        "detection_id": detection_id,
         "gemini_raw": gemini_raw,
         "elapsed": elapsed,
         "model": g3d_calib_state.get("model"),
@@ -6730,7 +7107,15 @@ async def eval_save_config(request: Request):
     EVAL_CONFIG_FILE.write_text(json.dumps(body, indent=2))
     return {"ok": True}
 
-eval_state = {"running": False, "process": None, "log_lines": [], "session_id": None}
+eval_state = {
+    "running": False,
+    "process": None,
+    "reader_thread": None,
+    "run_token": None,
+    "log_lines": [],
+    "session_id": None,
+}
+eval_lifecycle_lock = threading.Lock()
 
 # ── Eval video recording ──
 EVAL_VIDEOS_DIR = ROOT / "data" / "eval_videos"
@@ -6881,17 +7266,20 @@ def _eval_load_reset_position():
     return None
 
 
-def _eval_move_to_reset():
+def _eval_move_to_reset(owner="eval_reset", acquire=True):
     """Connect robot, move to saved reset position, disconnect. Returns (ok, error)."""
     pos = _eval_load_reset_position()
     if not pos:
         return True, None  # No reset position saved, skip
 
+    if acquire and not acquire_robot_operation(owner):
+        return False, f"HARDWARE_BUSY: Robot hardware is busy with {robot_operation_owner}"
+
     try:
         connect_robot()
         # Move gradually to reset position
         for _ in range(30):  # ~1 second at 30 iterations
-            robot_send_positions(pos)
+            robot_send_positions(pos, owner=owner)
             time.sleep(0.033)
         disconnect_robot()
         return True, None
@@ -6901,9 +7289,25 @@ def _eval_move_to_reset():
         except Exception:
             pass
         return False, str(e)
+    finally:
+        if acquire:
+            release_robot_operation(owner)
 
 
-def _eval_reader(proc, state):
+def _eval_finish_run(proc, token):
+    should_release = False
+    with eval_lifecycle_lock:
+        if eval_state.get("process") is proc and eval_state.get("run_token") == token:
+            eval_state["running"] = False
+            eval_state["process"] = None
+            eval_state["reader_thread"] = None
+            eval_state["run_token"] = None
+            should_release = True
+    if should_release:
+        release_robot_operation("eval")
+
+
+def _eval_reader(proc, state, token):
     """Background thread to read eval subprocess output."""
     for line in iter(proc.stdout.readline, b''):
         text = line.decode("utf-8", errors="replace").rstrip()
@@ -6911,7 +7315,7 @@ def _eval_reader(proc, state):
         if len(state["log_lines"]) > 2000:
             state["log_lines"] = state["log_lines"][-1500:]
     proc.wait()
-    state["running"] = False
+    _eval_finish_run(proc, token)
 
 
 @app.get("/api/eval/reset-position")
@@ -6967,6 +7371,8 @@ async def eval_move_to_reset():
     ok, err = _eval_move_to_reset()
     if ok:
         return {"ok": True}
+    if str(err).startswith("HARDWARE_BUSY:"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": str(err).split(":", 1)[1].strip()})
     return {"ok": False, "error": err}
 
 
@@ -7176,9 +7582,28 @@ async def eval_camera_snapshot(cam_count: str = "2"):
 @app.post("/api/eval/start")
 async def eval_start(request: Request):
     """Start lerobot-rollout process for evaluation."""
+    body = await request.json()
     if eval_state["running"]:
         return {"ok": False, "error": "Already running"}
-    body = await request.json()
+    if not body.get("model_name", ""):
+        return {"ok": False, "error": "No model selected"}
+    if not acquire_robot_operation("eval"):
+        return JSONResponse(status_code=409, content={
+            "ok": False,
+            "code": "HARDWARE_BUSY",
+            "error": f"Robot hardware is busy with {robot_operation_owner}",
+        })
+    try:
+        result = await _eval_start_owned(body)
+    except Exception:
+        release_robot_operation("eval")
+        raise
+    if not result.get("ok"):
+        release_robot_operation("eval")
+    return result
+
+
+async def _eval_start_owned(body: dict):
     model_id = body.get("model_id", "")
     model_name = body.get("model_name", "")
     task = body.get("task", "")
@@ -7193,9 +7618,6 @@ async def eval_start(request: Request):
     chunk_size = int(body.get("chunk_size", 0))
     n_action_steps = int(body.get("n_action_steps", 0))
 
-    if not model_name:
-        return {"ok": False, "error": "No model selected"}
-
     # Stop teleop/robot if running
     if teleop_state["running"]:
         await teleop_stop()
@@ -7206,7 +7628,7 @@ async def eval_start(request: Request):
     # Move robot to reset position before starting rollout
     reset_pos = _eval_load_reset_position()
     if reset_pos:
-        ok, err = _eval_move_to_reset()
+        ok, err = _eval_move_to_reset(owner="eval", acquire=False)
         if not ok:
             return {"ok": False, "error": f"Failed to move to reset position: {err}"}
 
@@ -7270,15 +7692,39 @@ async def eval_start(request: Request):
         inject_args += ["--params-file", "fakecam_params.json"]
         cmd = inject_args + ["--"] + cmd
 
+    p = None
+    run_token = uuid.uuid4().hex
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-        eval_state["process"] = p
-        eval_state["running"] = True
-        eval_state["log_lines"] = []
-        threading.Thread(target=_eval_reader, args=(p, eval_state), daemon=True).start()
+        reader = threading.Thread(target=_eval_reader, args=(p, eval_state, run_token), daemon=True)
+        with eval_lifecycle_lock:
+            eval_state["process"] = p
+            eval_state["running"] = True
+            eval_state["run_token"] = run_token
+            eval_state["reader_thread"] = reader
+            eval_state["log_lines"] = []
+        reader.start()
 
         return {"ok": True, "pid": p.pid, "cmd": " ".join(cmd)}
     except Exception as e:
+        if p is not None:
+            if p.poll() is None:
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGINT)
+                except (ProcessLookupError, OSError):
+                    try:
+                        p.terminate()
+                    except (ProcessLookupError, OSError):
+                        pass
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        p.kill()
+                    p.wait(timeout=5)
+            _eval_finish_run(p, run_token)
         return {"ok": False, "error": str(e)}
 
 
@@ -7288,8 +7734,11 @@ async def eval_stop():
     if not eval_state["running"] and not eval_state["process"]:
         return {"ok": True, "message": "Not running"}
 
-    p = eval_state["process"]
-    if p:
+    with eval_lifecycle_lock:
+        p = eval_state.get("process")
+        reader = eval_state.get("reader_thread")
+        run_token = eval_state.get("run_token")
+    if p and p.poll() is None:
         import signal as sig
         try:
             os.killpg(os.getpgid(p.pid), sig.SIGINT)
@@ -7308,7 +7757,10 @@ async def eval_stop():
                     p.kill()
                 except (ProcessLookupError, OSError):
                     pass
-    eval_state["running"] = False
+    if reader and reader is not threading.current_thread():
+        await asyncio.to_thread(reader.join, 5.0)
+    if p is not None:
+        _eval_finish_run(p, run_token)
 
     # Stop video recording
     video_filename = None
@@ -7653,7 +8105,7 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
             return {"ok": False, "error": "IK interpolation failed"}
         current = robot_get_positions()
         target["gripper"] = current["gripper"]
-        robot_send_positions(target)
+        robot_send_positions(target, owner="verified_run")
         return {"ok": True}
     if step.get("method_id") != "vla_model":
         return {"ok": False, "error": f"Automatic execution is not supported for {step.get('method_id')}"}
@@ -7790,16 +8242,29 @@ async def run_session_start(request: Request):
     errors = validate_plan(plan, settings["use_ik"], selected)
     if errors:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_PLAN", "error": "Plan is not executable", "validation_errors": errors})
-    return verified_manager.start(
-        str(data.get("original_instruction", "")),
-        plan,
-        0 if run_mode == "all" else int(data.get("start_index", 0)),
-        execution_loop_settings(cfg),
-        _verified_execute_step,
-        _verified_completion,
-        _verified_replan,
-        run_mode,
-    )
+    if not acquire_robot_operation("verified_run"):
+        return JSONResponse(status_code=409, content={
+            "ok": False,
+            "code": "HARDWARE_BUSY",
+            "error": f"Robot hardware is busy with {robot_operation_owner}",
+        })
+    try:
+        result = verified_manager.start(
+            str(data.get("original_instruction", "")),
+            plan,
+            0 if run_mode == "all" else int(data.get("start_index", 0)),
+            execution_loop_settings(cfg),
+            _verified_execute_step,
+            _verified_completion,
+            _verified_replan,
+            run_mode,
+        )
+    except Exception:
+        release_robot_operation("verified_run")
+        raise
+    if not result.get("ok") or not result.get("running", False):
+        release_robot_operation("verified_run")
+    return result
 
 
 @app.post("/api/run/step")
@@ -7856,6 +8321,13 @@ async def run_step(request: Request):
                 status_code=409,
                 content={"ok": False, "code": "VLA_ALREADY_RUNNING", "error": "VLA inference is already running"},
             )
+        with robot_operation_lock:
+            active_owner = robot_operation_owner
+        if active_owner is not None:
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {active_owner}"},
+            )
         model_path = (ROOT / str(record.get("local_path", ""))).resolve()
         models_root = (ROOT / "models").resolve()
         if models_root not in model_path.parents or not model_path.exists():
@@ -7885,8 +8357,25 @@ async def run_step(request: Request):
             )
         return vla_manager.start(command, model_id, description)
 
+    return await _run_direct_step(data, method, bbox)
+
+
+async def _run_direct_step(data: dict, method: str, bbox):
     if not robot_state["connected"]:
         return {"ok": False, "error": "Robot not connected"}
+    if not acquire_robot_operation("run_step"):
+        return JSONResponse(status_code=409, content={
+            "ok": False,
+            "code": "HARDWARE_BUSY",
+            "error": f"Robot hardware is busy with {robot_operation_owner}",
+        })
+    try:
+        return await _run_direct_step_owned(data, method, bbox)
+    finally:
+        release_robot_operation("run_step")
+
+
+async def _run_direct_step_owned(data: dict, method: str, bbox):
 
     if method == "ik_reach_object_v1":
         # Move to the bbox center using calibration
@@ -7922,7 +8411,7 @@ async def run_step(request: Request):
         path_safe = (sl_start <= sl_safe) and (sl_end <= sl_safe)
 
         if path_safe:
-            robot_send_positions(target)
+            robot_send_positions(target, owner="run_step")
         else:
             sl_max = max(sl_start, sl_end)
             overshoot = max(0.0, sl_max - sl_safe)
@@ -7936,23 +8425,23 @@ async def run_step(request: Request):
                     wp[j] = round(current[j] + t * (target[j] - current[j]), 2)
                 bump = bump_height * math.sin(math.pi * t)
                 wp["shoulder_lift"] = round(wp["shoulder_lift"] - bump, 2)
-                robot_send_positions(wp)
+                robot_send_positions(wp, owner="run_step")
                 await asyncio.sleep(0.04)
-            robot_send_positions(target)
+            robot_send_positions(target, owner="run_step")
 
         return {"ok": True, "action": "reach", "pixel": pixel, "target_joints": target}
 
     elif method == "act_gripper_grasp_v1":
         joints = robot_get_positions()
         joints["gripper"] = 0.0
-        robot_send_positions(joints)
+        robot_send_positions(joints, owner="run_step")
         await asyncio.sleep(0.5)
         return {"ok": True, "action": "grasp"}
 
     elif method == "act_gripper_release_v1":
         joints = robot_get_positions()
         joints["gripper"] = 100.0
-        robot_send_positions(joints)
+        robot_send_positions(joints, owner="run_step")
         await asyncio.sleep(0.5)
         return {"ok": True, "action": "release"}
 
@@ -7965,7 +8454,7 @@ async def run_step(request: Request):
             pixel = [bbox[0] * cam_cfg.get("w", 640), bbox[1] * cam_cfg.get("h", 480)]
             target = interpolate_joints_from_pixel(pixel, calib_state["points"], height_cm=float(data.get("height_cm", 0.0)))
             if target:
-                robot_send_positions(target)
+                robot_send_positions(target, owner="run_step")
                 await asyncio.sleep(0.5)
         return {"ok": True, "action": method, "note": "placeholder — reach only"}
 

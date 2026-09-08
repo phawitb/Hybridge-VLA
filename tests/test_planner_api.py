@@ -302,6 +302,28 @@ def test_run_session_start_snapshots_config_and_full_plan(monkeypatch, tmp_path)
     assert manager.started[7] == "all"
 
 
+def test_run_session_start_rejects_generate3d_hardware_owner(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    config["planner"]["use_ik"] = False
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    manager = FakeVerifiedManager()
+    monkeypatch.setattr(main, "verified_manager", manager)
+    monkeypatch.setattr(main, "robot_operation_owner", "generate3d")
+    plan = {"steps": [{
+        "step_index": 1, "description": "pick up the bow", "target_bbox": None,
+        "method_id": "vla_model", "model_id": "model_a",
+    }]}
+
+    response = TestClient(main.app).post("/api/run/session/start", json={
+        "original_instruction": "pick up the bow", "plan": plan, "run_mode": "all",
+    })
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "HARDWARE_BUSY"
+    assert manager.started is None
+
+
 def test_run_session_start_rejects_unknown_mode(monkeypatch, tmp_path):
     setup_config(monkeypatch, tmp_path)
     manager = FakeVerifiedManager()
