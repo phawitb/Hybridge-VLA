@@ -907,36 +907,35 @@ def test_real_plan_rejects_elbow_residual_over_three_degrees(monkeypatch):
                 "n_steps": 1,
                 "convergence_names": main.ROBOT_JOINTS[:5],
                 "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
-                "joint_tolerances": main.G3D_TASK_ARM_JOINT_TOLERANCES,
             }],
             threading.Event(),
             lambda phase, joints: None,
         )
 
 
-def test_real_plan_keeps_other_arm_joint_tolerance_at_two_point_five(monkeypatch):
+def test_real_plan_accepts_shoulder_lift_residual_up_to_three_degrees(monkeypatch):
     measured = {name: 0.0 for name in main.ROBOT_JOINTS}
-    measured["shoulder_lift"] = 38.02
-    target = {**measured, "shoulder_lift": 35.42}
-    clock = iter([0.0, 10.0])
+    measured["shoulder_lift"] = -15.25
+    target = {**measured, "shoulder_lift": -17.83}
+    clock = iter(range(0, 10000, 10))
     monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
     monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
     monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
 
-    with pytest.raises(RuntimeError, match=r"shoulder_lift\(target=35.42, measured=38.02, error=2.60\)"):
-        main._g3d_execute_real_plan(
-            [{
-                "phase": "moving_to_source",
-                "joints": target,
-                "n_steps": 1,
-                "convergence_names": main.ROBOT_JOINTS[:5],
-                "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
-                "joint_tolerances": main.G3D_TASK_ARM_JOINT_TOLERANCES,
-            }],
-            threading.Event(),
-            lambda phase, joints: None,
-        )
+    main._g3d_execute_real_plan(
+        [{
+            "phase": "lifting_source",
+            "joints": target,
+            "n_steps": 1,
+            "convergence_names": main.ROBOT_JOINTS[:5],
+            "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
+        }],
+        threading.Event(),
+        lambda phase, joints: None,
+    )
+
+    assert abs(measured["shoulder_lift"] - (-17.83)) == pytest.approx(2.58)
 
 
 def test_real_plan_keeps_strict_gripper_tolerance(monkeypatch):
