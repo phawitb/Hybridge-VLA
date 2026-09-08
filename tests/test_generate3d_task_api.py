@@ -163,6 +163,60 @@ def test_generate3d_calibration_mutation_invalidates_detection(monkeypatch):
     assert main.g3d_detection_state["objects"] == []
 
 
+def test_generate3d_detection_update_recomputes_bbox_center_and_world_position(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, height_cm=0, calibration=None: {
+        "position_3d": [pixel[0] / 1000, 0.0, pixel[1] / 1000],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/detection/update", json={
+        "detection_id": "det-1",
+        "objects": [
+            {**OBJECTS[0], "name": "yellow star", "bbox": [100, 120, 300, 320]},
+            {**OBJECTS[1], "bbox": [400, 100, 600, 300]},
+        ],
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["detection_id"] != "det-1"
+    assert data["objects"][0]["name"] == "yellow star"
+    assert data["objects"][0]["center_pixel"] == [200.0, 220.0]
+    assert data["objects"][0]["position_3d"] == [0.2, 0.0, 0.22]
+    assert main.g3d_detection_state["objects"] == data["objects"]
+
+
+def test_generate3d_detection_update_rejects_duplicate_names(monkeypatch):
+    setup_task_api(monkeypatch)
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/detection/update", json={
+        "detection_id": "det-1",
+        "objects": [
+            {**OBJECTS[0], "name": "cup", "bbox": [100, 100, 200, 200]},
+            {**OBJECTS[1], "name": " Cup ", "bbox": [300, 100, 400, 200]},
+        ],
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "DUPLICATE_OBJECT_NAME"
+
+
+def test_generate3d_detection_update_treats_bbox_as_strict_pixels(monkeypatch):
+    setup_task_api(monkeypatch)
+    client = TestClient(main.app)
+
+    for bbox in ([0, 0, 1, 1], [790, 590, 900, 700]):
+        response = client.post("/api/generate3d/detection/update", json={
+            "detection_id": "det-1",
+            "objects": [{**OBJECTS[0], "bbox": bbox}],
+        })
+        assert response.status_code == 400
+        assert response.json()["code"] == "INVALID_BBOX"
+
+
 def test_robot_lease_rejects_other_command_writers(monkeypatch):
     class FakeRobot:
         def get_observation(self):

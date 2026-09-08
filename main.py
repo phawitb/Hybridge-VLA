@@ -7083,6 +7083,104 @@ No explanations, no markdown."""
     }
 
 
+@app.post("/api/generate3d/detection/update")
+async def generate3d_detection_update(request: Request):
+    """Validate edited object boxes and rebuild their calibrated positions."""
+    data = await request.json()
+    detection_id = str(data.get("detection_id", "")).strip()
+    if not detection_id or detection_id != g3d_detection_state.get("id"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Detected objects changed; reload them before editing"})
+    if g3d_task_manager.status().get("running"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "TASK_RUNNING", "error": "Stop the robot task before editing objects"})
+    if g3d_detection_state.get("calibration_revision") != _g3d_calibration_revision():
+        _g3d_invalidate_detection()
+        return JSONResponse(status_code=409, content={"ok": False, "code": "STALE_DETECTION", "error": "Calibration changed; run Detect & Generate again"})
+
+    records = data.get("objects")
+    image_size = g3d_detection_state.get("image_size")
+    if not isinstance(records, list) or len(records) > 50 or not isinstance(image_size, list) or len(image_size) < 2:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECTS", "error": "Object list is invalid"})
+    img_w, img_h = int(image_size[0]), int(image_size[1])
+    names = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECT", "error": f"Object {index + 1} is invalid"})
+        name = " ".join(str(record.get("name", "")).strip().split())
+        if not name or len(name) > 100:
+            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_OBJECT_NAME", "error": f"Object {index + 1} needs a name"})
+        normalized_name = name.casefold()
+        if normalized_name in names:
+            return JSONResponse(status_code=400, content={"ok": False, "code": "DUPLICATE_OBJECT_NAME", "error": "Object names must be unique"})
+        names.append(normalized_name)
+
+    rebuilt = []
+    for index, record in enumerate(records):
+        name = " ".join(str(record.get("name", "")).strip().split())
+        try:
+            raw_bbox = record.get("bbox")
+            if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+                raise ValueError
+            values = [float(value) for value in raw_bbox]
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError
+            x1, y1, x2, y2 = values
+            if not (0 <= x1 < x2 <= img_w and 0 <= y1 < y2 <= img_h):
+                raise ValueError
+            if x2 - x1 < 4 or y2 - y1 < 4:
+                raise ValueError
+            bbox = [round(x1), round(y1), round(x2), round(y2)]
+        except (TypeError, ValueError, OverflowError):
+            return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_BBOX", "error": f"Object {name} has an invalid bounding box"})
+        center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
+        prediction = _g3d_predict_from_pixel(center, image_size=image_size)
+        if not prediction:
+            return JSONResponse(status_code=400, content={"ok": False, "code": "PREDICTION_FAILED", "error": f"Could not position object {name}"})
+        size = record.get("estimated_size_cm")
+        if not isinstance(size, list) or len(size) < 3:
+            size = [3, 3, 3]
+        try:
+            size = [float(value) for value in size[:3]]
+            if not all(math.isfinite(value) for value in size):
+                raise ValueError
+            size = [max(0.1, min(value, 100.0)) for value in size]
+        except (TypeError, ValueError, OverflowError):
+            size = [3, 3, 3]
+        color = str(record.get("color_hex", "#888888"))
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            color = "#888888"
+        shape = str(record.get("shape_3d", "box"))
+        if shape not in {"box", "cylinder", "sphere"}:
+            shape = "box"
+        try:
+            confidence = float(record.get("confidence", 1.0))
+            if not math.isfinite(confidence):
+                raise ValueError
+            confidence = max(0.0, min(confidence, 1.0))
+        except (TypeError, ValueError, OverflowError):
+            confidence = 1.0
+        rebuilt.append({
+            "name": name,
+            "bbox": bbox,
+            "bbox_raw": list(raw_bbox),
+            "center_pixel": [round(center[0], 2), round(center[1], 2)],
+            "position_3d": prediction["position_3d"],
+            "predicted_joints": prediction["joints"],
+            "color_hex": color,
+            "shape_3d": shape,
+            "estimated_size_cm": size,
+            "confidence": confidence,
+        })
+
+    new_detection_id = uuid.uuid4().hex
+    g3d_detection_state.update({
+        "id": new_detection_id,
+        "objects": rebuilt,
+        "image_size": [img_w, img_h],
+        "calibration_revision": _g3d_calibration_revision(),
+    })
+    return {"ok": True, "objects": rebuilt, "detection_id": new_detection_id}
+
+
 # ── Evaluate ──
 
 EVAL_DIR = ROOT / "data" / "eval_sessions"

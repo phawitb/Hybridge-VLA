@@ -26,12 +26,12 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 
 const elements = {
-  g3dTaskInstruction: {value: 'pick up white star to teal bowl'},
+  g3dTaskInstruction: {value: ''},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
   g3dTaskStatus: {textContent: '', style: {}},
@@ -51,6 +51,14 @@ const context = {
     imageSize: [800, 600],
     detectionId: 'det-1',
     robot: {},
+    instructionAuto: true,
+    sceneGeneration: 4,
+    renderedGeneration: 4,
+    renderedDetectionId: 'det-1',
+    hasRawDetection: true,
+    sceneBusy: false,
+    editSyncing: false,
+    editsValid: true,
   },
   document: {getElementById: id => elements[id]},
   g3dInitScene() {},
@@ -59,14 +67,27 @@ const context = {
   console,
 };
 vm.createContext(context);
-for (const name of ['g3dSetTaskReady', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dApplyTaskStatus']) {
+for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dApplyTaskStatus']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
+
+assert.equal(context.g3dSceneIsCurrent(4, 'det-1'), true);
+assert.equal(context.g3dSceneIsCurrent(3, 'det-1'), false);
+assert.equal(context.g3dSceneIsCurrent(4, 'older'), false);
+assert.equal(context.g3dRenderedSceneIsCurrent(), true);
+context.G3D.renderedDetectionId = 'older';
+assert.equal(context.g3dRenderedSceneIsCurrent(), false);
+context.G3D.renderedDetectionId = 'det-1';
+assert.equal(context.g3dCanRunTask(), true);
+context.G3D.sceneBusy = true;
+assert.equal(context.g3dCanRunTask(), false);
+context.G3D.sceneBusy = false;
 
 context.g3dSetTaskReady(true);
 assert.equal(elements.g3dTaskControls.style.display, 'block');
 assert.equal(elements.g3dRunTaskBtn.disabled, false);
 assert.match(elements.g3dTaskHint.textContent, /white star.*teal bowl/);
+assert.equal(elements.g3dTaskInstruction.value, 'pick up white star to teal bowl');
 
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   instruction: 'pick up white star to teal bowl',
@@ -74,6 +95,22 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   target_height_cm: 1,
   safety_height_cm: 10,
 });
+
+elements.g3dTaskInstruction.value = 'custom instruction';
+context.G3D.instructionAuto = false;
+context.G3D.objects[0].name = 'yellow star';
+context.g3dUpdateDefaultInstruction();
+assert.equal(elements.g3dTaskInstruction.value, 'custom instruction');
+
+context.G3D.objects[0].bbox = [100, 120, 300, 320];
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dNormalizeEditedBbox([300, 320, 100, 120], 800, 600))), [100, 120, 300, 320]);
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dHitObject([200, 200]))), {index: 0, mode: 'move'});
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dHitObject([100, 120]))), {index: 0, mode: 'resize', corner: 'nw'});
+
+context.G3D.editsValid = false;
+context.g3dSetTaskReady(true);
+assert.equal(elements.g3dRunTaskBtn.disabled, true);
+context.G3D.editsValid = true;
 
 context.g3dApplyTaskStatus({
   state: 'running',
