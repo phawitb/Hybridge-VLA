@@ -290,13 +290,122 @@ def test_generate3d_height_is_offset_above_calibrated_surface(monkeypatch):
             {"pixel": [0, 479], "position_3d": [0.0, 0.10, 0.0], "joints": {name: 0.0 for name in main.ROBOT_JOINTS}},
         ],
     }
-    monkeypatch.setattr(main, "_g3d_ik_solve", lambda target, calibration=None: [0.0] * 5)
+    monkeypatch.setattr(
+        main,
+        "_g3d_ik_solve",
+        lambda target, calibration=None, preferred_joints=None: [0.0] * 5,
+    )
 
     prediction = main._g3d_predict_from_pixel(
         [320, 240], image_size=[640, 480], height_cm=10.0, calibration=calibration,
     )
 
     assert prediction["position_3d"][1] == pytest.approx(0.19)
+
+
+def test_generate3d_bowl_height_move_preserves_calibrated_wrist_orientation():
+    seed_joints = {
+        "shoulder_pan": 24.04,
+        "shoulder_lift": 39.34,
+        "elbow_flex": -16.84,
+        "wrist_flex": 70.15,
+        "wrist_roll": -7.52,
+        "gripper": 0.47,
+    }
+    bowl_joints = {
+        "shoulder_pan": 24.32,
+        "shoulder_lift": 38.93,
+        "elbow_flex": -19.78,
+        "wrist_flex": 66.27,
+        "wrist_roll": -9.98,
+        "gripper": 0.47,
+    }
+    calibration = {
+        "model": {
+            "type": "affine",
+            "world_coeff": [[-0.09206, 0.28918], [0.0, 0.0], [0.0, 0.0]],
+            "joint_coeff": [
+                [bowl_joints[name] for name in main.ROBOT_JOINTS],
+                [0.0] * len(main.ROBOT_JOINTS),
+                [0.0] * len(main.ROBOT_JOINTS),
+            ],
+        },
+        "last_image_size": [640, 480],
+        "points": [{
+            "pixel": [503, 105],
+            "position_3d": [-0.07418, 0.0875, 0.27481],
+            "joints": seed_joints,
+        }],
+    }
+
+    prediction = main._g3d_predict_from_pixel(
+        [506, 93.5], image_size=[640, 480], height_cm=5.0, calibration=calibration,
+    )
+
+    assert prediction["joints"]["wrist_flex"] == pytest.approx(66.27, abs=0.01)
+    assert prediction["joints"]["wrist_roll"] == pytest.approx(-9.98, abs=0.01)
+    actual_position = main._g3d_position_from_joints(prediction["joints"])
+    assert actual_position == pytest.approx(prediction["position_3d"], abs=0.005)
+
+
+@pytest.mark.parametrize("preferred_joints", [
+    1.0,
+    [0.0, 0.0, 0.0, float("nan"), 0.0],
+    [0.0, 0.0, 0.0, 95.0, 0.0],
+])
+def test_generate3d_ik_rejects_invalid_calibrated_wrist(preferred_joints):
+    calibration = {
+        "points": [{
+            "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+        }],
+    }
+
+    assert main._g3d_ik_solve(
+        [0.0394131, -0.3008737, 0.2870517],
+        calibration=calibration,
+        preferred_joints=preferred_joints,
+    ) is None
+
+
+@pytest.mark.parametrize(("predicted_joints", "world_xz"), [
+    ([0.0, 0.0, 0.0, 95.0, 0.0, 0.0], [0.0394131, 0.3008737]),
+    ([0.0, 0.0, 0.0, 0.0, 0.0], [1.0, 1.0]),
+    ([float("nan"), 0.0, 0.0, 0.0, 0.0, 0.0], [1.0, 1.0]),
+])
+def test_generate3d_calibration_move_rejects_invalid_prediction_before_hardware(
+    monkeypatch, predicted_joints, world_xz,
+):
+    joints = {name: 0.0 for name in main.ROBOT_JOINTS}
+    calibration = {
+        "model": {
+            "type": "affine",
+            "world_coeff": [world_xz, [0.0, 0.0], [0.0, 0.0]],
+            "joint_coeff": [
+                predicted_joints,
+                [0.0] * len(predicted_joints),
+                [0.0] * len(predicted_joints),
+            ],
+        },
+        "last_image_size": [640, 480],
+        "points": [{
+            "pixel": [320, 240],
+            "position_3d": [0.0394131, 0.2870517, 0.3008737],
+            "joints": joints,
+        }],
+    }
+    sent = []
+    monkeypatch.setattr(main, "g3d_calib_state", calibration)
+    monkeypatch.setitem(main.robot_state, "connected", True)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(joints))
+    monkeypatch.setattr(main, "robot_send_positions", lambda command, owner=None: sent.append(dict(command)))
+
+    response = TestClient(main.app).post("/api/generate3d/calibration/move-to", json={
+        "pixel": [320, 240],
+        "image_size": [640, 480],
+    })
+
+    assert response.json() == {"ok": False, "error": "Prediction failed"}
+    assert sent == []
 
 
 def test_pick_place_moves_above_target_and_places_at_target_height(monkeypatch):

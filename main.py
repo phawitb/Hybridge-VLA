@@ -6440,9 +6440,55 @@ def _g3d_fit_model(points, model_type="auto", image_size=None):
     }, None
 
 
-def _g3d_ik_solve(target_pos, calibration=None):
+G3D_IK_BOUNDS = [
+    (-90, 90),    # shoulder_pan
+    (-60, 60),    # shoulder_lift
+    (-30, 100),   # elbow_flex
+    (-10, 90),    # wrist_flex
+    (-45, 45),    # wrist_roll
+]
+G3D_PREDICTION_BOUNDS = [*G3D_IK_BOUNDS, (0, 100)]
+
+
+def _g3d_valid_joint_vector(values):
+    try:
+        vector = np.asarray(values, dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if vector.shape != (len(ROBOT_JOINTS),) or not np.all(np.isfinite(vector)):
+        return None
+    return vector
+
+
+def _g3d_predicted_joints_in_bounds(joints):
+    try:
+        return all(
+            math.isfinite(float(joints[name])) and minimum <= float(joints[name]) <= maximum
+            for name, (minimum, maximum) in zip(ROBOT_JOINTS, G3D_PREDICTION_BOUNDS)
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _g3d_preferred_wrist(preferred_joints):
+    try:
+        if preferred_joints is None or len(preferred_joints) < 5:
+            return None
+        wrist = [float(preferred_joints[3]), float(preferred_joints[4])]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not all(
+        math.isfinite(value) and G3D_IK_BOUNDS[index + 3][0] <= value <= G3D_IK_BOUNDS[index + 3][1]
+        for index, value in enumerate(wrist)
+    ):
+        return None
+    return wrist
+
+
+def _g3d_ik_solve(target_pos, calibration=None, preferred_joints=None):
     """Numerical IK solver using multi-start L-BFGS-B.
-    Tries all calibration points as starting guesses and picks the best result.
+    Keeps the calibrated wrist orientation when one is provided, while
+    optimizing the three positioning joints from every calibration seed.
     target_pos: [x, y, z] in URDF frame (Z-up).
     Returns optimized 5 joint angles in degrees, or None on failure."""
     from scipy.optimize import minimize
@@ -6453,29 +6499,33 @@ def _g3d_ik_solve(target_pos, calibration=None):
     if not points:
         return None
 
-    bounds = [
-        (-90, 90),    # shoulder_pan
-        (-60, 60),    # shoulder_lift
-        (-30, 100),   # elbow_flex
-        (-10, 90),    # wrist_flex
-        (-45, 45),    # wrist_roll
-    ]
+    fixed_wrist = None
+    if preferred_joints is not None:
+        fixed_wrist = _g3d_preferred_wrist(preferred_joints)
+        if fixed_wrist is None:
+            return None
+
+    def complete_joints(q):
+        return [*q, *fixed_wrist] if fixed_wrist is not None else list(q)
 
     def cost(q):
-        pos = np.array(_so101_fk(list(q)), dtype=np.float64)
+        pos = np.array(_so101_fk(complete_joints(q)), dtype=np.float64)
         return float(np.sum((pos - target) ** 2))
 
     best_err = float("inf")
     best_q = None
     for p in points:
         q0 = [float(p["joints"].get(j, 0.0)) for j in ROBOT_JOINTS[:5]]
-        result = minimize(cost, q0, method="L-BFGS-B", bounds=bounds,
+        if fixed_wrist is not None:
+            q0 = q0[:3]
+        result = minimize(cost, q0, method="L-BFGS-B", bounds=G3D_IK_BOUNDS[:len(q0)],
                           options={"maxiter": 1000, "ftol": 1e-16})
-        final_pos = np.array(_so101_fk(list(result.x)), dtype=np.float64)
+        solved_joints = complete_joints(result.x)
+        final_pos = np.array(_so101_fk(solved_joints), dtype=np.float64)
         err = float(np.linalg.norm(final_pos - target))
         if err < best_err:
             best_err = err
-            best_q = result.x.tolist()
+            best_q = solved_joints
 
     if best_err > 0.005:  # 5mm tolerance
         return None
@@ -6508,8 +6558,22 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=N
     # Convert Three.js Y-up [x, y, z] back to URDF Z-up [x, -z, y]
     target_urdf = [target_3d[0], -target_3d[2], target_3d[1]]
 
-    # Use multi-start IK solver
-    ik_result = _g3d_ik_solve(target_urdf, calibration=calibration)
+    # Preserve the locally calibrated wrist pose so the physical gripper tip
+    # remains aligned with the selected pixel instead of rotating around it.
+    try:
+        raw_joint_values = basis @ np.array(model["joint_coeff"], dtype=np.float64)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    joint_values = _g3d_valid_joint_vector(raw_joint_values)
+    if joint_values is None:
+        return None
+    if _g3d_preferred_wrist(joint_values) is None:
+        return None
+    ik_result = _g3d_ik_solve(
+        target_urdf,
+        calibration=calibration,
+        preferred_joints=joint_values,
+    )
 
     if ik_result is not None:
         joints = {}
@@ -6527,7 +6591,6 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=N
         joints["gripper"] = round(float(nearest_gripper), 2)
     else:
         # IK failed — fallback to polynomial prediction
-        joint_values = basis @ np.array(model["joint_coeff"], dtype=np.float64)
         joints = {}
         for idx, name in enumerate(ROBOT_JOINTS):
             joints[name] = round(float(joint_values[idx]), 2)
@@ -6536,6 +6599,9 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=N
             arm_len = 0.25
             offset_deg = math.degrees(math.atan2(h, arm_len))
             joints["shoulder_lift"] = round(joints["shoulder_lift"] - offset_deg, 2)
+
+    if not _g3d_predicted_joints_in_bounds(joints):
+        return None
 
     return {
         "position_3d": [round(target_3d[0], 5), round(target_3d[1], 5), round(target_3d[2], 5)],
