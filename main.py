@@ -6501,9 +6501,9 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=N
     # Target 3D position in Three.js coords: [x, y, z]
     target_3d = [float(world_xz[0]), default_y, float(world_xz[1])]
 
-    # Apply height offset (override default height)
+    # Apply height above the calibrated work surface.
     if height_cm > 0:
-        target_3d[1] = float(height_cm) / 100.0
+        target_3d[1] = default_y + float(height_cm) / 100.0
 
     # Convert Three.js Y-up [x, y, z] back to URDF Z-up [x, -z, y]
     target_urdf = [target_3d[0], -target_3d[2], target_3d[1]]
@@ -6835,6 +6835,7 @@ G3D_TASK_JOINT_LIMITS = {
 G3D_TASK_OPEN_GRIPPER = 50.0
 G3D_TASK_ARM_TOLERANCE_DEG = 2.5
 G3D_TASK_GRIPPER_TOLERANCE = 2.0
+G3D_TASK_TARGET_CLEARANCE_CM = 5.0
 
 
 def _g3d_validate_joint_target(joints: dict) -> None:
@@ -6880,10 +6881,21 @@ def _g3d_build_pick_place_plan(
     if not isinstance(target_pixel, list) or len(target_pixel) < 2:
         raise RuntimeError("Target object has no center pixel")
 
+    target_size = target.get("estimated_size_cm")
+    try:
+        target_object_height_cm = float(target_size[2])
+        if not math.isfinite(target_object_height_cm):
+            raise ValueError
+        target_object_height_cm = max(0.0, target_object_height_cm)
+    except (IndexError, TypeError, ValueError):
+        target_object_height_cm = 0.0
+    target_place_height_cm = max(target_height_cm, target_object_height_cm)
+    transfer_height_cm = max(safety_height_cm, target_place_height_cm + G3D_TASK_TARGET_CLEARANCE_CM)
+
     source_low = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
-    source_safe = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=safety_height_cm, calibration=calibration)
-    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
-    target_safe = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=safety_height_cm, calibration=calibration)
+    source_safe = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
+    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_place_height_cm, calibration=calibration)
+    target_safe = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
     if not all((source_low, source_safe, target_low, target_safe)):
         raise RuntimeError("Could not calculate a safe pick-and-place path")
     for prediction in (source_low, source_safe, target_low, target_safe):

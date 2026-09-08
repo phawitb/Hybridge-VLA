@@ -276,6 +276,84 @@ def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
     assert by_phase["lifting_after_release"]["gripper"] == 50.0
 
 
+def test_generate3d_height_is_offset_above_calibrated_surface(monkeypatch):
+    calibration = {
+        "model": {
+            "type": "affine",
+            "world_coeff": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            "joint_coeff": [[0.0] * len(main.ROBOT_JOINTS) for _ in range(3)],
+        },
+        "last_image_size": [640, 480],
+        "points": [
+            {"pixel": [0, 0], "position_3d": [0.0, 0.08, 0.0], "joints": {name: 0.0 for name in main.ROBOT_JOINTS}},
+            {"pixel": [639, 0], "position_3d": [0.0, 0.09, 0.0], "joints": {name: 0.0 for name in main.ROBOT_JOINTS}},
+            {"pixel": [0, 479], "position_3d": [0.0, 0.10, 0.0], "joints": {name: 0.0 for name in main.ROBOT_JOINTS}},
+        ],
+    }
+    monkeypatch.setattr(main, "_g3d_ik_solve", lambda target, calibration=None: [0.0] * 5)
+
+    prediction = main._g3d_predict_from_pixel(
+        [320, 240], image_size=[640, 480], height_cm=10.0, calibration=calibration,
+    )
+
+    assert prediction["position_3d"][1] == pytest.approx(0.19)
+
+
+def test_pick_place_moves_above_target_and_places_at_target_height(monkeypatch):
+    calls = []
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        calls.append((list(pixel), float(height_cm)))
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                **{name: 0.0 for name in main.ROBOT_JOINTS},
+                "shoulder_lift": -float(height_cm),
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+
+    plan = main._g3d_build_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 0.0, 10.0, initial,
+    )
+
+    assert calls == [
+        ([392.5, 169.0], 0.0),
+        ([392.5, 169.0], 10.0),
+        ([509.0, 91.0], 5.0),
+        ([509.0, 91.0], 10.0),
+    ]
+    by_phase = {step["phase"]: step["joints"] for step in plan}
+    assert by_phase["moving_to_target"] == by_phase["lifting_source"]
+    assert by_phase["placing"] != by_phase["moving_to_target"]
+
+
+def test_pick_place_preserves_target_heights_above_thirty_centimeters(monkeypatch):
+    calls = []
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        calls.append((list(pixel), float(height_cm)))
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    tall_target = {**OBJECTS[1], "estimated_size_cm": [10.0, 10.0, 40.0]}
+
+    main._g3d_build_pick_place_plan(
+        OBJECTS[0], tall_target, [800, 600], 0.0, 10.0, initial,
+    )
+
+    assert calls[2:] == [
+        ([509.0, 91.0], 40.0),
+        ([509.0, 91.0], 45.0),
+    ]
+
+
 def test_generate3d_task_rejects_unknown_execution_mode(monkeypatch):
     setup_task_api(monkeypatch)
     client = TestClient(main.app)
