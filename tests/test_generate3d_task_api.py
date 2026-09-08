@@ -2,6 +2,7 @@ import threading
 import time
 import asyncio
 
+import pytest
 from fastapi.testclient import TestClient
 
 import main
@@ -419,9 +420,9 @@ def test_pick_place_motion_publishes_measured_joints_for_each_phase(monkeypatch)
     phases = [phase for phase, _ in published]
     phase_order = [phase for index, phase in enumerate(phases) if index == 0 or phase != phases[index - 1]]
     assert phase_order == [
-        "opening_gripper",
         "raising_to_safety",
         "moving_to_source",
+        "opening_gripper",
         "descending_to_source",
         "grasping",
         "lifting_source",
@@ -436,6 +437,76 @@ def test_pick_place_motion_publishes_measured_joints_for_each_phase(monkeypatch)
     carrying = [joints for phase, joints in published if phase in {"lifting_source", "moving_to_target", "placing"}]
     assert carrying
     assert all(joints["gripper"] == 0.0 for joints in carrying)
+
+
+def test_pick_place_can_hold_current_joints_outside_planned_range_during_preparation(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured.update(shoulder_lift=-93.23, gripper=105.0)
+    sent = []
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 20.0,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 25.0,
+            },
+        }
+
+    def fake_send(joints, owner=None):
+        assert owner == "generate3d"
+        measured.update(joints)
+        sent.append(dict(joints))
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", fake_send)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_pick_place(
+        OBJECTS[0], OBJECTS[1], [800, 600], 1.0, 10.0,
+        threading.Event(), lambda phase, joints: None,
+    )
+
+    assert sent
+    assert sent[0]["shoulder_lift"] == -93.23
+    assert sent[0]["gripper"] == 105.0
+    assert sent[-1]["gripper"] == 100.0
+
+
+def test_pick_place_rejects_invalid_current_state_before_first_command(monkeypatch):
+    current = {name: 0.0 for name in main.ROBOT_JOINTS}
+    current["shoulder_lift"] = float("nan")
+    moves = []
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 20.0,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 50.0,
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(current))
+    monkeypatch.setattr(main, "_g3d_task_move", lambda *args, **kwargs: moves.append(args) or True)
+
+    with pytest.raises(RuntimeError, match="Invalid current joint"):
+        main._g3d_execute_pick_place(
+            OBJECTS[0], OBJECTS[1], [800, 600], 1.0, 10.0,
+            threading.Event(), lambda phase, joints: None,
+        )
+
+    assert moves == []
 
 
 def test_task_move_waits_for_measured_convergence(monkeypatch):

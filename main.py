@@ -6818,6 +6818,23 @@ def _g3d_validate_joint_target(joints: dict) -> None:
             raise RuntimeError(f"Predicted joint is outside the safe range: {name}={value}")
 
 
+def _g3d_validate_preparation_target(joints: dict, current: dict) -> None:
+    """Allow an existing out-of-range pose to be held, but never extended."""
+    for name, (minimum, maximum) in G3D_TASK_JOINT_LIMITS.items():
+        try:
+            value = float(joints[name])
+            current_value = float(current[name])
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError(f"Invalid current joint: {name}")
+        if not math.isfinite(current_value):
+            raise RuntimeError(f"Invalid current joint: {name}={current_value}")
+        if not math.isfinite(value):
+            raise RuntimeError(f"Invalid preparation joint: {name}={value}")
+        unchanged = math.isclose(value, current_value, abs_tol=1e-6)
+        if not minimum <= value <= maximum and not unchanged:
+            raise RuntimeError(f"Preparation joint is outside the safe range: {name}={value}")
+
+
 def _g3d_execute_pick_place(
     source: dict,
     target: dict,
@@ -6845,29 +6862,28 @@ def _g3d_execute_pick_place(
         _g3d_validate_joint_target(prediction["joints"])
 
     current = robot_get_positions()
-    opened = {**current, "gripper": 100.0}
-    if not _g3d_task_move(opened, "opening_gripper", stop_event, publish, n_steps=10):
-        return
-    measured = robot_get_positions()
     raised = {
-        **measured,
+        **current,
         "shoulder_lift": min(
-            measured["shoulder_lift"],
+            current["shoulder_lift"],
             float(source_safe["joints"]["shoulder_lift"]),
         ),
-        "gripper": 100.0,
     }
-    _g3d_validate_joint_target(raised)
+    source_approach = {**source_safe["joints"], "gripper": current["gripper"]}
+    opened_at_source = {**source_safe["joints"], "gripper": 100.0}
+    _g3d_validate_preparation_target(raised, current)
+    _g3d_validate_preparation_target(source_approach, current)
+    _g3d_validate_joint_target(opened_at_source)
+
     if not _g3d_task_move(raised, "raising_to_safety", stop_event, publish):
         return
-
-    for prediction, phase in (
-        (source_safe, "moving_to_source"),
-        (source_low, "descending_to_source"),
-    ):
-        waypoint = {**prediction["joints"], "gripper": 100.0}
-        if not _g3d_task_move(waypoint, phase, stop_event, publish):
-            return
+    if not _g3d_task_move(source_approach, "moving_to_source", stop_event, publish):
+        return
+    if not _g3d_task_move(opened_at_source, "opening_gripper", stop_event, publish, n_steps=10):
+        return
+    source_pick = {**source_low["joints"], "gripper": 100.0}
+    if not _g3d_task_move(source_pick, "descending_to_source", stop_event, publish):
+        return
 
     grasped = {**robot_get_positions(), "gripper": 0.0}
     if not _g3d_task_grip(grasped["gripper"], "grasping", stop_event, publish):
