@@ -804,9 +804,9 @@ def test_task_move_waits_for_measured_convergence(monkeypatch):
     assert abs(measured["shoulder_pan"] - 10.0) <= 0.2
 
 
-def test_pick_place_accepts_small_arm_servo_residual(monkeypatch):
+def test_pick_place_accepts_elbow_servo_residual_up_to_three_degrees(monkeypatch):
     measured = {name: 0.0 for name in main.ROBOT_JOINTS}
-    measured.update(elbow_flex=96.04, gripper=50.0)
+    measured.update(elbow_flex=38.02, gripper=50.0)
     clock = iter(range(0, 10000, 10))
 
     def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
@@ -815,7 +815,7 @@ def test_pick_place_accepts_small_arm_servo_residual(monkeypatch):
             "joints": {
                 "shoulder_pan": 0.0,
                 "shoulder_lift": -height_cm,
-                "elbow_flex": 93.98,
+                "elbow_flex": 35.42,
                 "wrist_flex": 30.0,
                 "wrist_roll": 0.0,
                 "gripper": 50.0,
@@ -839,7 +839,7 @@ def test_pick_place_accepts_small_arm_servo_residual(monkeypatch):
         threading.Event(), lambda phase, joints: None,
     )
 
-    assert abs(measured["elbow_flex"] - 93.98) == pytest.approx(2.06)
+    assert abs(measured["elbow_flex"] - 35.42) == pytest.approx(2.60)
 
 
 def test_task_move_allows_intermediate_servo_lag_before_reaching_final_target(monkeypatch):
@@ -886,6 +886,56 @@ def test_task_move_still_rejects_final_arm_residual_over_tolerance(monkeypatch):
         main._g3d_task_move(
             target, "moving_to_source", threading.Event(), lambda phase, joints: None,
             n_steps=1, tolerance_deg=2.5,
+        )
+
+
+def test_real_plan_rejects_elbow_residual_over_three_degrees(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["elbow_flex"] = 38.43
+    target = {**measured, "elbow_flex": 35.42}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match=r"elbow_flex\(target=35.42, measured=38.43, error=3.01\)"):
+        main._g3d_execute_real_plan(
+            [{
+                "phase": "moving_to_source",
+                "joints": target,
+                "n_steps": 1,
+                "convergence_names": main.ROBOT_JOINTS[:5],
+                "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
+                "joint_tolerances": main.G3D_TASK_ARM_JOINT_TOLERANCES,
+            }],
+            threading.Event(),
+            lambda phase, joints: None,
+        )
+
+
+def test_real_plan_keeps_other_arm_joint_tolerance_at_two_point_five(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["shoulder_lift"] = 38.02
+    target = {**measured, "shoulder_lift": 35.42}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match=r"shoulder_lift\(target=35.42, measured=38.02, error=2.60\)"):
+        main._g3d_execute_real_plan(
+            [{
+                "phase": "moving_to_source",
+                "joints": target,
+                "n_steps": 1,
+                "convergence_names": main.ROBOT_JOINTS[:5],
+                "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
+                "joint_tolerances": main.G3D_TASK_ARM_JOINT_TOLERANCES,
+            }],
+            threading.Event(),
+            lambda phase, joints: None,
         )
 
 
