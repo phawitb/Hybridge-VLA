@@ -764,6 +764,53 @@ def test_pick_place_accepts_small_arm_servo_residual(monkeypatch):
     assert abs(measured["elbow_flex"] - 93.98) == pytest.approx(2.06)
 
 
+def test_task_move_allows_intermediate_servo_lag_before_reaching_final_target(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["elbow_flex"] = 96.04
+    target = {**measured, "elbow_flex": 82.62}
+    sent = []
+    clock = iter([0.0, 10.0, 20.0])
+
+    def lag_then_reach(command, owner=None):
+        assert owner == "generate3d"
+        sent.append(dict(command))
+        if len(sent) == 1:
+            measured["elbow_flex"] = 91.91
+        else:
+            measured.update(command)
+
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lag_then_reach)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    completed = main._g3d_task_move(
+        target, "moving_to_source", threading.Event(), lambda phase, joints: None,
+        n_steps=2, tolerance_deg=2.5,
+    )
+
+    assert completed is True
+    assert sent[0]["elbow_flex"] == 89.33
+    assert measured["elbow_flex"] == 82.62
+
+
+def test_task_move_still_rejects_final_arm_residual_over_tolerance(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["elbow_flex"] = 91.91
+    target = {**measured, "elbow_flex": 89.33}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match=r"elbow_flex\(target=89.33, measured=91.91, error=2.58\)"):
+        main._g3d_task_move(
+            target, "moving_to_source", threading.Event(), lambda phase, joints: None,
+            n_steps=1, tolerance_deg=2.5,
+        )
+
+
 def test_real_plan_keeps_strict_gripper_tolerance(monkeypatch):
     measured = {name: 0.0 for name in main.ROBOT_JOINTS}
     measured["gripper"] = 52.06

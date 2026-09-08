@@ -6775,6 +6775,11 @@ def _g3d_task_move(
                 if name == "gripper"
                 else round(current[name] + ratio * (target[name] - current[name]), 2)
             )
+        if index < n_steps:
+            robot_send_positions(waypoint, owner="generate3d")
+            time.sleep(0.04)
+            publish(phase, robot_get_positions())
+            continue
         timeout = _g3d_waypoint_timeout(current, waypoint, checked_names) if waypoint_timeout is None else float(waypoint_timeout)
         deadline = time.monotonic() + timeout
         while True:
