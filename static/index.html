@@ -3073,6 +3073,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_400</th>
                 <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
@@ -3095,6 +3096,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_400</th>
                 <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
@@ -3117,6 +3119,7 @@ conda run -n lerobot uvicorn train_api:app \
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_150</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_200</th>
                 <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_300</th>
+                <th style="text-align:center;padding:6px 10px;font-weight:700;color:#333">N_400</th>
                 <th style="text-align:left;padding:6px 10px;font-weight:700;color:#333;min-width:120px">Notes</th>
               </tr>
             </thead>
@@ -11311,13 +11314,13 @@ function evalResultsRender(data) {
     document.getElementById('evalResBody2'),
     document.getElementById('evalResBody3'),
   ];
-  const emptyMsg = '<tr><td colspan="12" style="text-align:center;padding:14px;color:#888">No results yet.</td></tr>';
+  const emptyMsg = '<tr><td colspan="13" style="text-align:center;padding:14px;color:#888">No results yet.</td></tr>';
   if (!data || !data.length) {
     bodies.forEach(b => { b.innerHTML = emptyMsg; });
     return;
   }
 
-  const nCols = [20, 40, 60, 80, 100, 120, 150, 200, 300];
+  const nCols = [20, 40, 60, 80, 100, 120, 150, 200, 300, 400];
   const visibility = evalResultsGetVisibility();
 
   // Group by task then policy

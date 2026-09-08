@@ -46,52 +46,97 @@ available_methods:
 - ik_reach_object_v1
 - smolVLA_v1
 planner:
-  use_ik: true
+  use_ik: false
   selected_models:
-  - smolvla_DS4_2B2O_FF_FULL
+  - smolvla_DS4_2B2O_FF_removeidle_rand400
   prompt_templates:
-    use_ik: |-
-      You are a robotic task planner for a single-arm robot.
+    use_ik: 'You are a robotic task planner for a single-arm robot.
+
 
       ## Instruction
+
       {instruction}
 
+
       ## Selected VLA Models and Exact Training Tasks
+
       {available_models}
 
-      ## Planning Rules
-      - Output only valid JSON.
-      - Use only ik_reach_object_v1 and vla_model.
-      - Every vla_model step MUST be immediately preceded by one ik_reach_object_v1 step targeting the same interaction location.
-      - An IK step only moves the arm and cannot interact with an object.
-      - Choose exactly one selected model for each VLA step and use its exact model ID.
-      - The VLA description MUST exactly match one training task declared for that model.
-      - Never invent a model ID or assign an undeclared task.
-      - Use normalized YOLO bounding boxes [x_center, y_center, width, height] for IK targets.
-      - If no selected model supports an action, output {"error":"NO_CAPABLE_MODEL","reason":"brief explanation"}.
 
-      Each step contains step_index, description, target_bbox, method_id, and model_id.
-    no_ik: |-
-      You are a robotic task planner for end-to-end VLA policies.
+      ## Planning Rules
+
+      - Output only valid JSON using the schema below.
+
+      - Use only `ik_reach_object_v1` and `vla_model`.
+
+      - Every `vla_model` step MUST be immediately preceded by one `ik_reach_object_v1`
+      step targeting the same interaction location.
+
+      - An IK step only moves the arm. It does not grasp, release, open, close, push,
+      or pull.
+
+      - For each VLA step, choose exactly one selected model and set `model_id` to
+      its exact ID.
+
+      - The VLA description MUST exactly match one training task declared for that
+      model.
+
+      - Never invent a model ID or assign a task not listed for that model.
+
+      - Use normalized YOLO bounding boxes [x_center, y_center, width, height] for
+      IK targets.
+
+      - If no selected model supports a required action, output {"error":"NO_CAPABLE_MODEL","reason":"brief
+      explanation"}.
+
+
+      ## Output Schema
+
+      {"task_id":"descriptive_id","total_steps":2,"steps":[{"step_index":1,"description":"Reach
+      the target","target_bbox":[0.5,0.5,0.2,0.2],"method_id":"ik_reach_object_v1","model_id":null},{"step_index":2,"description":"exact
+      training task","target_bbox":null,"method_id":"vla_model","model_id":"selected_model_id"}]}'
+    no_ik: 'You are a robotic task planner for end-to-end VLA policies.
+
 
       ## Instruction
+
       {instruction}
 
+
       ## Selected VLA Models and Exact Training Tasks
+
       {available_models}
 
+
       ## Planning Rules
-      - Output only valid JSON.
-      - NEVER emit ik_reach_object_v1, reach-only steps, or hand-written motion primitives.
-      - Every step MUST use method_id vla_model.
-      - Treat each step as one complete end-to-end task that a selected model was trained to perform.
-      - Choose exactly one selected model and use its exact model ID.
-      - The step description MUST exactly match one training task declared for that model.
+
+      - Output only valid JSON using the schema below.
+
+      - NEVER emit `ik_reach_object_v1`, reach-only steps, or hand-written motion
+      primitives.
+
+      - Every step MUST use `method_id` equal to `vla_model`.
+
+      - Treat each step as one complete end-to-end task that a selected model was
+      trained to perform.
+
+      - Set `model_id` to the exact selected model ID.
+
+      - The step description MUST exactly match one training task declared for that
+      model.
+
       - Prefer a single complete trained task instead of decomposing it.
-      - Never invent a model ID or assign an undeclared task.
-      - If no selected model supports the instruction, output {"error":"NO_CAPABLE_MODEL","reason":"brief explanation"}.
 
-      Each step contains step_index, description, target_bbox, method_id, and model_id.
+      - Never invent a model ID or assign a task not listed for that model.
+
+      - If no selected model supports the instruction, output {"error":"NO_CAPABLE_MODEL","reason":"brief
+      explanation"}.
+
+
+      ## Output Schema
+
+      {"task_id":"descriptive_id","total_steps":1,"steps":[{"step_index":1,"description":"exact
+      training task","target_bbox":null,"method_id":"vla_model","model_id":"selected_model_id"}]}'
 prompt_template: "You are a robotic task planner for a Vision-Language-Action (VLA)\
   \ system.\n\n## Task\nConvert a natural language instruction into a step-by-step\
   \ robotic execution plan.\n\n## Input\n{instruction}\n\n## Available Methods\n\n\
@@ -222,10 +267,10 @@ click_to_move:
   target_height: 0.0
   safety_height: 10.0
 data_collection:
-  repo_id: phawitbinabik/DS4_2B2O_FF_4
-  dataset_root: ./data/DS4_2B2O_FF_4
-  task: pick up the bow to the white bowl
-  num_episodes: 120
+  repo_id: phawitbinabik/DS5_2B2O_VV_rand25
+  dataset_root: ./data/DS5_2B2O_VV_rand25
+  task: pick up the star to the white bowl
+  num_episodes: 200
   encoder_threads: 4
   push_to_hub: false
   resume: true
@@ -240,3 +285,7 @@ data_collection:
       height: 240
 hf_repo_name: phawitbinabik
 training_server: http://100.87.242.52:8000
+execution_loop:
+  actions_per_cycle: 100
+  cycles_before_replan: 5
+  max_replans: 3
