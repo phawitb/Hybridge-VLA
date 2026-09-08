@@ -12291,6 +12291,7 @@ function g3dDrawInputImage(b64, generation=G3D.sceneGeneration, detectionId=G3D.
     img.onload = () => {
       if (!g3dSceneIsCurrent(generation, detectionId)) { resolve(false); return; }
       G3D.imageElement = img;
+      G3D.imageSize = [img.naturalWidth || img.width, img.naturalHeight || img.height];
       G3D.renderedGeneration = generation;
       G3D.renderedDetectionId = detectionId;
       const canvas = document.getElementById('g3dImageCanvas');

@@ -43,6 +43,10 @@ const elements = {
   g3dTaskControls: {style: {display: 'none'}},
   g3dTaskHint: {textContent: ''},
   g3dSceneInfo: {textContent: ''},
+  g3dImageCanvas: {width: 0, height: 0, style: {}},
+  g3dImagePlaceholder: {style: {}},
+  g3dAddObjectBtn: {disabled: true},
+  g3dEditHint: {style: {}},
 };
 const applied = [];
 const context = {
@@ -67,6 +71,16 @@ const context = {
   g3dInitScene() {},
   g3dJointArray: joints => Object.values(joints),
   simApplyJoints: (robot, joints) => applied.push({robot, joints}),
+  g3dRedrawImage() {},
+  Image: class {
+    set src(_value) {
+      this.width = 1024;
+      this.height = 768;
+      this.naturalWidth = 1024;
+      this.naturalHeight = 768;
+      this.onload();
+    }
+  },
   console,
 };
 vm.createContext(context);
@@ -154,4 +168,12 @@ assert.match(extractFunction('g3dSyncEditedObjects'), /\/api\/generate3d\/detect
 assert.match(extractFunction('g3dRunTask'), /\/api\/generate3d\/task\/start/);
 assert.match(extractFunction('g3dStopTask'), /\/api\/generate3d\/task\/stop/);
 
-console.log('Generate 3D task controls and live robot-state rendering pass');
+vm.runInContext(`${extractFunction('g3dDrawInputImage')}; this.g3dDrawInputImage = g3dDrawInputImage;`, context);
+context.G3D.imageSize = [640, 480];
+context.G3D.detectionId = null;
+context.G3D.renderedDetectionId = null;
+context.g3dDrawInputImage('uploaded-image', 4, null).then(drawn => {
+  assert.equal(drawn, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.G3D.imageSize)), [1024, 768]);
+  console.log('Generate 3D task controls and live robot-state rendering pass');
+});

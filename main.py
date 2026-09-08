@@ -7300,11 +7300,11 @@ def _g3d_store_detection(objects, image_size):
 
 @app.post("/api/generate3d/detection/manual")
 async def generate3d_detection_manual(request: Request):
+    data = await request.json()
     if not g3d_calib_state.get("model"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "NOT_CALIBRATED", "error": "Generate 3D calibration is not computed"})
     if g3d_task_manager.status().get("running"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "TASK_RUNNING", "error": "Stop the task before editing objects"})
-    data = await request.json()
     try:
         rebuilt, image_size = _g3d_rebuild_detection_objects(data.get("objects"), data.get("image_size"))
     except TaskResolutionError as exc:

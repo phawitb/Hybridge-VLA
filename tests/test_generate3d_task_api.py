@@ -1,6 +1,7 @@
 import threading
 import time
 import asyncio
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -320,6 +321,29 @@ def test_generate3d_manual_detection_rejects_duplicate_names(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["code"] == "DUPLICATE_OBJECT_NAME"
+
+
+def test_generate3d_manual_detection_rechecks_task_after_body_is_read(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda *args, **kwargs: {
+        "position_3d": [0.0, 0.0, 0.0],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    running = {"value": False}
+    monkeypatch.setattr(main.g3d_task_manager, "status", lambda: {"running": running["value"]})
+
+    class RequestThatStartsTask:
+        async def json(self):
+            running["value"] = True
+            return {
+                "image_size": [800, 600],
+                "objects": [{"name": "cube", "bbox": [100, 100, 200, 200]}],
+            }
+
+    response = asyncio.run(main.generate3d_detection_manual(RequestThatStartsTask()))
+
+    assert response.status_code == 409
+    assert json.loads(response.body)["code"] == "TASK_RUNNING"
 
 
 def test_generate3d_detection_update_rejects_duplicate_names(monkeypatch):
