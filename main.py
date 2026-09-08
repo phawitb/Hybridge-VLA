@@ -6835,16 +6835,15 @@ def _g3d_validate_preparation_target(joints: dict, current: dict) -> None:
             raise RuntimeError(f"Preparation joint is outside the safe range: {name}={value}")
 
 
-def _g3d_execute_pick_place(
+def _g3d_build_pick_place_plan(
     source: dict,
     target: dict,
     image_size: list,
     target_height_cm: float,
     safety_height_cm: float,
-    stop_event: threading.Event,
-    publish,
+    initial_joints: dict,
     calibration=None,
-) -> None:
+) -> list[dict]:
     source_pixel = source.get("center_pixel")
     target_pixel = target.get("center_pixel")
     if not isinstance(source_pixel, list) or len(source_pixel) < 2:
@@ -6861,7 +6860,7 @@ def _g3d_execute_pick_place(
     for prediction in (source_low, source_safe, target_low, target_safe):
         _g3d_validate_joint_target(prediction["joints"])
 
-    current = robot_get_positions()
+    current = {name: float(initial_joints[name]) for name in ROBOT_JOINTS}
     raised = {
         **current,
         "shoulder_lift": min(
@@ -6875,50 +6874,108 @@ def _g3d_execute_pick_place(
     _g3d_validate_preparation_target(source_approach, current)
     _g3d_validate_joint_target(opened_at_source)
 
-    if not _g3d_task_move(raised, "raising_to_safety", stop_event, publish):
-        return
-    if not _g3d_task_move(source_approach, "moving_to_source", stop_event, publish):
-        return
-    if not _g3d_task_move(opened_at_source, "opening_gripper", stop_event, publish, n_steps=10):
-        return
     source_pick = {**source_low["joints"], "gripper": 100.0}
-    if not _g3d_task_move(source_pick, "descending_to_source", stop_event, publish):
-        return
-
-    grasped = {**robot_get_positions(), "gripper": 0.0}
-    if not _g3d_task_grip(grasped["gripper"], "grasping", stop_event, publish):
-        return
-
     arm_names = ROBOT_JOINTS[:5]
-    for prediction, phase in (
-        (source_safe, "lifting_source"),
-        (target_safe, "moving_to_target"),
-        (target_low, "placing"),
-    ):
-        waypoint = {**prediction["joints"], "gripper": 0.0}
-        if not _g3d_task_move(waypoint, phase, stop_event, publish, convergence_names=arm_names):
+    source_grasped = {**source_low["joints"], "gripper": 0.0}
+    source_lifted = {**source_safe["joints"], "gripper": 0.0}
+    target_approach = {**target_safe["joints"], "gripper": 0.0}
+    target_place = {**target_low["joints"], "gripper": 0.0}
+    released = {**target_low["joints"], "gripper": 100.0}
+    final_waypoint = {**target_safe["joints"], "gripper": 100.0}
+    for waypoint in (source_pick, source_grasped, source_lifted, target_approach, target_place, released, final_waypoint):
+        _g3d_validate_joint_target(waypoint)
+
+    return [
+        {"phase": "raising_to_safety", "joints": raised, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "moving_to_source", "joints": source_approach, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "opening_gripper", "joints": opened_at_source, "n_steps": 10, "convergence_names": ["gripper"]},
+        {"phase": "descending_to_source", "joints": source_pick, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "grasping", "joints": source_grasped, "kind": "grip", "command_cycles": 10},
+        {"phase": "lifting_source", "joints": source_lifted, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "moving_to_target", "joints": target_approach, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "placing", "joints": target_place, "n_steps": 15, "convergence_names": arm_names},
+        {"phase": "releasing", "joints": released, "n_steps": 10, "convergence_names": ["gripper"]},
+        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names},
+    ]
+
+
+def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publish) -> None:
+    for step in plan:
+        if step.get("kind") == "grip":
+            if not _g3d_task_grip(
+                step["joints"]["gripper"], step["phase"], stop_event, publish,
+                command_cycles=step.get("command_cycles", 10),
+            ):
+                return
+        elif not _g3d_task_move(
+            step["joints"], step["phase"], stop_event, publish,
+            n_steps=step.get("n_steps", 15),
+            convergence_names=step.get("convergence_names"),
+        ):
             return
 
-    released = {**robot_get_positions(), "gripper": 100.0}
-    if not _g3d_task_move(released, "releasing", stop_event, publish, n_steps=10):
-        return
-    final_waypoint = {**target_safe["joints"], "gripper": 100.0}
-    _g3d_task_move(final_waypoint, "lifting_after_release", stop_event, publish)
+
+def _g3d_execute_simulation(plan: list[dict], initial_joints: dict, stop_event: threading.Event, publish) -> None:
+    current = {name: float(initial_joints[name]) for name in ROBOT_JOINTS}
+    for step in plan:
+        target = step["joints"]
+        n_steps = max(1, int(step.get("n_steps", step.get("command_cycles", 10))))
+        for index in range(1, n_steps + 1):
+            if stop_event.is_set():
+                return
+            ratio = index / n_steps
+            waypoint = {
+                name: round(current[name] + ratio * (float(target[name]) - current[name]), 2)
+                for name in ROBOT_JOINTS
+            }
+            publish(step["phase"], waypoint)
+            time.sleep(0.02)
+        current = {name: float(target[name]) for name in ROBOT_JOINTS}
+
+
+def _g3d_simulation_initial_joints(calibration: dict) -> dict:
+    for point in calibration.get("points", []):
+        joints = point.get("joints") if isinstance(point, dict) else None
+        if isinstance(joints, dict) and all(name in joints for name in ROBOT_JOINTS):
+            return {name: float(joints[name]) for name in ROBOT_JOINTS}
+    return {name: (50.0 if name == "gripper" else 0.0) for name in ROBOT_JOINTS}
+
+
+def _g3d_execute_pick_place(
+    source: dict,
+    target: dict,
+    image_size: list,
+    target_height_cm: float,
+    safety_height_cm: float,
+    stop_event: threading.Event,
+    publish,
+    calibration=None,
+) -> None:
+    initial_joints = robot_get_positions()
+    plan = _g3d_build_pick_place_plan(
+        source, target, image_size, target_height_cm, safety_height_cm,
+        initial_joints, calibration=calibration,
+    )
+    _g3d_execute_real_plan(plan, stop_event, publish)
 
 
 @app.post("/api/generate3d/task/start")
 async def generate3d_task_start(request: Request):
     data = await request.json()
-    if not robot_state["connected"]:
+    execution_mode = str(data.get("execution_mode", "simulation")).strip().lower()
+    if execution_mode not in {"simulation", "real"}:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_EXECUTION_MODE", "error": "Execution mode must be simulation or real"})
+    use_real_robot = execution_mode == "real"
+    if use_real_robot and not robot_state["connected"]:
         return JSONResponse(status_code=409, content={"ok": False, "code": "ROBOT_NOT_CONNECTED", "error": "Robot not connected"})
     if not g3d_calib_state.get("model"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "NOT_CALIBRATED", "error": "Generate 3D calibration is not computed"})
-    if vla_manager.status().get("running") or any((
+    if use_real_robot and (vla_manager.status().get("running") or any((
         teleop_state.get("running"),
         datacollect_state.get("running"),
         eval_state.get("running"),
         infer_py_state.get("running"),
-    )):
+    ))):
         return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is owned by another process"})
 
     instruction = str(data.get("instruction", "")).strip()
@@ -6972,31 +7029,47 @@ async def generate3d_task_start(request: Request):
     safety_height_cm = max(target_height_cm, min(safety_height_cm, 40.0))
     calibration_snapshot = copy.deepcopy(g3d_calib_state)
 
-    if not acquire_robot_operation("generate3d"):
+    hardware_acquired = False
+    if use_real_robot and not acquire_robot_operation("generate3d"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
+    hardware_acquired = use_real_robot
 
     def execute(resolved_source, resolved_target, stop_event, publish):
-        try:
-            return _g3d_execute_pick_place(
-                resolved_source,
-                resolved_target,
-                image_size,
-                target_height_cm,
-                safety_height_cm,
-                stop_event,
-                publish,
-                calibration=calibration_snapshot,
-            )
-        finally:
-            release_robot_operation("generate3d")
+        if use_real_robot:
+            try:
+                return _g3d_execute_pick_place(
+                    resolved_source,
+                    resolved_target,
+                    image_size,
+                    target_height_cm,
+                    safety_height_cm,
+                    stop_event,
+                    publish,
+                    calibration=calibration_snapshot,
+                )
+            finally:
+                release_robot_operation("generate3d")
+        initial_joints = _g3d_simulation_initial_joints(calibration_snapshot)
+        plan = _g3d_build_pick_place_plan(
+            resolved_source,
+            resolved_target,
+            image_size,
+            target_height_cm,
+            safety_height_cm,
+            initial_joints,
+            calibration=calibration_snapshot,
+        )
+        return _g3d_execute_simulation(plan, initial_joints, stop_event, publish)
 
     try:
-        result = g3d_task_manager.start(instruction, source, target, execute)
+        result = g3d_task_manager.start(instruction, source, target, execute, execution_mode=execution_mode)
     except Exception:
-        release_robot_operation("generate3d")
+        if hardware_acquired:
+            release_robot_operation("generate3d")
         raise
     if not result.get("ok"):
-        release_robot_operation("generate3d")
+        if hardware_acquired:
+            release_robot_operation("generate3d")
         return JSONResponse(status_code=409, content=result)
     return result
 

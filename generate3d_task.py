@@ -63,6 +63,7 @@ class Generate3DTaskManager:
             "phase": "idle",
             "running": False,
             "instruction": "",
+            "execution_mode": "simulation",
             "source": None,
             "target": None,
             "joints": None,
@@ -85,6 +86,7 @@ class Generate3DTaskManager:
         source: dict,
         target: dict,
         execute: Callable,
+        execution_mode: str = "simulation",
     ) -> dict:
         with self._lock:
             if self._state["running"]:
@@ -100,6 +102,7 @@ class Generate3DTaskManager:
                 "phase": "starting",
                 "running": True,
                 "instruction": str(instruction),
+                "execution_mode": str(execution_mode),
                 "source": copy.deepcopy(source),
                 "target": copy.deepcopy(target),
             }

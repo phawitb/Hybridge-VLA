@@ -26,12 +26,14 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 
 const elements = {
   g3dTaskInstruction: {value: ''},
+  g3dExecutionSimulation: {checked: true},
+  g3dExecutionReal: {checked: false},
   g3dEnforceWorkspace: {checked: true},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
@@ -102,7 +104,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   target_height_cm: 1,
   safety_height_cm: 10,
   enforce_workspace: true,
+  execution_mode: 'simulation',
 });
+elements.g3dExecutionReal.checked = true;
+assert.equal(context.g3dBuildTaskPayload().execution_mode, 'real');
+elements.g3dExecutionReal.checked = false;
 elements.g3dEnforceWorkspace.checked = false;
 assert.equal(context.g3dBuildTaskPayload().enforce_workspace, false);
 

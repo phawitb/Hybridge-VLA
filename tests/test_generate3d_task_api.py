@@ -73,6 +73,7 @@ def test_generate3d_task_start_resolves_objects_and_exposes_status(monkeypatch):
         "detection_id": "det-1",
         "target_height_cm": 1,
         "safety_height_cm": 10,
+        "execution_mode": "real",
     })
     wait_until(lambda: not manager.status()["running"])
     status = client.get("/api/generate3d/task/status").json()
@@ -83,6 +84,7 @@ def test_generate3d_task_start_resolves_objects_and_exposes_status(monkeypatch):
     assert executions[0][5] == main.g3d_calib_state
     assert executions[0][5] is not main.g3d_calib_state
     assert status["state"] == "completed"
+    assert status["execution_mode"] == "real"
     assert status["joints"] == {"shoulder_pan": 8.5, "gripper": 0.0}
 
 
@@ -160,11 +162,58 @@ def test_generate3d_task_start_can_disable_workspace_enforcement(monkeypatch):
         "instruction": "pick up white star to teal bowl",
         "detection_id": "det-1",
         "enforce_workspace": False,
+        "execution_mode": "real",
     })
     wait_until(lambda: not manager.status()["running"])
 
     assert response.status_code == 200
     assert manager.status()["state"] == "completed"
+
+
+def test_generate3d_task_defaults_to_simulation_without_robot_hardware(monkeypatch):
+    manager = setup_task_api(monkeypatch)
+    monkeypatch.setitem(main.robot_state, "connected", False)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: (_ for _ in ()).throw(AssertionError("simulation read hardware")))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("simulation wrote hardware")))
+    monkeypatch.setattr(main, "acquire_robot_operation", lambda owner: (_ for _ in ()).throw(AssertionError("simulation acquired hardware")))
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, height_cm=0, calibration=None: {
+        "position_3d": [pixel[0] / 1000, height_cm / 100, pixel[1] / 1000],
+        "joints": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": -height_cm,
+            "elbow_flex": 20.0,
+            "wrist_flex": 30.0,
+            "wrist_roll": 0.0,
+            "gripper": 50.0,
+        },
+    })
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+    })
+    wait_until(lambda: not manager.status()["running"])
+
+    assert response.status_code == 200
+    assert manager.status()["state"] == "completed"
+    assert manager.status()["execution_mode"] == "simulation"
+    assert manager.status()["joints"] is not None
+
+
+def test_generate3d_task_rejects_unknown_execution_mode(monkeypatch):
+    setup_task_api(monkeypatch)
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+        "execution_mode": "unsafe",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_EXECUTION_MODE"
 
 
 def test_calibrated_workspace_hull_normalizes_different_image_sizes(monkeypatch):

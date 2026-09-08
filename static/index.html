@@ -2319,6 +2319,16 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
             <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl">
             <div id="g3dTaskHint" style="font-size:0.74rem;color:#777;margin-top:5px">Mention exactly two detected object names: source first, target second.</div>
+            <div role="radiogroup" aria-label="Task execution mode" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:0.78rem;color:#333">
+              <label for="g3dExecutionSimulation" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" id="g3dExecutionSimulation" name="g3dExecutionMode" value="simulation" checked>
+                <strong>Simulation only</strong>
+              </label>
+              <label for="g3dExecutionReal" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" id="g3dExecutionReal" name="g3dExecutionMode" value="real">
+                <strong>Use real robot</strong>
+              </label>
+            </div>
             <label for="g3dEnforceWorkspace" style="display:flex;align-items:flex-start;gap:7px;margin-top:10px;font-size:0.78rem;color:#444;cursor:pointer">
               <input type="checkbox" id="g3dEnforceWorkspace" checked style="margin-top:2px">
               <span><strong>Use calibrated workspace safety</strong><br><span style="font-size:0.72rem;color:#777">Uncheck to allow positions outside the calibrated boundary. Joint limits and safe-height motion remain active.</span></span>
@@ -12773,6 +12783,7 @@ function g3dBuildTaskPayload() {
     target_height_cm: parseFloat(document.getElementById('g3dTargetHeight').value) || 0,
     safety_height_cm: parseFloat(document.getElementById('g3dSafetyHeight').value) || 0,
     enforce_workspace: document.getElementById('g3dEnforceWorkspace').checked,
+    execution_mode: document.getElementById('g3dExecutionReal').checked ? 'real' : 'simulation',
   };
 }
 
@@ -12809,7 +12820,7 @@ function g3dApplyTaskStatus(state) {
   if (state.state === 'completed') status.textContent = 'Task completed';
   else if (state.state === 'failed') status.textContent = `Failed: ${state.error || 'Unknown error'}`;
   else if (state.state === 'stopped') status.textContent = 'Task stopped';
-  else status.textContent = g3dTaskPhaseLabel(state.phase);
+  else status.textContent = `${state.execution_mode === 'real' ? 'Real robot' : 'Simulation'} · ${g3dTaskPhaseLabel(state.phase)}`;
   if (state.source && state.target) {
     document.getElementById('g3dSceneInfo').textContent = `${state.source.name} → ${state.target.name} · ${g3dTaskPhaseLabel(state.phase)}`;
   }
