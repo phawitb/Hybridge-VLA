@@ -69,6 +69,9 @@ def test_run_all_advances_only_after_success(tmp_path):
         calls.append(block["index"])
         transition("capturing", {"input": block["instruction"]})
         status = "success" if block["index"] == 0 else "uncertain"
+        if status == "success":
+            for phase in ("detecting", "planning", "executing", "capturing_verification", "verifying"):
+                transition(phase)
         return {"status": status, "verification": {"status": status, "reason": "checked", "visible_evidence": []}}
 
     assert manager.start("all", None, {"execution_mode": "simulation"}, runner)["ok"]
@@ -86,6 +89,8 @@ def test_block_run_and_stop_are_scoped_and_idempotent(tmp_path):
 
     def runner(block, config, transition, should_stop):
         calls.append(block["index"])
+        for phase in ("capturing", "detecting", "planning", "executing", "capturing_verification", "verifying"):
+            transition(phase)
         return {"status": "success"}
 
     manager.start("block", 1, {}, runner)
@@ -108,8 +113,13 @@ def test_artifact_path_rejects_traversal(tmp_path):
 def test_retry_clears_previous_terminal_error(tmp_path):
     manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
     manager.create_flow("long task", sample_plan(1)["subtasks"])
+    manager._update_block(0, "capturing")
     manager._update_block(0, "failed", {"outcome": "failed", "error": "old", "error_code": "OLD"})
-    manager.start("block", 0, {}, lambda *args: {"status": "success"})
+    def successful(block, config, transition, should_stop):
+        for phase in ("capturing", "detecting", "planning", "executing", "capturing_verification", "verifying"):
+            transition(phase)
+        return {"status": "success"}
+    manager.start("block", 0, {}, successful)
     wait_until(lambda: not manager.status()["running"])
     block = manager.status()["blocks"][0]
     assert block["phase"] == "success"
@@ -130,7 +140,10 @@ def test_finished_callback_runs_once_after_failure(tmp_path):
     manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
     manager.create_flow("long task", sample_plan(1)["subtasks"])
     finished = []
-    manager.start("all", None, {}, lambda *args: {"status": "failed"}, on_finished=lambda status: finished.append(status))
+    def failure(block, config, transition, should_stop):
+        transition("capturing")
+        return {"status": "failed"}
+    manager.start("all", None, {}, failure, on_finished=lambda status: finished.append(status))
     wait_until(lambda: not manager.status()["running"])
     assert finished == ["failed"]
 
@@ -142,3 +155,5 @@ def test_transition_rejects_skipped_or_unknown_phases(tmp_path):
         manager._update_block(0, "executing")
     with pytest.raises(FlowValidationError):
         manager._update_block(0, "invented")
+    with pytest.raises(FlowValidationError):
+        manager._update_block(0, "success")

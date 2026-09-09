@@ -13350,7 +13350,7 @@ async function g3dFlowStart(scope) {
 
 function g3dFlowRetryBlock(){return g3dFlowStart('block')}
 async function g3dFlowSaveObjects(){const block=G3D_FLOW.state?.blocks?.[G3D_FLOW.selectedIndex];if(!block)return;const objects=block.objects.map((object,index)=>({...object,bbox:String(document.querySelector(`[data-flow-bbox="${index}"]`)?.value||'').split(',').map(Number)}));try{const response=await fetch(`/api/generate3d/flow/block/${G3D_FLOW.selectedIndex}/objects`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({objects,image_size:G3D_FLOW.state.planning?.image_size})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'Could not save boxes');G3D_FLOW.state=data;g3dFlowRender();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}}
-async function g3dFlowUseCurrentRobotState(){const status=document.getElementById('g3dFlowRobotState');try{const response=await fetch('/api/generate3d/current-state');const data=await response.json();if(!data.ok)throw new Error(data.error||'Robot unavailable');G3D.currentJoints={...data.joints};const p=data.position_3d||[0,0,0];status.textContent=`Robot x:${Number(p[0]).toFixed(3)} z:${Number(p[2]).toFixed(3)}`;}catch(error){status.textContent=error.message;}}
+async function g3dFlowUseCurrentRobotState(){const status=document.getElementById('g3dFlowRobotState');try{const response=await fetch('/api/generate3d/current-state');const data=await response.json();if(!data.ok)throw new Error(data.error||'Robot unavailable');G3D.currentJoints={...data.joints};const p=data.position_3d||[0,0,0];status.textContent=`Live · Robot x:${Number(p[0]).toFixed(3)} z:${Number(p[2]).toFixed(3)}`;}catch(error){status.textContent=error.message;}}
 async function g3dFlowStop(){try{const response=await fetch('/api/generate3d/flow/stop',{method:'POST'});G3D_FLOW.state=await response.json();g3dFlowRender();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}}
 async function g3dFlowLoadStatus(){try{const response=await fetch('/api/generate3d/flow/status');G3D_FLOW.state=await response.json();g3dFlowRender();if(G3D_FLOW.state.running)g3dFlowBeginPolling();}catch(_){}}
 function g3dFlowBeginPolling(){if(G3D_FLOW.pollTimer)clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=setInterval(async()=>{await g3dFlowLoadStatus();if(!G3D_FLOW.state?.running){clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=null;}},300)}
@@ -13360,6 +13360,7 @@ document.getElementById('g3dFlowInstruction').addEventListener('input',g3dFlowLo
 document.getElementById('g3dFlowImageInput').addEventListener('change',event=>{const file=event.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>g3dFlowSetImage(String(reader.result).split(',')[1],file.type||'image/jpeg');reader.readAsDataURL(file)});
 g3dFlowLoadPrompt();
 g3dFlowLoadStatus();
+setInterval(()=>{if(document.getElementById('inner-g3d-flow')?.classList.contains('active'))g3dFlowUseCurrentRobotState()},2000);
 
 g3dLoadCalibrationStatus();
 g3dResumeTaskStatus();

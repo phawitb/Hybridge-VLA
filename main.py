@@ -20,7 +20,7 @@ import httpx
 import numpy as np
 import yaml
 from dotenv import load_dotenv
-from PIL import Image
+from PIL import Image, ImageDraw
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -7449,7 +7449,7 @@ async def generate3d_task_start(request: Request):
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_INITIAL_JOINTS", "error": str(exc)})
 
-    flow_owned = bool(data.get("_flow_owned")) and g3d_flow_manager.status().get("running") and robot_operation_owner == "generate3d_flow"
+    flow_owned = bool(getattr(request, "flow_owned", False)) and g3d_flow_manager.status().get("running") and robot_operation_owner == "generate3d_flow"
     hardware_acquired = False
     if use_real_robot and not flow_owned and not acquire_robot_operation("generate3d"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
@@ -7489,7 +7489,10 @@ async def generate3d_task_start(request: Request):
             initial_joints,
             **plan_kwargs,
         )
-        return _g3d_execute_simulation(plan, initial_joints, stop_event, publish)
+        _g3d_execute_simulation(plan, initial_joints, stop_event, publish)
+        return {"simulated_placement": {"source_name": resolved_source.get("name"),
+                                         "target_name": resolved_target.get("name"),
+                                         "source_at_target": not stop_event.is_set()}}
 
     try:
         result = g3d_task_manager.start(instruction, source, target, execute, execution_mode=execution_mode)
@@ -7605,26 +7608,38 @@ async def generate3d_flow_plan(request: Request):
         if not image_b64:
             image_bytes, mime = _g3d_capture_top_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        else:
+            try:
+                image_bytes = base64.b64decode(image_b64, validate=True)
+            except (ValueError, TypeError) as exc:
+                raise FlowValidationError("INVALID_IMAGE", "Flow image is not valid base64") from exc
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as source_image:
+                source_image.verify()
+            with Image.open(io.BytesIO(image_bytes)) as source_image:
+                source_size = [source_image.width, source_image.height]
+        except Exception as exc:
+            raise FlowValidationError("INVALID_IMAGE", "Flow image is not a supported image") from exc
         prompt = _g3d_flow_planning_prompt(instruction)
         parsed, raw = await _g3d_flow_gemini(prompt, image_b64, mime, str(body.get("model", "")))
         subtasks = parse_flow_plan(parsed)
         state = g3d_flow_manager.create_flow(instruction, subtasks, planning={"prompt": prompt, "raw": raw, "mime": mime})
         source_name = "flow-source.jpg"
-        image_bytes = base64.b64decode(image_b64)
         g3d_flow_manager.artifact_path(state["flow_id"], source_name).write_bytes(image_bytes)
-        with Image.open(io.BytesIO(image_bytes)) as source_image:
-            source_size = [source_image.width, source_image.height]
         g3d_flow_manager.update_planning({"image_artifact": source_name, "image_size": source_size})
         for index, block in enumerate(subtasks):
-            upload = UploadFile(file=io.BytesIO(image_bytes), filename=source_name, headers={"content-type": mime})
-            preview = await generate3d_detect_image(upload, block["instruction"], str(body.get("model", "")))
-            if isinstance(preview, Response):
-                preview = json.loads(preview.body)
-            if preview.get("ok"):
-                g3d_flow_manager.update_block_preview(index, {"objects": preview.get("objects", []),
-                    "prompts": {"detection_raw": preview.get("gemini_raw", "")},
-                    "path": {"motion_mode": "smooth", "pick_height_cm": 0.0,
-                             "place_height_cm": preview.get("place_height_cm")}})
+            try:
+                upload = UploadFile(file=io.BytesIO(image_bytes), filename=source_name, headers={"content-type": mime})
+                preview = await generate3d_detect_image(upload, block["instruction"], str(body.get("model", "")))
+                if isinstance(preview, Response):
+                    preview = json.loads(preview.body)
+                if preview.get("ok"):
+                    g3d_flow_manager.update_block_preview(index, {"objects": preview.get("objects", []),
+                        "prompts": {"detection_raw": preview.get("gemini_raw", "")},
+                        "path": {"motion_mode": "smooth", "pick_height_cm": 0.0,
+                                 "place_height_cm": preview.get("place_height_cm")}})
+            except Exception as exc:
+                g3d_flow_manager.update_block_preview(index, {"prompts": {"preview_error": str(exc)}})
         return g3d_flow_manager.status()
     except FlowValidationError as exc:
         status = 409 if exc.code == "FLOW_RUNNING" else 400
@@ -7781,8 +7796,9 @@ async def generate3d_detect_image(
 
 
 class _G3DJsonRequest:
-    def __init__(self, payload):
+    def __init__(self, payload, flow_owned=False):
         self.payload = payload
+        self.flow_owned = bool(flow_owned)
 
     async def json(self):
         return self.payload
@@ -7852,12 +7868,10 @@ def _run_g3d_flow_block(block, config, transition, should_stop):
                "pick_height_cm": config.get("pick_height_cm", 0), "place_height_cm": place_height,
                "safety_height_cm": config.get("safety_height_cm", 10), "enforce_workspace": bool(config.get("enforce_workspace", False)),
                "execution_mode": config.get("execution_mode", "simulation"), "motion_mode": config.get("motion_mode", "smooth")}
-    if config.get("_flow_owned"):
-        payload["_flow_owned"] = True
     if payload["execution_mode"] == "simulation" and config.get("initial_joints"):
         payload["initial_joints"] = config["initial_joints"]
     transition("executing")
-    started = asyncio.run(generate3d_task_start(_G3DJsonRequest(payload)))
+    started = asyncio.run(generate3d_task_start(_G3DJsonRequest(payload, flow_owned=config.get("_flow_owned", False))))
     if isinstance(started, Response):
         started = json.loads(started.body)
     if not started.get("ok"):
@@ -7870,14 +7884,26 @@ def _run_g3d_flow_block(block, config, transition, should_stop):
 
     transition("capturing_verification")
     after_bytes, after_mime = _g3d_flow_image_for_block(config)
+    if payload["execution_mode"] == "simulation":
+        simulated_image = Image.open(io.BytesIO(after_bytes)).convert("RGB")
+        draw = ImageDraw.Draw(simulated_image)
+        target_box = target.get("bbox") or []
+        if len(target_box) == 4:
+            x1, y1, x2, y2 = [int(value) for value in target_box]
+            draw.rectangle((x1, y1, x2, y2), outline="#34a853", width=4)
+            draw.text((x1 + 5, y1 + 5), f"SIM: {source.get('name')} placed here", fill="#34a853")
+        simulated_buffer = io.BytesIO()
+        simulated_image.save(simulated_buffer, format="JPEG", quality=90)
+        after_bytes, after_mime = simulated_buffer.getvalue(), "image/jpeg"
     after_name = f"block-{block['index'] + 1}-after.jpg"
     g3d_flow_manager.artifact_path(flow_id, after_name).write_bytes(after_bytes)
     artifacts = {"before": before_name, "after": after_name}
     transition("verifying", {"artifacts": artifacts})
     if payload["execution_mode"] == "simulation":
-        simulated_state = {"source_name": source["name"], "target_name": target["name"], "source_at_target": True,
-                           "target_position_3d": copy.deepcopy(target.get("position_3d"))}
-        verified = simulated_state["source_at_target"] and simulated_state["target_position_3d"] is not None
+        simulated_state = copy.deepcopy((task_state.get("result") or {}).get("simulated_placement") or {})
+        simulated_state.update({"source_name": simulated_state.get("source_name"), "target_name": simulated_state.get("target_name"),
+                           "target_position_3d": copy.deepcopy(target.get("position_3d"))})
+        verified = simulated_state.get("source_at_target") is True and simulated_state.get("source_name") == source.get("name") and simulated_state.get("target_name") == target.get("name") and simulated_state["target_position_3d"] is not None
         verification = {"status": "success" if verified else "uncertain",
                         "reason": "Authoritative simulated scene places the source at the target" if verified else "Simulated placement state is incomplete",
                         "visible_evidence": [f"{source['name']} is attached to {target['name']} in simulated state"] if verified else [],

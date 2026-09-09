@@ -87,6 +87,7 @@ class Generate3DTaskManager:
             "target": None,
             "joints": None,
             "error": None,
+            "result": None,
         }
 
     def status(self) -> dict:
@@ -136,7 +137,7 @@ class Generate3DTaskManager:
     def _worker(self, execute: Callable) -> None:
         state = self.status()
         try:
-            execute(
+            result = execute(
                 state["source"],
                 state["target"],
                 self._stop_event,
@@ -146,7 +147,7 @@ class Generate3DTaskManager:
                 if self._stop_event.is_set():
                     self._state.update(state="stopped", phase="stopped", running=False)
                 else:
-                    self._state.update(state="completed", phase="completed", running=False)
+                    self._state.update(state="completed", phase="completed", running=False, result=copy.deepcopy(result))
         except Exception as exc:
             with self._lock:
                 self._state.update(

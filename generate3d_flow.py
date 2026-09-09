@@ -152,8 +152,9 @@ class Generate3DFlowManager:
             block = self._state["blocks"][index]
             current = block.get("phase", "pending")
             retry_start = current in TERMINAL and phase == "capturing"
-            terminal_exit = phase in TERMINAL
-            if phase not in ACTIVE | TERMINAL or (not retry_start and not terminal_exit and NEXT_PHASE.get(current) != phase):
+            successful_exit = phase == "success" and current == "verifying"
+            unsuccessful_exit = phase in (TERMINAL - {"success"}) and current in ACTIVE
+            if phase not in ACTIVE | TERMINAL or (not retry_start and not successful_exit and not unsuccessful_exit and NEXT_PHASE.get(current) != phase):
                 raise FlowValidationError("INVALID_FLOW_TRANSITION", f"Cannot move block from {current} to {phase}")
             block["phase"] = phase
             block.setdefault("timestamps", {})[phase] = _now()
