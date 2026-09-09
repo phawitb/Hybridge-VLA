@@ -157,3 +157,16 @@ def test_transition_rejects_skipped_or_unknown_phases(tmp_path):
         manager._update_block(0, "invented")
     with pytest.raises(FlowValidationError):
         manager._update_block(0, "success")
+
+
+def test_capture_failure_is_recorded_on_block(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    manager.create_flow("long task", sample_plan(1)["subtasks"])
+    def fail_capture(block, config, transition, should_stop):
+        transition("capturing")
+        raise RuntimeError("camera failed")
+    manager.start("block", 0, {}, fail_capture)
+    wait_until(lambda: not manager.status()["running"])
+    block = manager.status()["blocks"][0]
+    assert block["phase"] == "failed"
+    assert block["error"] == "camera failed"

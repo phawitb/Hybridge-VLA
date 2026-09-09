@@ -7836,17 +7836,17 @@ def _g3d_wait_task(should_stop, timeout=180.0) -> dict:
 
 
 def _run_g3d_flow_block(block, config, transition, should_stop):
+    transition("capturing")
     image_bytes, mime = _g3d_flow_image_for_block(config)
     flow_id = g3d_flow_manager.status()["flow_id"]
     before_name = f"block-{block['index'] + 1}-before.jpg"
     before_path = g3d_flow_manager.artifact_path(flow_id, before_name)
     before_path.write_bytes(image_bytes)
     before_b64 = base64.b64encode(image_bytes).decode("ascii")
-    transition("capturing", {"artifacts": {"before": before_name}})
     if should_stop():
         return {"status": "stopped"}
 
-    transition("detecting")
+    transition("detecting", {"artifacts": {"before": before_name}})
     upload = UploadFile(file=io.BytesIO(image_bytes), filename=before_name, headers={"content-type": mime})
     detected = asyncio.run(generate3d_detect_image(upload, block["instruction"], str(config.get("model", ""))))
     if isinstance(detected, Response):
