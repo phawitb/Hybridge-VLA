@@ -26,7 +26,7 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskTargetHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskPickHeight', 'g3dTaskPlaceHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 
@@ -37,7 +37,8 @@ const elements = {
   g3dEnforceWorkspace: {checked: true},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
-  g3dTaskTargetHeight: {value: '5'},
+  g3dTaskPickHeight: {value: '0'},
+  g3dTaskPlaceHeight: {value: '5'},
   g3dTaskSafetyHeight: {value: '18'},
   g3dMotionSmooth: {checked: true},
   g3dMotionWaypoint: {checked: false},
@@ -133,7 +134,8 @@ assert.equal(elements.g3dTaskInstruction.value, 'pick up white star to teal bowl
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   instruction: 'pick up white star to teal bowl',
   detection_id: 'det-1',
-  target_height_cm: 5,
+  pick_height_cm: 0,
+  place_height_cm: 5,
   safety_height_cm: 18,
   enforce_workspace: true,
   execution_mode: 'simulation',
@@ -158,18 +160,18 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dResolveTaskObjects('pick u
   target: context.G3D.objects[1],
 });
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(
-  context.G3D.objects[0], context.G3D.objects[1], 5, 18, 'waypoint',
+  context.G3D.objects[0], context.G3D.objects[1], 0, 5, 18, 'waypoint',
 ))), [
-  [0.12, 0.05, 0.08],
+  [0.12, 0, 0.08],
   [0.12, 0.18, 0.08],
   [-0.09, 0.18, 0.14],
-  [-0.09, 0.11, 0.14],
+  [-0.09, 0.05, 0.14],
 ]);
 const smoothPath = JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(
-  context.G3D.objects[0], context.G3D.objects[1], 5, 18, 'smooth',
+  context.G3D.objects[0], context.G3D.objects[1], 0, 5, 18, 'smooth',
 )));
-assert.deepEqual(smoothPath[0], [0.12, 0.05, 0.08]);
-assert.deepEqual(smoothPath.at(-1), [-0.09, 0.11, 0.14]);
+assert.deepEqual(smoothPath[0], [0.12, 0, 0.08]);
+assert.deepEqual(smoothPath.at(-1), [-0.09, 0.05, 0.14]);
 assert.equal(smoothPath.length, 25);
 assert.ok(smoothPath.slice(0, 7).every(point => point[0] === 0.12 && point[2] === 0.08));
 assert.ok(smoothPath.slice(7, 19).every(point => point[1] >= 0.18));
@@ -195,7 +197,7 @@ vm.runInContext(`${extractFunction('g3dClearTaskPath')}; this.g3dClearTaskPath =
 vm.runInContext(`${extractFunction('g3dPreviewTaskPath')}; this.g3dPreviewTaskPath = g3dPreviewTaskPath;`, context);
 assert.equal(context.g3dPreviewTaskPath(), true);
 assert.equal(context.G3D.pathVisuals.length, 4);
-assert.match(elements.g3dPathHint.textContent, /pick\/place 5 cm.*transfer 18 cm/);
+assert.match(elements.g3dPathHint.textContent, /pick 0 cm.*place 5 cm.*transfer 18 cm/);
 elements.g3dExecutionReal.checked = true;
 assert.equal(context.g3dBuildTaskPayload().execution_mode, 'real');
 elements.g3dExecutionReal.checked = false;

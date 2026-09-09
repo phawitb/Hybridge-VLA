@@ -149,6 +149,29 @@ def test_generate3d_task_start_rejects_nonfinite_heights(monkeypatch):
     assert response.json()["code"] == "INVALID_HEIGHT"
 
 
+def test_generate3d_task_uses_separate_absolute_pick_and_place_heights(monkeypatch):
+    manager = setup_task_api(monkeypatch)
+    captured = []
+    monkeypatch.setattr(main, "_g3d_build_pick_place_plan", lambda *args, **kwargs: captured.append((args, kwargs)) or [])
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+        "execution_mode": "simulation",
+        "motion_mode": "waypoint",
+        "pick_height_cm": 0,
+        "place_height_cm": 5,
+        "safety_height_cm": 10,
+    })
+    wait_until(lambda: not manager.status()["running"])
+
+    assert response.status_code == 200
+    assert captured[0][0][3] == 0.0
+    assert captured[0][0][4] == 10.0
+    assert captured[0][1]["place_height_cm"] == 5.0
+
+
 def test_generate3d_task_start_rejects_stale_detection(monkeypatch):
     setup_task_api(monkeypatch)
     client = TestClient(main.app)
@@ -379,6 +402,37 @@ def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
     assert by_phase["lifting_after_release"]["gripper"] == 50.0
 
 
+def test_pick_place_plan_uses_absolute_place_height_from_floor(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    predicted = []
+
+    def fake_predict(pixel, image_size=None, height_cm=0, calibration=None):
+        predicted.append((list(pixel), float(height_cm)))
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 20.0,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 50.0,
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+
+    plan = main._g3d_build_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 0.0, 10.0, initial,
+        place_height_cm=5.0,
+    )
+    by_phase = {step["phase"]: step for step in plan}
+
+    assert by_phase["descending_to_source"]["joints"]["shoulder_lift"] == 0.0
+    assert by_phase["placing"]["joints"]["shoulder_lift"] == -5.0
+    assert (OBJECTS[1]["center_pixel"], 5.0) in predicted
+
+
 def test_smooth_pick_place_plan_curves_above_transfer_height(monkeypatch):
     initial = {name: 0.0 for name in main.ROBOT_JOINTS}
     initial["gripper"] = 35.0
@@ -399,7 +453,8 @@ def test_smooth_pick_place_plan_curves_above_transfer_height(monkeypatch):
     monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
 
     plan = main._g3d_build_smooth_pick_place_plan(
-        OBJECTS[0], OBJECTS[1], [800, 600], 5.0, 18.0, initial,
+        OBJECTS[0], OBJECTS[1], [800, 600], 0.0, 18.0, initial,
+        place_height_cm=5.0,
     )
     by_phase = {step["phase"]: step for step in plan}
     transfer = by_phase["moving_to_target"]
@@ -411,6 +466,7 @@ def test_smooth_pick_place_plan_curves_above_transfer_height(monkeypatch):
     assert max(sample["height_cm"] for sample in transfer["path_samples"]) > 18.0
     assert all(sample["pixel"] == OBJECTS[0]["center_pixel"] for sample in by_phase["lifting_source"]["path_samples"])
     assert all(sample["pixel"] == OBJECTS[1]["center_pixel"] for sample in by_phase["placing"]["path_samples"])
+    assert by_phase["placing"]["path_samples"][-1]["height_cm"] == 5.0
 
 
 def test_smooth_pick_place_plan_rejects_invalid_intermediate_joint(monkeypatch):

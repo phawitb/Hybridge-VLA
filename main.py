@@ -6946,6 +6946,7 @@ def _g3d_build_pick_place_plan(
     safety_height_cm: float,
     initial_joints: dict,
     calibration=None,
+    place_height_cm: float | None = None,
 ) -> list[dict]:
     source_pixel = source.get("center_pixel")
     target_pixel = target.get("center_pixel")
@@ -6962,8 +6963,11 @@ def _g3d_build_pick_place_plan(
         target_object_height_cm = max(0.0, target_object_height_cm)
     except (IndexError, TypeError, ValueError):
         target_object_height_cm = 0.0
-    target_top_height_cm = max(target_height_cm, target_object_height_cm)
-    target_release_height_cm = target_top_height_cm + G3D_TASK_TARGET_CLEARANCE_CM
+    target_release_height_cm = (
+        max(target_height_cm, target_object_height_cm) + G3D_TASK_TARGET_CLEARANCE_CM
+        if place_height_cm is None
+        else max(0.0, float(place_height_cm))
+    )
     transfer_height_cm = max(safety_height_cm, target_release_height_cm)
 
     source_low = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
@@ -7076,6 +7080,7 @@ def _g3d_build_smooth_pick_place_plan(
     safety_height_cm: float,
     initial_joints: dict,
     calibration=None,
+    place_height_cm: float | None = None,
 ) -> list[dict]:
     plan = _g3d_build_pick_place_plan(
         source,
@@ -7085,6 +7090,7 @@ def _g3d_build_smooth_pick_place_plan(
         safety_height_cm,
         initial_joints,
         calibration=calibration,
+        place_height_cm=place_height_cm,
     )
     by_phase = {step["phase"]: step for step in plan}
     source_pixel = source["center_pixel"]
@@ -7096,7 +7102,11 @@ def _g3d_build_smooth_pick_place_plan(
             raise ValueError
     except (IndexError, TypeError, ValueError):
         target_object_height_cm = 0.0
-    release_height = max(float(target_height_cm), target_object_height_cm) + G3D_TASK_TARGET_CLEARANCE_CM
+    release_height = (
+        max(float(target_height_cm), target_object_height_cm) + G3D_TASK_TARGET_CLEARANCE_CM
+        if place_height_cm is None
+        else max(0.0, float(place_height_cm))
+    )
     transfer_height = max(float(safety_height_cm), release_height)
 
     phase_samples = {
@@ -7217,11 +7227,13 @@ def _g3d_execute_pick_place(
     stop_event: threading.Event,
     publish,
     calibration=None,
+    place_height_cm: float | None = None,
 ) -> None:
     initial_joints = robot_get_positions()
     plan = _g3d_build_pick_place_plan(
         source, target, image_size, target_height_cm, safety_height_cm,
         initial_joints, calibration=calibration,
+        place_height_cm=place_height_cm,
     )
     _g3d_execute_real_plan(plan, stop_event, publish)
 
@@ -7235,11 +7247,13 @@ def _g3d_execute_smooth_pick_place(
     stop_event: threading.Event,
     publish,
     calibration=None,
+    place_height_cm: float | None = None,
 ) -> None:
     initial_joints = robot_get_positions()
     plan = _g3d_build_smooth_pick_place_plan(
         source, target, image_size, target_height_cm, safety_height_cm,
         initial_joints, calibration=calibration,
+        place_height_cm=place_height_cm,
     )
     _g3d_execute_real_plan(plan, stop_event, publish)
 
@@ -7307,14 +7321,18 @@ async def generate3d_task_start(request: Request):
         })
 
     try:
-        target_height_cm = float(data.get("target_height_cm", 0.0))
+        legacy_height_requested = "target_height_cm" in data and "pick_height_cm" not in data and "place_height_cm" not in data
+        target_height_cm = float(data.get("pick_height_cm", data.get("target_height_cm", 0.0)))
+        place_height_cm = None if legacy_height_requested else float(data.get("place_height_cm", 5.0))
         safety_height_cm = float(data.get("safety_height_cm", 10.0))
-        if not math.isfinite(target_height_cm) or not math.isfinite(safety_height_cm):
+        if not math.isfinite(target_height_cm) or not math.isfinite(safety_height_cm) or (place_height_cm is not None and not math.isfinite(place_height_cm)):
             raise ValueError
     except (TypeError, ValueError, OverflowError):
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_HEIGHT", "error": "Target and safety heights must be finite numbers"})
     target_height_cm = max(0.0, min(target_height_cm, 30.0))
-    safety_height_cm = max(target_height_cm, min(safety_height_cm, 40.0))
+    if place_height_cm is not None:
+        place_height_cm = max(0.0, min(place_height_cm, 30.0))
+    safety_height_cm = max(target_height_cm, place_height_cm or 0.0, min(safety_height_cm, 40.0))
     calibration_snapshot = copy.deepcopy(g3d_calib_state)
     try:
         simulation_initial_joints = None if use_real_robot else _g3d_simulation_initial_joints(data.get("initial_joints"))
@@ -7330,6 +7348,9 @@ async def generate3d_task_start(request: Request):
         if use_real_robot:
             try:
                 execute_real = _g3d_execute_smooth_pick_place if motion_mode == "smooth" else _g3d_execute_pick_place
+                execute_kwargs = {"calibration": calibration_snapshot}
+                if place_height_cm is not None:
+                    execute_kwargs["place_height_cm"] = place_height_cm
                 return execute_real(
                     resolved_source,
                     resolved_target,
@@ -7338,12 +7359,15 @@ async def generate3d_task_start(request: Request):
                     safety_height_cm,
                     stop_event,
                     publish,
-                    calibration=calibration_snapshot,
+                    **execute_kwargs,
                 )
             finally:
                 release_robot_operation("generate3d")
         initial_joints = simulation_initial_joints
         build_plan = _g3d_build_smooth_pick_place_plan if motion_mode == "smooth" else _g3d_build_pick_place_plan
+        plan_kwargs = {"calibration": calibration_snapshot}
+        if place_height_cm is not None:
+            plan_kwargs["place_height_cm"] = place_height_cm
         plan = build_plan(
             resolved_source,
             resolved_target,
@@ -7351,7 +7375,7 @@ async def generate3d_task_start(request: Request):
             target_height_cm,
             safety_height_cm,
             initial_joints,
-            calibration=calibration_snapshot,
+            **plan_kwargs,
         )
         return _g3d_execute_simulation(plan, initial_joints, stop_event, publish)
 

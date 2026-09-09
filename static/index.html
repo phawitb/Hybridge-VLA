@@ -2319,10 +2319,14 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
             <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl">
             <div id="g3dTaskHint" style="font-size:0.74rem;color:#777;margin-top:5px">Mention exactly two detected object names: source first, target second.</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-              <label for="g3dTaskTargetHeight" style="font-size:0.78rem;font-weight:600;color:#444">
-                Pick/Place Height (cm)
-                <input type="number" id="g3dTaskTargetHeight" value="0" min="0" max="30" step="1" style="margin-top:5px">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
+              <label for="g3dTaskPickHeight" style="font-size:0.78rem;font-weight:600;color:#444">
+                Pick Height (cm)
+                <input type="number" id="g3dTaskPickHeight" value="0" min="0" max="30" step="1" style="margin-top:5px">
+              </label>
+              <label for="g3dTaskPlaceHeight" style="font-size:0.78rem;font-weight:600;color:#444">
+                Place Height (cm)
+                <input type="number" id="g3dTaskPlaceHeight" value="5" min="0" max="30" step="1" style="margin-top:5px">
               </label>
               <label for="g3dTaskSafetyHeight" style="font-size:0.78rem;font-weight:600;color:#444">
                 Safety/Transfer Height (cm)
@@ -12791,7 +12795,8 @@ document.getElementById('g3dTaskInstruction').addEventListener('input', () => {
   G3D.instructionAuto = false;
   g3dPreviewTaskPath();
 });
-document.getElementById('g3dTaskTargetHeight').addEventListener('input', g3dPreviewTaskPath);
+document.getElementById('g3dTaskPickHeight').addEventListener('input', g3dPreviewTaskPath);
+document.getElementById('g3dTaskPlaceHeight').addEventListener('input', g3dPreviewTaskPath);
 document.getElementById('g3dTaskSafetyHeight').addEventListener('input', g3dPreviewTaskPath);
 document.getElementById('g3dMotionSmooth').addEventListener('change', g3dPreviewTaskPath);
 document.getElementById('g3dMotionWaypoint').addEventListener('change', g3dPreviewTaskPath);
@@ -12824,12 +12829,11 @@ function g3dSampleSegment(from, to, count, minimumHeight=null) {
   });
 }
 
-function g3dBuildTaskPathPoints(source, target, targetHeightCm, safetyHeightCm, motionMode='smooth') {
+function g3dBuildTaskPathPoints(source, target, pickHeightCm, placeHeightCm, safetyHeightCm, motionMode='smooth') {
   const sourcePosition = source?.position_3d || [0, 0, 0];
   const targetPosition = target?.position_3d || [0, 0, 0];
-  const targetObjectHeightCm = Math.max(0, Number(target?.estimated_size_cm?.[2]) || 0);
-  const pickHeight = Math.max(0, Number(targetHeightCm) || 0) / 100;
-  const releaseHeight = (Math.max(0, Number(targetHeightCm) || 0, targetObjectHeightCm) + 5) / 100;
+  const pickHeight = Math.max(0, Number(pickHeightCm) || 0) / 100;
+  const releaseHeight = Math.max(0, Number(placeHeightCm) || 0) / 100;
   const transferHeight = Math.max(Math.max(0, Number(safetyHeightCm) || 0) / 100, releaseHeight);
   const waypointPoints = [
     [Number(sourcePosition[0]) || 0, pickHeight, Number(sourcePosition[2]) || 0],
@@ -12865,10 +12869,11 @@ function g3dPreviewTaskPath() {
     if (hint) hint.textContent = 'Enter a valid source and target to preview the movement path.';
     return false;
   }
-  const targetHeight = parseFloat(document.getElementById('g3dTaskTargetHeight').value) || 0;
+  const pickHeight = parseFloat(document.getElementById('g3dTaskPickHeight').value) || 0;
+  const placeHeight = parseFloat(document.getElementById('g3dTaskPlaceHeight').value) || 0;
   const safetyHeight = parseFloat(document.getElementById('g3dTaskSafetyHeight').value) || 0;
   const motionMode = g3dSelectedMotionMode();
-  const points = g3dBuildTaskPathPoints(resolved.source, resolved.target, targetHeight, safetyHeight, motionMode);
+  const points = g3dBuildTaskPathPoints(resolved.source, resolved.target, pickHeight, placeHeight, safetyHeight, motionMode);
   const vectors = points.map(point => new THREE.Vector3(...point));
   const line = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(vectors),
@@ -12888,7 +12893,7 @@ function g3dPreviewTaskPath() {
     G3D.scene.add(marker);
     G3D.pathVisuals.push(marker);
   });
-  if (hint) hint.textContent = `${motionMode === 'smooth' ? 'Smooth Natural' : 'Waypoint'} path · pick/place ${targetHeight} cm · transfer ${Math.max(safetyHeight, points[points.length - 1][1] * 100).toFixed(0)} cm`;
+  if (hint) hint.textContent = `${motionMode === 'smooth' ? 'Smooth Natural' : 'Waypoint'} path · pick ${pickHeight} cm · place ${placeHeight} cm · transfer ${Math.max(safetyHeight, pickHeight, placeHeight).toFixed(0)} cm`;
   document.getElementById('g3dSceneInfo').textContent = `${resolved.source.name} → ${resolved.target.name} · Path preview`;
   return true;
 }
@@ -12898,7 +12903,8 @@ function g3dBuildTaskPayload() {
   return {
     instruction: document.getElementById('g3dTaskInstruction').value.trim(),
     detection_id: G3D.detectionId,
-    target_height_cm: parseFloat(document.getElementById('g3dTaskTargetHeight').value) || 0,
+    pick_height_cm: parseFloat(document.getElementById('g3dTaskPickHeight').value) || 0,
+    place_height_cm: parseFloat(document.getElementById('g3dTaskPlaceHeight').value) || 0,
     safety_height_cm: parseFloat(document.getElementById('g3dTaskSafetyHeight').value) || 0,
     enforce_workspace: document.getElementById('g3dEnforceWorkspace').checked,
     execution_mode: executionMode,
