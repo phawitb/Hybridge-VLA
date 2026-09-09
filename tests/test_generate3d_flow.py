@@ -114,7 +114,7 @@ def test_retry_clears_previous_terminal_error(tmp_path):
     manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
     manager.create_flow("long task", sample_plan(1)["subtasks"])
     manager._update_block(0, "capturing")
-    manager._update_block(0, "failed", {"outcome": "failed", "error": "old", "error_code": "OLD"})
+    manager._update_block(0, "failed", {"outcome": "failed", "error": "old", "error_code": "OLD", "task_phase": "completed", "joints": {"shoulder_pan": 90}})
     def successful(block, config, transition, should_stop):
         for phase in ("capturing", "detecting", "planning", "executing", "capturing_verification", "verifying"):
             transition(phase)
@@ -125,6 +125,10 @@ def test_retry_clears_previous_terminal_error(tmp_path):
     assert block["phase"] == "success"
     assert block["error"] is None
     assert block["error_code"] is None
+    assert block["task_phase"] is None
+    assert block["joints"] is None
+    assert block["task_phase"] is None
+    assert block["joints"] is None
 
 
 def test_artifacts_from_previous_flows_remain_available(tmp_path):

@@ -7825,14 +7825,17 @@ def _g3d_flow_image_for_block(config: dict) -> tuple[bytes, str]:
 def _g3d_wait_task(should_stop, timeout=180.0, on_update=None) -> dict:
     deadline = time.monotonic() + timeout
     last_update = None
+    last_publish = 0.0
     while time.monotonic() < deadline:
         if should_stop():
             g3d_task_manager.stop()
         state = g3d_task_manager.status()
         live = {"phase": state.get("phase"), "joints": state.get("joints")}
-        if on_update and live != last_update:
+        now = time.monotonic()
+        if on_update and live != last_update and (last_update is None or now - last_publish >= 0.25 or not state.get("running")):
             on_update(copy.deepcopy(state))
             last_update = live
+            last_publish = now
         if not state.get("running"):
             return state
         time.sleep(0.05)

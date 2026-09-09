@@ -317,6 +317,9 @@ assert.match(html, /id="g3dFlowImageOverlay"/);
 assert.match(extractFunction('g3dFlowDrawDetections'), /\.bbox/);
 assert.match(extractFunction('g3dFlowRenderPath'), /simCreateRobotArm/);
 assert.match(extractFunction('g3dFlowRenderPath'), /simApplyJoints/);
+assert.match(extractFunction('g3dFlowRenderPath'), /endEffector/);
+assert.match(extractFunction('g3dFlowRenderPath'), /\.dispose/);
+assert.match(extractFunction('g3dFlowRenderPath'), /grasping.*lifting_source.*moving_to_target.*placing/);
 
 vm.runInContext(`${extractFunction('g3dDrawInputImage')}; this.g3dDrawInputImage = g3dDrawInputImage;`, context);
 context.G3D.imageSize = [640, 480];

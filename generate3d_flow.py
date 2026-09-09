@@ -201,6 +201,7 @@ class Generate3DFlowManager:
                     self._state["blocks"][index].update(
                         config=copy.deepcopy(config), outcome=None, error=None, error_code=None,
                         verification=None, objects=[], path=[], task_id=None, artifacts={}, prompts={},
+                        task_phase=None, joints=None,
                     )
                     self._persist()
                     block = copy.deepcopy(self._state["blocks"][index])
