@@ -1048,6 +1048,55 @@ def test_real_plan_accepts_shoulder_lift_residual_up_to_three_degrees(monkeypatc
     assert abs(measured["shoulder_lift"] - (-17.83)) == pytest.approx(2.58)
 
 
+def test_lifting_source_accepts_loaded_shoulder_residual_up_to_four_degrees(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["shoulder_lift"] = 16.04
+    target = {**measured, "shoulder_lift": 12.50}
+    clock = iter(range(0, 10000, 10))
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    main._g3d_execute_real_plan(
+        [{
+            "phase": "lifting_source",
+            "joints": target,
+            "n_steps": 1,
+            "convergence_names": main.ROBOT_JOINTS[:5],
+            "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
+            "joint_tolerances": {"shoulder_lift": 4.0},
+        }],
+        threading.Event(),
+        lambda phase, joints: None,
+    )
+
+
+def test_lifting_source_rejects_loaded_shoulder_residual_over_four_degrees(monkeypatch):
+    measured = {name: 0.0 for name in main.ROBOT_JOINTS}
+    measured["shoulder_lift"] = 16.51
+    target = {**measured, "shoulder_lift": 12.50}
+    clock = iter([0.0, 10.0])
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(measured))
+    monkeypatch.setattr(main, "robot_send_positions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RuntimeError, match=r"shoulder_lift\(target=12.50, measured=16.51, error=4.01\)"):
+        main._g3d_execute_real_plan(
+            [{
+                "phase": "lifting_source",
+                "joints": target,
+                "n_steps": 1,
+                "convergence_names": main.ROBOT_JOINTS[:5],
+                "tolerance_deg": main.G3D_TASK_ARM_TOLERANCE_DEG,
+                "joint_tolerances": {"shoulder_lift": 4.0},
+            }],
+            threading.Event(),
+            lambda phase, joints: None,
+        )
+
+
 def test_real_plan_keeps_strict_gripper_tolerance(monkeypatch):
     measured = {name: 0.0 for name in main.ROBOT_JOINTS}
     measured["gripper"] = 52.06

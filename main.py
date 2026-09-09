@@ -6826,10 +6826,16 @@ def _g3d_task_move(
     tolerance_deg: float = 2.0,
     waypoint_timeout: float | None = None,
     convergence_names=None,
+    joint_tolerances=None,
 ) -> bool:
     current = robot_get_positions()
     names = [name for name in ROBOT_JOINTS if name in current and name in target]
     checked_names = names if convergence_names is None else [name for name in convergence_names if name in names]
+    joint_tolerances = joint_tolerances or {}
+
+    def tolerance_for(name):
+        return float(joint_tolerances.get(name, tolerance_deg))
+
     for index in range(1, n_steps + 1):
         if stop_event.is_set():
             return False
@@ -6855,7 +6861,7 @@ def _g3d_task_move(
             time.sleep(0.04)
             measured = robot_get_positions()
             publish(phase, measured)
-            if all(abs(float(measured[name]) - float(waypoint[name])) <= tolerance_deg for name in checked_names):
+            if all(abs(float(measured[name]) - float(waypoint[name])) <= tolerance_for(name) for name in checked_names):
                 break
             if time.monotonic() >= deadline:
                 residuals = []
@@ -6863,7 +6869,7 @@ def _g3d_task_move(
                     target_value = float(waypoint[name])
                     measured_value = float(measured[name])
                     error = abs(measured_value - target_value)
-                    if error > tolerance_deg:
+                    if error > tolerance_for(name):
                         residuals.append(
                             f"{name}(target={target_value:.2f}, measured={measured_value:.2f}, error={error:.2f})"
                         )
@@ -6900,6 +6906,7 @@ G3D_TASK_JOINT_LIMITS = {
 }
 G3D_TASK_OPEN_GRIPPER = 50.0
 G3D_TASK_ARM_TOLERANCE_DEG = 3.0
+G3D_TASK_LOADED_LIFT_TOLERANCES = {"shoulder_lift": 4.0}
 G3D_TASK_GRIPPER_TOLERANCE = 2.0
 G3D_TASK_TARGET_CLEARANCE_CM = 5.0
 
@@ -6999,11 +7006,11 @@ def _g3d_build_pick_place_plan(
         {"phase": "opening_gripper", "joints": opened_at_source, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
         {"phase": "descending_to_source", "joints": source_pick, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "grasping", "joints": source_grasped, "kind": "grip", "command_cycles": 10},
-        {"phase": "lifting_source", "joints": source_lifted, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "lifting_source", "joints": source_lifted, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG, "joint_tolerances": G3D_TASK_LOADED_LIFT_TOLERANCES},
         {"phase": "moving_to_target", "joints": target_approach, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "placing", "joints": target_place, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "releasing", "joints": released, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
-        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG, "joint_tolerances": G3D_TASK_LOADED_LIFT_TOLERANCES},
     ]
 
 
@@ -7020,6 +7027,7 @@ def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publis
             n_steps=step.get("n_steps", 15),
             tolerance_deg=step.get("tolerance_deg", 2.0),
             convergence_names=step.get("convergence_names"),
+            joint_tolerances=step.get("joint_tolerances"),
         ):
             return
 
