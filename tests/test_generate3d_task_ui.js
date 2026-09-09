@@ -26,12 +26,16 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskPickHeight', 'g3dTaskPlaceHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskPickHeight', 'g3dTaskPlaceHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn', 'g3dDetectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
+assert.ok(
+  html.indexOf('id="g3dTaskInstruction"') < html.indexOf('id="g3dDetectBtn"'),
+  'Task instruction must appear before Detect & Generate',
+);
 
 const elements = {
-  g3dTaskInstruction: {value: ''},
+  g3dTaskInstruction: {value: 'pick up white star to teal bowl'},
   g3dExecutionSimulation: {checked: true},
   g3dExecutionReal: {checked: false},
   g3dEnforceWorkspace: {checked: true},
@@ -52,6 +56,9 @@ const elements = {
   g3dImageCanvas: {width: 0, height: 0, style: {}},
   g3dImagePlaceholder: {style: {}},
   g3dAddObjectBtn: {disabled: true},
+  g3dDetectBtn: {disabled: true},
+  g3dCaptureSceneBtn: {disabled: false},
+  g3dImageInput: {disabled: false},
   g3dEditHint: {style: {}},
 };
 const applied = [];
@@ -84,6 +91,8 @@ const context = {
     sceneBusy: false,
     editSyncing: false,
     editsValid: true,
+    imageFile: {},
+    taskRunning: false,
   },
   document: {getElementById: id => elements[id]},
   g3dInitScene() {},
@@ -103,7 +112,7 @@ const context = {
   console,
 };
 vm.createContext(context);
-for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanAddObject', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dResolveTaskObjects', 'g3dSelectedMotionMode', 'g3dSmoothstep', 'g3dSampleSegment', 'g3dBuildTaskPathPoints', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dPlaceSourceAtTarget', 'g3dApplyTaskStatus']) {
+for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanAddObject', 'g3dCanDetect', 'g3dHasCompleteTaskObjects', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dResolveTaskObjects', 'g3dSelectedMotionMode', 'g3dSmoothstep', 'g3dSampleSegment', 'g3dBuildTaskPathPoints', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dPlaceSourceAtTarget', 'g3dApplyTaskStatus']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
 
@@ -120,6 +129,10 @@ context.G3D.renderedDetectionId = null;
 assert.equal(context.g3dCanAddObject(), true);
 context.G3D.detectionId = 'det-1';
 context.G3D.renderedDetectionId = 'det-1';
+elements.g3dTaskInstruction.value = '   ';
+assert.equal(context.g3dCanDetect(), false);
+elements.g3dTaskInstruction.value = '  pick up white star to teal bowl  ';
+assert.equal(context.g3dCanDetect(), true);
 assert.equal(context.g3dCanRunTask(), true);
 context.G3D.sceneBusy = true;
 assert.equal(context.g3dCanRunTask(), false);
@@ -129,7 +142,7 @@ context.g3dSetTaskReady(true);
 assert.equal(elements.g3dTaskControls.style.display, 'block');
 assert.equal(elements.g3dRunTaskBtn.disabled, false);
 assert.match(elements.g3dTaskHint.textContent, /white star.*teal bowl/);
-assert.equal(elements.g3dTaskInstruction.value, 'pick up white star to teal bowl');
+assert.equal(elements.g3dTaskInstruction.value, '  pick up white star to teal bowl  ');
 
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   instruction: 'pick up white star to teal bowl',
@@ -159,6 +172,16 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dResolveTaskObjects('pick u
   source: context.G3D.objects[0],
   target: context.G3D.objects[1],
 });
+context.G3D.objects[0].task_role = 'source';
+assert.equal(context.g3dHasCompleteTaskObjects(), false);
+context.G3D.objects[1].task_role = 'target';
+assert.equal(context.g3dHasCompleteTaskObjects(), true);
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dResolveTaskObjects('names do not match'))), {
+  source: context.G3D.objects[0],
+  target: context.G3D.objects[1],
+});
+delete context.G3D.objects[0].task_role;
+delete context.G3D.objects[1].task_role;
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(
   context.G3D.objects[0], context.G3D.objects[1], 0, 5, 18, 'waypoint',
 ))), [
@@ -220,6 +243,7 @@ context.g3dSetTaskReady(true);
 assert.equal(elements.g3dRunTaskBtn.disabled, true);
 context.G3D.editsValid = true;
 context.G3D.objects[0].name = 'white star';
+elements.g3dTaskInstruction.value = 'pick up white star to teal bowl';
 
 context.g3dApplyTaskStatus({
   state: 'running',
@@ -256,6 +280,13 @@ assert.equal(elements.g3dTaskStatus.textContent, 'Task completed');
 assert.match(extractFunction('g3dResumeTaskStatus'), /g3dPollTaskStatus/);
 
 assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(/);
+assert.match(extractFunction('g3dDetectObjects'), /append\(['"]instruction['"],\s*instruction\)/);
+assert.match(extractFunction('g3dDetectObjects'), /recommended_pick_height_cm/);
+assert.match(extractFunction('g3dDetectObjects'), /recommended_place_height_cm/);
+assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(ready\)/);
+assert.doesNotMatch(extractFunction('g3dDetectObjects'), /g3dUpdateDefaultInstruction/);
+assert.doesNotMatch(extractFunction('g3dCaptureSceneImage'), /g3dTaskInstruction['"]\)\.value\s*=\s*['"]/);
+assert.match(html, /g3dTaskInstruction['"]\)\.addEventListener\(['"]input['"][\s\S]*?G3D\.detectionId\s*=\s*null/);
 assert.match(extractFunction('g3dSyncEditedObjects'), /\/api\/generate3d\/detection\/manual/);
 assert.match(extractFunction('g3dRunTask'), /\/api\/generate3d\/task\/start/);
 assert.match(extractFunction('g3dStopTask'), /\/api\/generate3d\/task\/stop/);

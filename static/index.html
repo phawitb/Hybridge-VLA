@@ -2287,6 +2287,8 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
     <div class="inner-page" id="inner-g3d-sim">
       <div class="config-card" style="margin-bottom:16px">
         <h3>Top View Image</h3>
+        <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
+        <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl" style="margin-bottom:10px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-sm" id="g3dCaptureSceneBtn" onclick="g3dCaptureSceneImage()">Capture Top View</button>
           <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">
@@ -2316,8 +2318,6 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <pre id="g3dRaw" style="display:none;background:#f5f5f5;border:1px solid #e0e0e0;border-radius:6px;padding:10px;font-size:0.75rem;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
           </div>
           <div id="g3dTaskControls" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid #e5e5e5">
-            <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
-            <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl">
             <div id="g3dTaskHint" style="font-size:0.74rem;color:#777;margin-top:5px">Mention exactly two detected object names: source first, target second.</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
               <label for="g3dTaskPickHeight" style="font-size:0.78rem;font-weight:600;color:#444">
@@ -12242,13 +12242,27 @@ function g3dCanAddObject() {
     && !G3D.sceneBusy;
 }
 
+function g3dCanDetect() {
+  const instruction = document.getElementById('g3dTaskInstruction')?.value.trim() || '';
+  return !!G3D.imageFile && !!instruction && !G3D.taskRunning && !G3D.sceneBusy;
+}
+
+function g3dHasCompleteTaskObjects(objects=G3D.objects) {
+  const roleObjects = objects.filter(object => object?.task_role === 'source' || object?.task_role === 'target');
+  if (roleObjects.length) {
+    return roleObjects.filter(object => object.task_role === 'source').length === 1
+      && roleObjects.filter(object => object.task_role === 'target').length === 1;
+  }
+  return !!g3dResolveTaskObjects(document.getElementById('g3dTaskInstruction')?.value || '');
+}
+
 function g3dCanRunTask() {
   return !G3D.taskRunning
     && !G3D.sceneBusy
     && !G3D.editSyncing
     && G3D.editsValid !== false
     && !!G3D.detectionId
-    && G3D.objects.length >= 2
+    && g3dHasCompleteTaskObjects()
     && g3dRenderedSceneIsCurrent();
 }
 
@@ -12261,7 +12275,7 @@ function g3dSetSceneBusy(busy) {
   const run = document.getElementById('g3dRunTaskBtn');
   if (capture) capture.disabled = !!busy || G3D.taskRunning;
   if (input) input.disabled = !!busy || G3D.taskRunning;
-  if (detect) detect.disabled = !!busy || G3D.taskRunning || !G3D.imageFile;
+  if (detect) detect.disabled = !g3dCanDetect();
   if (add) add.disabled = !g3dCanAddObject();
   if (run) run.disabled = !g3dCanRunTask();
   if (document.getElementById('g3dObjectsList')) g3dRenderObjectsList();
@@ -12285,9 +12299,8 @@ async function g3dCaptureSceneImage() {
     G3D.objects = [];
     G3D.detectionId = null;
     G3D.hasRawDetection = false;
-    G3D.instructionAuto = true;
+    G3D.instructionAuto = false;
     G3D.editsValid = true;
-    document.getElementById('g3dTaskInstruction').value = '';
     g3dSetTaskReady(false);
     await g3dDrawInputImage(d.image, generation, null);
     st.textContent = `Captured ${d.image_width}x${d.image_height}`;
@@ -12570,9 +12583,8 @@ document.getElementById('g3dImageInput').addEventListener('change', function() {
     G3D.objects = [];
     G3D.detectionId = null;
     G3D.hasRawDetection = false;
-    G3D.instructionAuto = true;
+    G3D.instructionAuto = false;
     G3D.editsValid = true;
-    document.getElementById('g3dTaskInstruction').value = '';
     g3dSetTaskReady(false);
     await g3dDrawInputImage(G3D.imageB64, generation, null);
     if (!g3dSceneIsCurrent(generation)) return;
@@ -12591,6 +12603,8 @@ async function g3dDetectObjects() {
   const st = document.getElementById('g3dSimStatus');
   const btn = document.getElementById('g3dDetectBtn');
   if (!G3D.imageFile) { st.textContent = 'No image'; return; }
+  const instruction = document.getElementById('g3dTaskInstruction').value.trim();
+  if (!instruction) { st.textContent = 'Enter a task instruction before detection'; return; }
   const generation = ++G3D.sceneGeneration;
   G3D.editSyncing = false;
   g3dSetTaskReady(false);
@@ -12599,6 +12613,7 @@ async function g3dDetectObjects() {
   try {
     const fd = new FormData();
     fd.append('image', G3D.imageFile);
+    fd.append('instruction', instruction);
     const r = await fetch('/api/generate3d/detect-image', {method:'POST', body:fd});
     const d = await r.json();
     if (!g3dSceneIsCurrent(generation)) return;
@@ -12608,16 +12623,28 @@ async function g3dDetectObjects() {
     G3D.imageB64 = d.frame_image_b64 || G3D.imageB64;
     G3D.imageSize = [d.image_width, d.image_height];
     G3D.hasRawDetection = !!d.gemini_raw;
-    G3D.instructionAuto = true;
+    G3D.instructionAuto = false;
     G3D.editsValid = true;
+    if (Number.isFinite(d.recommended_pick_height_cm)) {
+      document.getElementById('g3dTaskPickHeight').value = String(d.recommended_pick_height_cm);
+    }
+    if (Number.isFinite(d.recommended_place_height_cm)) {
+      document.getElementById('g3dTaskPlaceHeight').value = String(d.recommended_place_height_cm);
+    }
     await g3dDrawInputImage(G3D.imageB64, generation, G3D.detectionId);
     if (!g3dSceneIsCurrent(generation, G3D.detectionId)) return;
     g3dRenderObjectsList();
     g3dPlotObjects(G3D.objects);
     document.getElementById('g3dRawWrap').style.display = d.gemini_raw ? 'block' : 'none';
     document.getElementById('g3dRaw').textContent = d.gemini_raw || '';
-    g3dSetTaskReady(G3D.objects.length >= 2);
-    st.textContent = `Generated ${G3D.objects.length} objects (${d.elapsed}s)`;
+    const ready = g3dHasCompleteTaskObjects();
+    g3dSetTaskReady(ready);
+    const roles = new Set(G3D.objects.map(object => object.task_role));
+    if (!G3D.objects.length) st.textContent = 'No requested objects found';
+    else if (!roles.has('source')) st.textContent = 'Found target; source not found';
+    else if (!roles.has('target')) st.textContent = 'Found source; target not found';
+    else st.textContent = `Generated ${G3D.objects.length} requested objects (${d.elapsed}s)`;
+    g3dPreviewTaskPath();
   } catch (e) {
     if (g3dSceneIsCurrent(generation)) st.textContent = e.message;
   } finally {
@@ -12780,20 +12807,31 @@ function g3dSetTaskReady(ready) {
   const button = document.getElementById('g3dRunTaskBtn');
   if (!controls || !button) return;
   const executable = ready && g3dCanRunTask();
-  controls.style.display = ready || G3D.taskRunning ? 'block' : 'none';
+  controls.style.display = G3D.detectionId || G3D.taskRunning ? 'block' : 'none';
   button.disabled = !executable || !!G3D.taskRunning;
   if (!ready) document.getElementById('g3dTaskStatus').textContent = '';
   if (ready) {
     const names = G3D.objects.map(object => object.name).filter(Boolean);
-    document.getElementById('g3dTaskHint').textContent = `Use exactly two names, source first: ${names.join(', ')}`;
-    g3dUpdateDefaultInstruction();
+    document.getElementById('g3dTaskHint').textContent = `Ready: ${names.join(' → ')}`;
     g3dPreviewTaskPath();
   }
 }
 
 document.getElementById('g3dTaskInstruction').addEventListener('input', () => {
   G3D.instructionAuto = false;
-  g3dPreviewTaskPath();
+  if (G3D.detectionId) {
+    G3D.detectionId = null;
+    G3D.objects = [];
+    G3D.hasRawDetection = false;
+    G3D.editsValid = true;
+    G3D.renderedDetectionId = null;
+    g3dClearTaskPath();
+    g3dRenderObjectsList();
+    if (G3D.inited) g3dPlotObjects([]);
+    g3dSetTaskReady(false);
+    document.getElementById('g3dSimStatus').textContent = 'Instruction changed. Detect the scene again.';
+  }
+  g3dSetSceneBusy(G3D.sceneBusy);
 });
 document.getElementById('g3dTaskPickHeight').addEventListener('input', g3dPreviewTaskPath);
 document.getElementById('g3dTaskPlaceHeight').addEventListener('input', g3dPreviewTaskPath);
@@ -12802,6 +12840,13 @@ document.getElementById('g3dMotionSmooth').addEventListener('change', g3dPreview
 document.getElementById('g3dMotionWaypoint').addEventListener('change', g3dPreviewTaskPath);
 
 function g3dResolveTaskObjects(instruction) {
+  const sources = G3D.objects.filter(object => object?.task_role === 'source');
+  const targets = G3D.objects.filter(object => object?.task_role === 'target');
+  if (sources.length || targets.length) {
+    return sources.length === 1 && targets.length === 1
+      ? {source:sources[0], target:targets[0]}
+      : null;
+  }
   const normalized = ` ${String(instruction || '').toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ' ').trim()} `;
   const matches = G3D.objects.map(object => {
     const name = String(object.name || '').toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ' ').trim();
