@@ -122,7 +122,8 @@ class Generate3DFlowManager:
                 "status": "ready", "planning": copy.deepcopy(planning or {}), "created_at": stamp, "updated_at": stamp,
                 "blocks": [{**item, "id": f"block-{index + 1}", "index": index, "phase": "pending", "outcome": None,
                     "timestamps": {"pending": stamp}, "config": {}, "objects": [], "path": [], "task_id": None,
-                    "artifacts": {}, "prompts": {}, "verification": None, "error": None, "error_code": None}
+                    "artifacts": {}, "prompts": {}, "verification": None, "task_phase": None, "joints": None,
+                    "error": None, "error_code": None}
                     for index, item in enumerate(blocks)]}
             (self.artifact_root / flow_id).mkdir(parents=True, exist_ok=True)
             self._persist()
@@ -152,9 +153,10 @@ class Generate3DFlowManager:
             block = self._state["blocks"][index]
             current = block.get("phase", "pending")
             retry_start = current in TERMINAL and phase == "capturing"
+            active_update = current == phase and phase in ACTIVE
             successful_exit = phase == "success" and current == "verifying"
             unsuccessful_exit = phase in (TERMINAL - {"success"}) and current in ACTIVE
-            if phase not in ACTIVE | TERMINAL or (not retry_start and not successful_exit and not unsuccessful_exit and NEXT_PHASE.get(current) != phase):
+            if phase not in ACTIVE | TERMINAL or (not retry_start and not active_update and not successful_exit and not unsuccessful_exit and NEXT_PHASE.get(current) != phase):
                 raise FlowValidationError("INVALID_FLOW_TRANSITION", f"Cannot move block from {current} to {phase}")
             block["phase"] = phase
             block.setdefault("timestamps", {})[phase] = _now()

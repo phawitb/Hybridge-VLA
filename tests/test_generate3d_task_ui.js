@@ -313,6 +313,10 @@ assert.match(extractFunction('g3dFlowPlan'), /\/api\/generate3d\/flow\/plan/);
 assert.match(extractFunction('g3dFlowLoadStatus'), /\/api\/generate3d\/flow\/status/);
 assert.match(extractFunction('g3dFlowStart'), /\/api\/generate3d\/flow\/start/);
 assert.match(extractFunction('g3dFlowStop'), /\/api\/generate3d\/flow\/stop/);
+assert.match(html, /id="g3dFlowImageOverlay"/);
+assert.match(extractFunction('g3dFlowDrawDetections'), /\.bbox/);
+assert.match(extractFunction('g3dFlowRenderPath'), /simCreateRobotArm/);
+assert.match(extractFunction('g3dFlowRenderPath'), /simApplyJoints/);
 
 vm.runInContext(`${extractFunction('g3dDrawInputImage')}; this.g3dDrawInputImage = g3dDrawInputImage;`, context);
 context.G3D.imageSize = [640, 480];

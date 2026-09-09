@@ -207,6 +207,19 @@ def test_generate3d_flow_real_run_reserves_hardware_until_finished(monkeypatch):
     assert owners[-1] == ("release", "generate3d_flow")
 
 
+def test_generate3d_flow_wait_publishes_live_task_phase_and_joints(monkeypatch):
+    states = iter([
+        {"running": True, "phase": "moving_to_source", "joints": {"shoulder_pan": 4.0}},
+        {"running": False, "state": "completed", "phase": "completed", "joints": {"shoulder_pan": 8.0}},
+    ])
+    monkeypatch.setattr(main.g3d_task_manager, "status", lambda: next(states))
+    updates = []
+    result = main._g3d_wait_task(lambda: False, timeout=1, on_update=lambda state: updates.append(state))
+    assert result["state"] == "completed"
+    assert updates[0]["phase"] == "moving_to_source"
+    assert updates[0]["joints"]["shoulder_pan"] == 4.0
+
+
 def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp_path):
     setup_task_api(monkeypatch)
     rest_file = tmp_path / "generate3d_rest_position.json"

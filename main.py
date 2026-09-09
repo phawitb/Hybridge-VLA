@@ -7822,12 +7822,17 @@ def _g3d_flow_image_for_block(config: dict) -> tuple[bytes, str]:
         raise FlowValidationError("INVALID_IMAGE", "Flow image is invalid") from exc
 
 
-def _g3d_wait_task(should_stop, timeout=180.0) -> dict:
+def _g3d_wait_task(should_stop, timeout=180.0, on_update=None) -> dict:
     deadline = time.monotonic() + timeout
+    last_update = None
     while time.monotonic() < deadline:
         if should_stop():
             g3d_task_manager.stop()
         state = g3d_task_manager.status()
+        live = {"phase": state.get("phase"), "joints": state.get("joints")}
+        if on_update and live != last_update:
+            on_update(copy.deepcopy(state))
+            last_update = live
         if not state.get("running"):
             return state
         time.sleep(0.05)
@@ -7876,7 +7881,8 @@ def _run_g3d_flow_block(block, config, transition, should_stop):
         started = json.loads(started.body)
     if not started.get("ok"):
         return {"status": "failed", "objects": objects, "error": started.get("error", "Execution failed"), "error_code": started.get("code", "EXECUTION_FAILED")}
-    task_state = _g3d_wait_task(should_stop, float(config.get("timeout_seconds", 180)))
+    task_state = _g3d_wait_task(should_stop, float(config.get("timeout_seconds", 180)),
+        on_update=lambda state: transition("executing", {"task_phase": state.get("phase"), "joints": state.get("joints")}))
     if task_state.get("state") == "stopped":
         return {"status": "stopped", "objects": objects}
     if task_state.get("state") != "completed":
