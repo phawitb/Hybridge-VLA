@@ -7014,6 +7014,122 @@ def _g3d_build_pick_place_plan(
     ]
 
 
+def _g3d_smoothstep(value: float) -> float:
+    value = max(0.0, min(1.0, float(value)))
+    return value * value * (3.0 - 2.0 * value)
+
+
+def _g3d_sample_motion(
+    start_pixel,
+    end_pixel,
+    start_height: float,
+    end_height: float,
+    count: int,
+    *,
+    minimum_height: float | None = None,
+) -> list[dict]:
+    samples = []
+    for index in range(max(1, int(count)) + 1):
+        eased = _g3d_smoothstep(index / max(1, int(count)))
+        pixel = [
+            float(start_pixel[axis]) + (float(end_pixel[axis]) - float(start_pixel[axis])) * eased
+            for axis in range(2)
+        ]
+        height = float(start_height) + (float(end_height) - float(start_height)) * eased
+        if minimum_height is not None:
+            height = max(height, float(minimum_height))
+        samples.append({"pixel": pixel, "height_cm": height})
+    return samples
+
+
+def _g3d_predict_trajectory_samples(
+    phase: str,
+    path_samples: list[dict],
+    image_size: list,
+    calibration,
+    gripper: float,
+) -> list[dict]:
+    trajectory = []
+    for sample in path_samples:
+        try:
+            prediction = _g3d_predict_from_pixel(
+                sample["pixel"],
+                image_size=image_size,
+                height_cm=sample["height_cm"],
+                calibration=calibration,
+            )
+            if not prediction or not isinstance(prediction.get("joints"), dict):
+                raise RuntimeError("prediction unavailable")
+            joints = {**prediction["joints"], "gripper": float(gripper)}
+            _g3d_validate_joint_target(joints)
+            trajectory.append(joints)
+        except Exception as exc:
+            raise RuntimeError(f"Could not calculate smooth {phase} trajectory: {exc}") from exc
+    return trajectory
+
+
+def _g3d_build_smooth_pick_place_plan(
+    source: dict,
+    target: dict,
+    image_size: list,
+    target_height_cm: float,
+    safety_height_cm: float,
+    initial_joints: dict,
+    calibration=None,
+) -> list[dict]:
+    plan = _g3d_build_pick_place_plan(
+        source,
+        target,
+        image_size,
+        target_height_cm,
+        safety_height_cm,
+        initial_joints,
+        calibration=calibration,
+    )
+    by_phase = {step["phase"]: step for step in plan}
+    source_pixel = source["center_pixel"]
+    target_pixel = target["center_pixel"]
+    target_size = target.get("estimated_size_cm") or []
+    try:
+        target_object_height_cm = max(0.0, float(target_size[2]))
+        if not math.isfinite(target_object_height_cm):
+            raise ValueError
+    except (IndexError, TypeError, ValueError):
+        target_object_height_cm = 0.0
+    release_height = max(float(target_height_cm), target_object_height_cm) + G3D_TASK_TARGET_CLEARANCE_CM
+    transfer_height = max(float(safety_height_cm), release_height)
+
+    phase_samples = {
+        "lifting_source": _g3d_sample_motion(
+            source_pixel, source_pixel, target_height_cm, transfer_height, 6,
+        ),
+        "moving_to_target": _g3d_sample_motion(
+            source_pixel, target_pixel, transfer_height, transfer_height, 12,
+            minimum_height=transfer_height,
+        ),
+        "placing": _g3d_sample_motion(
+            target_pixel, target_pixel, transfer_height, release_height, 6,
+        ),
+        "lifting_after_release": _g3d_sample_motion(
+            target_pixel, target_pixel, release_height, transfer_height, 6,
+        ),
+    }
+    transfer = phase_samples["moving_to_target"]
+    for index, sample in enumerate(transfer):
+        ratio = index / max(1, len(transfer) - 1)
+        sample["height_cm"] += 2.5 * math.sin(math.pi * ratio) ** 2
+
+    for phase, samples in phase_samples.items():
+        gripper = G3D_TASK_OPEN_GRIPPER if phase == "lifting_after_release" else 0.0
+        trajectory = _g3d_predict_trajectory_samples(
+            phase, samples, image_size, calibration, gripper,
+        )
+        by_phase[phase]["path_samples"] = samples
+        by_phase[phase]["trajectory"] = trajectory
+        by_phase[phase]["joints"] = trajectory[-1]
+    return plan
+
+
 def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publish) -> None:
     for step in plan:
         if step.get("kind") == "grip":
@@ -7083,12 +7199,33 @@ def _g3d_execute_pick_place(
     _g3d_execute_real_plan(plan, stop_event, publish)
 
 
+def _g3d_execute_smooth_pick_place(
+    source: dict,
+    target: dict,
+    image_size: list,
+    target_height_cm: float,
+    safety_height_cm: float,
+    stop_event: threading.Event,
+    publish,
+    calibration=None,
+) -> None:
+    initial_joints = robot_get_positions()
+    plan = _g3d_build_smooth_pick_place_plan(
+        source, target, image_size, target_height_cm, safety_height_cm,
+        initial_joints, calibration=calibration,
+    )
+    _g3d_execute_real_plan(plan, stop_event, publish)
+
+
 @app.post("/api/generate3d/task/start")
 async def generate3d_task_start(request: Request):
     data = await request.json()
     execution_mode = str(data.get("execution_mode", "simulation")).strip().lower()
     if execution_mode not in {"simulation", "real"}:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_EXECUTION_MODE", "error": "Execution mode must be simulation or real"})
+    motion_mode = str(data.get("motion_mode", "smooth")).strip().lower()
+    if motion_mode not in {"smooth", "waypoint"}:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_MOTION_MODE", "error": "Motion mode must be smooth or waypoint"})
     use_real_robot = execution_mode == "real"
     if use_real_robot and not robot_state["connected"]:
         return JSONResponse(status_code=409, content={"ok": False, "code": "ROBOT_NOT_CONNECTED", "error": "Robot not connected"})
@@ -7165,7 +7302,8 @@ async def generate3d_task_start(request: Request):
     def execute(resolved_source, resolved_target, stop_event, publish):
         if use_real_robot:
             try:
-                return _g3d_execute_pick_place(
+                execute_real = _g3d_execute_smooth_pick_place if motion_mode == "smooth" else _g3d_execute_pick_place
+                return execute_real(
                     resolved_source,
                     resolved_target,
                     image_size,
@@ -7178,7 +7316,8 @@ async def generate3d_task_start(request: Request):
             finally:
                 release_robot_operation("generate3d")
         initial_joints = simulation_initial_joints
-        plan = _g3d_build_pick_place_plan(
+        build_plan = _g3d_build_smooth_pick_place_plan if motion_mode == "smooth" else _g3d_build_pick_place_plan
+        plan = build_plan(
             resolved_source,
             resolved_target,
             image_size,

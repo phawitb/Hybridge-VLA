@@ -75,6 +75,7 @@ def test_generate3d_task_start_resolves_objects_and_exposes_status(monkeypatch):
         "target_height_cm": 1,
         "safety_height_cm": 10,
         "execution_mode": "real",
+        "motion_mode": "waypoint",
     })
     wait_until(lambda: not manager.status()["running"])
     status = client.get("/api/generate3d/task/status").json()
@@ -100,6 +101,38 @@ def test_generate3d_task_start_rejects_instruction_without_two_object_names(monk
 
     assert response.status_code == 400
     assert response.json()["code"] == "OBJECT_MATCH_REQUIRED"
+
+
+def test_generate3d_task_start_rejects_invalid_motion_mode_before_hardware(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setattr(main, "acquire_robot_operation", lambda owner: (_ for _ in ()).throw(AssertionError("hardware acquired")))
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+        "execution_mode": "real",
+        "motion_mode": "diagonal",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_MOTION_MODE"
+
+
+def test_generate3d_task_defaults_to_smooth_motion(monkeypatch):
+    manager = setup_task_api(monkeypatch)
+    captured = []
+    monkeypatch.setattr(main, "_g3d_build_smooth_pick_place_plan", lambda *args, **kwargs: captured.append(args) or [])
+    client = TestClient(main.app)
+
+    response = client.post("/api/generate3d/task/start", json={
+        "instruction": "pick up white star to teal bowl",
+        "detection_id": "det-1",
+    })
+    wait_until(lambda: not manager.status()["running"])
+
+    assert response.status_code == 200
+    assert len(captured) == 1
 
 
 def test_generate3d_task_start_rejects_nonfinite_heights(monkeypatch):
@@ -164,6 +197,7 @@ def test_generate3d_task_start_can_disable_workspace_enforcement(monkeypatch):
         "detection_id": "det-1",
         "enforce_workspace": False,
         "execution_mode": "real",
+        "motion_mode": "waypoint",
     })
     wait_until(lambda: not manager.status()["running"])
 
@@ -223,6 +257,7 @@ def test_generate3d_simulation_uses_requested_current_pose_without_hardware(monk
         "instruction": "pick up white star to teal bowl",
         "detection_id": "det-1",
         "execution_mode": "simulation",
+        "motion_mode": "waypoint",
         "initial_joints": requested,
     })
     wait_until(lambda: not manager.status()["running"])
@@ -274,6 +309,65 @@ def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
     assert by_phase["descending_to_source"]["gripper"] == 50.0
     assert by_phase["releasing"]["gripper"] == 50.0
     assert by_phase["lifting_after_release"]["gripper"] == 50.0
+
+
+def test_smooth_pick_place_plan_curves_above_transfer_height(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    initial["gripper"] = 35.0
+
+    def fake_predict(pixel, image_size=None, height_cm=0, calibration=None):
+        return {
+            "position_3d": [pixel[0] / 1000, height_cm / 100, pixel[1] / 1000],
+            "joints": {
+                "shoulder_pan": pixel[0] / 10,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 20.0,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 35.0,
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+
+    plan = main._g3d_build_smooth_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 5.0, 18.0, initial,
+    )
+    by_phase = {step["phase"]: step for step in plan}
+    transfer = by_phase["moving_to_target"]
+
+    assert len(transfer["trajectory"]) >= 8
+    assert all(sample["height_cm"] >= 18.0 for sample in transfer["path_samples"])
+    assert transfer["path_samples"][0]["pixel"] == OBJECTS[0]["center_pixel"]
+    assert transfer["path_samples"][-1]["pixel"] == OBJECTS[1]["center_pixel"]
+    assert max(sample["height_cm"] for sample in transfer["path_samples"]) > 18.0
+    assert all(sample["pixel"] == OBJECTS[0]["center_pixel"] for sample in by_phase["lifting_source"]["path_samples"])
+    assert all(sample["pixel"] == OBJECTS[1]["center_pixel"] for sample in by_phase["placing"]["path_samples"])
+
+
+def test_smooth_pick_place_plan_rejects_invalid_intermediate_joint(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+
+    def invalid_middle_prediction(pixel, image_size=None, height_cm=0, calibration=None):
+        shoulder_pan = 999.0 if 400 < pixel[0] < 500 else 0.0
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": shoulder_pan,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 20.0,
+                "wrist_flex": 30.0,
+                "wrist_roll": 0.0,
+                "gripper": 50.0,
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", invalid_middle_prediction)
+
+    with pytest.raises(RuntimeError, match="smooth moving_to_target trajectory"):
+        main._g3d_build_smooth_pick_place_plan(
+            OBJECTS[0], OBJECTS[1], [800, 600], 5.0, 18.0, initial,
+        )
 
 
 def test_generate3d_height_is_offset_above_calibrated_surface(monkeypatch):
