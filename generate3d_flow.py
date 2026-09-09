@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -161,7 +162,10 @@ class Generate3DFlowManager:
                     break
                 with self._lock:
                     self._state["active_block_index"] = index
-                    self._state["blocks"][index]["config"] = copy.deepcopy(config)
+                    self._state["blocks"][index].update(
+                        config=copy.deepcopy(config), outcome=None, error=None, error_code=None,
+                        verification=None, objects=[], path=[], task_id=None, artifacts={}, prompts={},
+                    )
                     self._persist()
                     block = copy.deepcopy(self._state["blocks"][index])
                 def transition(phase, updates=None, _index=index):
@@ -199,9 +203,11 @@ class Generate3DFlowManager:
         return {"ok": True, **self.status()}
 
     def artifact_path(self, flow_id: str, filename: str) -> Path:
-        if flow_id != self._state.get("flow_id") or not filename or Path(filename).name != filename:
+        if not re.fullmatch(r"[A-Za-z0-9-]+", str(flow_id)) or not filename or Path(filename).name != filename:
             raise FlowValidationError("INVALID_ARTIFACT", "Unknown flow artifact")
         root = (self.artifact_root / flow_id).resolve()
+        if not root.is_dir():
+            raise FlowValidationError("INVALID_ARTIFACT", "Unknown flow artifact")
         candidate = (root / filename).resolve()
         if candidate.parent != root:
             raise FlowValidationError("INVALID_ARTIFACT", "Unknown flow artifact")

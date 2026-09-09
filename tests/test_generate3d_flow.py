@@ -101,3 +101,24 @@ def test_artifact_path_rejects_traversal(tmp_path):
     assert valid.parent.name == flow["flow_id"]
     with pytest.raises(FlowValidationError):
         manager.artifact_path(flow["flow_id"], "../secret")
+
+
+def test_retry_clears_previous_terminal_error(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    manager.create_flow("long task", sample_plan(1)["subtasks"])
+    manager._update_block(0, "failed", {"outcome": "failed", "error": "old", "error_code": "OLD"})
+    manager.start("block", 0, {}, lambda *args: {"status": "success"})
+    wait_until(lambda: not manager.status()["running"])
+    block = manager.status()["blocks"][0]
+    assert block["phase"] == "success"
+    assert block["error"] is None
+    assert block["error_code"] is None
+
+
+def test_artifacts_from_previous_flows_remain_available(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    first = manager.create_flow("first", sample_plan(1)["subtasks"])
+    first_path = manager.artifact_path(first["flow_id"], "before.jpg")
+    first_path.write_bytes(b"image")
+    manager.create_flow("second", sample_plan(1)["subtasks"])
+    assert manager.artifact_path(first["flow_id"], "before.jpg").read_bytes() == b"image"
