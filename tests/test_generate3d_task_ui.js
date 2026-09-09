@@ -26,7 +26,7 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskTargetHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 
@@ -37,11 +37,16 @@ const elements = {
   g3dEnforceWorkspace: {checked: true},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
+  g3dTaskTargetHeight: {value: '5'},
+  g3dTaskSafetyHeight: {value: '18'},
+  g3dMotionSmooth: {checked: true},
+  g3dMotionWaypoint: {checked: false},
   g3dTaskStatus: {textContent: '', style: {}},
   g3dRunTaskBtn: {disabled: false},
   g3dStopTaskBtn: {style: {display: 'none'}},
   g3dTaskControls: {style: {display: 'none'}},
   g3dTaskHint: {textContent: ''},
+  g3dPathHint: {textContent: ''},
   g3dSceneInfo: {textContent: ''},
   g3dImageCanvas: {width: 0, height: 0, style: {}},
   g3dImagePlaceholder: {style: {}},
@@ -52,8 +57,8 @@ const applied = [];
 const context = {
   G3D: {
     objects: [
-      {name: 'white star', center_pixel: [392.5, 169]},
-      {name: 'teal bowl', center_pixel: [509, 91]},
+      {name: 'white star', center_pixel: [392.5, 169], position_3d: [0.12, 0, 0.08], estimated_size_cm: [3, 3, 3]},
+      {name: 'teal bowl', center_pixel: [509, 91], position_3d: [-0.09, 0, 0.14], estimated_size_cm: [6, 6, 6]},
     ],
     imageSize: [800, 600],
     currentJoints: {
@@ -66,6 +71,10 @@ const context = {
     },
     detectionId: 'det-1',
     robot: {},
+    objectVisuals: [
+      {mesh: {position: {x: 0.12, y: 0.015, z: 0.08}}, sprite: {position: {x: 0.12, y: 0.047, z: 0.08}}, height: 0.03},
+      {mesh: {position: {x: -0.09, y: 0.03, z: 0.14}}, sprite: {position: {x: -0.09, y: 0.077, z: 0.14}}, height: 0.06},
+    ],
     instructionAuto: true,
     sceneGeneration: 4,
     renderedGeneration: 4,
@@ -77,6 +86,7 @@ const context = {
   },
   document: {getElementById: id => elements[id]},
   g3dInitScene() {},
+  g3dPreviewTaskPath() {},
   g3dJointArray: joints => Object.values(joints),
   simApplyJoints: (robot, joints) => applied.push({robot, joints}),
   g3dRedrawImage() {},
@@ -92,7 +102,7 @@ const context = {
   console,
 };
 vm.createContext(context);
-for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanAddObject', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dApplyTaskStatus']) {
+for (const name of ['g3dSceneIsCurrent', 'g3dRenderedSceneIsCurrent', 'g3dCanAddObject', 'g3dCanRunTask', 'g3dSetSceneBusy', 'g3dDefaultTaskInstruction', 'g3dUpdateDefaultInstruction', 'g3dNormalizeEditedBbox', 'g3dHitObject', 'g3dSetTaskReady', 'g3dResolveTaskObjects', 'g3dSelectedMotionMode', 'g3dSmoothstep', 'g3dSampleSegment', 'g3dBuildTaskPathPoints', 'g3dBuildTaskPayload', 'g3dTaskPhaseLabel', 'g3dPlaceSourceAtTarget', 'g3dApplyTaskStatus']) {
   vm.runInContext(`${extractFunction(name)}; this.${name} = ${name};`, context);
 }
 
@@ -123,10 +133,11 @@ assert.equal(elements.g3dTaskInstruction.value, 'pick up white star to teal bowl
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   instruction: 'pick up white star to teal bowl',
   detection_id: 'det-1',
-  target_height_cm: 1,
-  safety_height_cm: 10,
+  target_height_cm: 5,
+  safety_height_cm: 18,
   enforce_workspace: true,
   execution_mode: 'simulation',
+  motion_mode: 'smooth',
   initial_joints: {
     shoulder_pan: 4,
     shoulder_lift: -12,
@@ -136,6 +147,55 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
     gripper: 35,
   },
 });
+elements.g3dMotionSmooth.checked = false;
+elements.g3dMotionWaypoint.checked = true;
+assert.equal(context.g3dBuildTaskPayload().motion_mode, 'waypoint');
+elements.g3dMotionSmooth.checked = true;
+elements.g3dMotionWaypoint.checked = false;
+
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dResolveTaskObjects('pick up white star to teal bowl'))), {
+  source: context.G3D.objects[0],
+  target: context.G3D.objects[1],
+});
+assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(
+  context.G3D.objects[0], context.G3D.objects[1], 5, 18, 'waypoint',
+))), [
+  [0.12, 0.05, 0.08],
+  [0.12, 0.18, 0.08],
+  [-0.09, 0.18, 0.14],
+  [-0.09, 0.11, 0.14],
+]);
+const smoothPath = JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(
+  context.G3D.objects[0], context.G3D.objects[1], 5, 18, 'smooth',
+)));
+assert.deepEqual(smoothPath[0], [0.12, 0.05, 0.08]);
+assert.deepEqual(smoothPath.at(-1), [-0.09, 0.11, 0.14]);
+assert.equal(smoothPath.length, 25);
+assert.ok(smoothPath.slice(0, 7).every(point => point[0] === 0.12 && point[2] === 0.08));
+assert.ok(smoothPath.slice(7, 19).every(point => point[1] >= 0.18));
+assert.ok(smoothPath.slice(19).every(point => point[0] === -0.09 && point[2] === 0.14));
+
+const addedPathVisuals = [];
+context.G3D.inited = true;
+context.G3D.pathVisuals = [];
+context.G3D.scene = {
+  add: object => addedPathVisuals.push(object),
+  remove: object => addedPathVisuals.splice(addedPathVisuals.indexOf(object), 1),
+};
+context.THREE = {
+  Vector3: class { constructor(...values) { this.values = values; } },
+  BufferGeometry: class { setFromPoints(points) { this.points = points; return this; } },
+  LineDashedMaterial: class { constructor(options) { this.options = options; } },
+  Line: class { constructor(geometry, material) { this.geometry = geometry; this.material = material; } computeLineDistances() {} },
+  SphereGeometry: class { constructor(...values) { this.values = values; } },
+  MeshBasicMaterial: class { constructor(options) { this.options = options; } },
+  Mesh: class { constructor(geometry, material) { this.geometry = geometry; this.material = material; this.position = {set(...values) { this.values = values; }}; } },
+};
+vm.runInContext(`${extractFunction('g3dClearTaskPath')}; this.g3dClearTaskPath = g3dClearTaskPath;`, context);
+vm.runInContext(`${extractFunction('g3dPreviewTaskPath')}; this.g3dPreviewTaskPath = g3dPreviewTaskPath;`, context);
+assert.equal(context.g3dPreviewTaskPath(), true);
+assert.equal(context.G3D.pathVisuals.length, 4);
+assert.match(elements.g3dPathHint.textContent, /pick\/place 5 cm.*transfer 18 cm/);
 elements.g3dExecutionReal.checked = true;
 assert.equal(context.g3dBuildTaskPayload().execution_mode, 'real');
 elements.g3dExecutionReal.checked = false;
@@ -157,6 +217,7 @@ context.G3D.editsValid = false;
 context.g3dSetTaskReady(true);
 assert.equal(elements.g3dRunTaskBtn.disabled, true);
 context.G3D.editsValid = true;
+context.G3D.objects[0].name = 'white star';
 
 context.g3dApplyTaskStatus({
   state: 'running',
@@ -172,6 +233,18 @@ assert.equal(elements.g3dRunTaskBtn.disabled, true);
 assert.equal(elements.g3dStopTaskBtn.style.display, '');
 assert.match(elements.g3dTaskStatus.textContent, /Moving to target/);
 assert.match(elements.g3dSceneInfo.textContent, /white star.*teal bowl/);
+
+context.g3dApplyTaskStatus({
+  state: 'running',
+  phase: 'releasing',
+  running: true,
+  execution_mode: 'simulation',
+  source: {name: 'white star'},
+  target: {name: 'teal bowl'},
+  joints: null,
+});
+assert.deepEqual(context.G3D.objectVisuals[0].mesh.position, {x: -0.09, y: 0.075, z: 0.14});
+assert.deepEqual(context.G3D.objectVisuals[0].sprite.position, {x: -0.09, y: 0.107, z: 0.14});
 
 context.g3dApplyTaskStatus({state: 'completed', phase: 'completed', running: false, joints: null});
 assert.equal(elements.g3dRunTaskBtn.disabled, false);

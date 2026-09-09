@@ -5,6 +5,8 @@ const vm = require('node:vm');
 const html = fs.readFileSync(new URL('../static/index.html', `file://${__dirname}/`), 'utf8');
 const match = html.match(/function calConnectWs\(\)\{[\s\S]*?\n\}/);
 assert.ok(match, 'calConnectWs must exist');
+assert.doesNotMatch(html, /id=["']g3dCaptureBtn["']/, 'Generate 3D calibration must not require a capture button');
+assert.match(match[0], /g3dShowLiveCalibFrame\(m\.data\.top\)/, 'top-camera frames must update Generate 3D calibration');
 
 let openedUrl = null;
 const status = {};
