@@ -408,7 +408,7 @@ def test_generate3d_calibration_move_rejects_invalid_prediction_before_hardware(
     assert sent == []
 
 
-def test_pick_place_moves_above_target_and_places_at_target_height(monkeypatch):
+def test_pick_place_releases_five_centimeters_above_target(monkeypatch):
     calls = []
 
     def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
@@ -431,12 +431,13 @@ def test_pick_place_moves_above_target_and_places_at_target_height(monkeypatch):
     assert calls == [
         ([392.5, 169.0], 0.0),
         ([392.5, 169.0], 10.0),
-        ([509.0, 91.0], 5.0),
+        ([509.0, 91.0], 10.0),
         ([509.0, 91.0], 10.0),
     ]
     by_phase = {step["phase"]: step["joints"] for step in plan}
     assert by_phase["moving_to_target"] == by_phase["lifting_source"]
-    assert by_phase["placing"] != by_phase["moving_to_target"]
+    assert by_phase["placing"] == by_phase["moving_to_target"]
+    assert by_phase["releasing"]["shoulder_lift"] == -10.0
 
 
 def test_pick_place_preserves_target_heights_above_thirty_centimeters(monkeypatch):
@@ -458,7 +459,7 @@ def test_pick_place_preserves_target_heights_above_thirty_centimeters(monkeypatc
     )
 
     assert calls[2:] == [
-        ([509.0, 91.0], 40.0),
+        ([509.0, 91.0], 45.0),
         ([509.0, 91.0], 45.0),
     ]
 

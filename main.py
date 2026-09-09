@@ -6955,12 +6955,13 @@ def _g3d_build_pick_place_plan(
         target_object_height_cm = max(0.0, target_object_height_cm)
     except (IndexError, TypeError, ValueError):
         target_object_height_cm = 0.0
-    target_place_height_cm = max(target_height_cm, target_object_height_cm)
-    transfer_height_cm = max(safety_height_cm, target_place_height_cm + G3D_TASK_TARGET_CLEARANCE_CM)
+    target_top_height_cm = max(target_height_cm, target_object_height_cm)
+    target_release_height_cm = target_top_height_cm + G3D_TASK_TARGET_CLEARANCE_CM
+    transfer_height_cm = max(safety_height_cm, target_release_height_cm)
 
     source_low = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
     source_safe = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
-    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_place_height_cm, calibration=calibration)
+    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_release_height_cm, calibration=calibration)
     target_safe = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
     if not all((source_low, source_safe, target_low, target_safe)):
         raise RuntimeError("Could not calculate a safe pick-and-place path")
