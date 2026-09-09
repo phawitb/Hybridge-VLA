@@ -6624,7 +6624,7 @@ def _g3d_normalize_bbox(obj, img_w, img_h):
         return [0, 0, 0, 0]
 
     vals = [float(v) for v in raw_box]
-    if is_box_2d or max(vals) > max(img_w, img_h):
+    if is_box_2d:
         y1, x1, y2, x2 = vals
         bbox = [
             int(x1 * img_w / 1000),

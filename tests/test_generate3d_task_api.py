@@ -86,6 +86,23 @@ def detected_candidate(name, task_role, bbox=None):
     }
 
 
+def test_generate3d_pixel_bbox_is_clamped_without_rescaling_or_axis_swap():
+    candidate = {"bbox": [593, 248, 648, 308]}
+
+    bbox = main._g3d_normalize_bbox(candidate, 640, 480)
+
+    assert bbox == [593, 248, 640, 308]
+    assert candidate["bbox_raw"] == [593, 248, 648, 308]
+
+
+def test_generate3d_box_2d_keeps_gemini_normalized_yxyx_conversion():
+    candidate = {"box_2d": [248, 593, 308, 648]}
+
+    bbox = main._g3d_normalize_bbox(candidate, 640, 480)
+
+    assert bbox == [379, 119, 414, 147]
+
+
 def test_generate3d_detect_image_requires_instruction_before_gemini(monkeypatch):
     setup_task_api(monkeypatch)
     called = False
