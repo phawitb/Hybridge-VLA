@@ -7132,7 +7132,25 @@ def _g3d_build_smooth_pick_place_plan(
 
 def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publish) -> None:
     for step in plan:
-        if step.get("kind") == "grip":
+        trajectory = step.get("trajectory")
+        if trajectory:
+            for waypoint in trajectory[:-1]:
+                if stop_event.is_set():
+                    return
+                robot_send_positions(waypoint, owner="generate3d")
+                time.sleep(0.04)
+                publish(step["phase"], robot_get_positions())
+            if stop_event.is_set():
+                return
+            if not _g3d_task_move(
+                trajectory[-1], step["phase"], stop_event, publish,
+                n_steps=1,
+                tolerance_deg=step.get("tolerance_deg", 2.0),
+                convergence_names=step.get("convergence_names"),
+                joint_tolerances=step.get("joint_tolerances"),
+            ):
+                return
+        elif step.get("kind") == "grip":
             if not _g3d_task_grip(
                 step["joints"]["gripper"], step["phase"], stop_event, publish,
                 command_cycles=step.get("command_cycles", 10),
@@ -7152,6 +7170,15 @@ def _g3d_execute_simulation(plan: list[dict], initial_joints: dict, stop_event: 
     current = {name: float(initial_joints[name]) for name in ROBOT_JOINTS}
     publish("starting", current)
     for step in plan:
+        trajectory = step.get("trajectory")
+        if trajectory:
+            for waypoint in trajectory:
+                if stop_event.is_set():
+                    return
+                publish(step["phase"], waypoint)
+                time.sleep(0.02)
+            current = {name: float(trajectory[-1][name]) for name in ROBOT_JOINTS}
+            continue
         target = step["joints"]
         n_steps = max(1, int(step.get("n_steps", step.get("command_cycles", 10))))
         for index in range(1, n_steps + 1):

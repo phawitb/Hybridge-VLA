@@ -284,6 +284,74 @@ def test_generate3d_simulation_publishes_initial_pose_before_motion(monkeypatch)
     assert published[1][0] == "moving_to_source"
 
 
+def test_real_plan_streams_intermediate_trajectory_then_converges_final_anchor(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    trajectory = [
+        {**initial, "shoulder_pan": 2.0},
+        {**initial, "shoulder_pan": 5.0},
+        {**initial, "shoulder_pan": 9.0},
+    ]
+    sent = []
+    converged = []
+    monkeypatch.setattr(main, "robot_send_positions", lambda joints, owner=None: sent.append((dict(joints), owner)))
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(initial))
+    monkeypatch.setattr(main, "_g3d_task_move", lambda *args, **kwargs: converged.append((args, kwargs)) or True)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_real_plan(
+        [{
+            "phase": "moving_to_target",
+            "joints": trajectory[-1],
+            "trajectory": trajectory,
+            "convergence_names": main.ROBOT_JOINTS[:5],
+            "tolerance_deg": 3.0,
+        }],
+        threading.Event(),
+        lambda phase, joints: None,
+    )
+
+    assert sent == [(trajectory[0], "generate3d"), (trajectory[1], "generate3d")]
+    assert converged[0][0][0] == trajectory[-1]
+    assert converged[0][0][1] == "moving_to_target"
+
+
+def test_real_plan_stops_during_trajectory_stream(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    trajectory = [{**initial, "shoulder_pan": value} for value in (2.0, 5.0, 9.0)]
+    stop_event = threading.Event()
+    sent = []
+    converged = []
+    monkeypatch.setattr(main, "robot_send_positions", lambda joints, owner=None: sent.append(dict(joints)))
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(initial))
+    monkeypatch.setattr(main, "_g3d_task_move", lambda *args, **kwargs: converged.append(args) or True)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_real_plan(
+        [{"phase": "lifting_source", "joints": trajectory[-1], "trajectory": trajectory}],
+        stop_event,
+        lambda phase, joints: stop_event.set(),
+    )
+
+    assert sent == [trajectory[0]]
+    assert converged == []
+
+
+def test_simulation_publishes_planned_trajectory_exactly(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    trajectory = [{**initial, "shoulder_pan": value} for value in (2.0, 5.0, 9.0)]
+    published = []
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_simulation(
+        [{"phase": "moving_to_target", "joints": trajectory[-1], "trajectory": trajectory}],
+        initial,
+        threading.Event(),
+        lambda phase, joints: published.append((phase, dict(joints))),
+    )
+
+    assert published == [("starting", initial)] + [("moving_to_target", joints) for joints in trajectory]
+
+
 def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
     initial = {name: 0.0 for name in main.ROBOT_JOINTS}
     initial["gripper"] = 35.0
