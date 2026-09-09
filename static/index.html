@@ -2289,6 +2289,8 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         <h3>Top View Image</h3>
         <label for="g3dTaskInstruction" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Task instruction</label>
         <input type="text" id="g3dTaskInstruction" placeholder="e.g. pick up white star to teal bowl" style="margin-bottom:10px">
+        <label for="g3dGeminiInput" style="display:block;font-size:0.8rem;font-weight:700;color:#333;margin-bottom:6px">Gemini Input</label>
+        <textarea id="g3dGeminiInput" readonly placeholder="Add an image and task instruction to preview the Gemini input." style="min-height:150px;font-size:0.74rem;line-height:1.4;margin-bottom:10px;background:#f7f7f7"></textarea>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-sm" id="g3dCaptureSceneBtn" onclick="g3dCaptureSceneImage()">Capture Top View</button>
           <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">
@@ -2297,7 +2299,10 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
           </label>
           <button class="btn btn-sm" id="g3dDetectBtn" onclick="g3dDetectObjects()" disabled>Detect & Generate</button>
           <button class="btn btn-sm btn-outline" onclick="g3dUseCurrentRobotState()">Use Current Robot State</button>
+          <button class="btn btn-sm btn-outline" id="g3dSaveRestBtn" onclick="g3dSaveRestPosition()">Save Current as Rest Position</button>
+          <button class="btn btn-sm btn-outline" id="g3dMoveRestBtn" onclick="g3dMoveToRestPosition()" disabled>Move to Rest Position</button>
           <span id="g3dSimStatus" style="font-size:0.82rem;color:#777"></span>
+          <span id="g3dRestStatus" style="font-size:0.78rem;color:#777"></span>
         </div>
       </div>
 
@@ -2356,7 +2361,7 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
               </label>
             </div>
             <label for="g3dEnforceWorkspace" style="display:flex;align-items:flex-start;gap:7px;margin-top:10px;font-size:0.78rem;color:#444;cursor:pointer">
-              <input type="checkbox" id="g3dEnforceWorkspace" checked style="margin-top:2px">
+              <input type="checkbox" id="g3dEnforceWorkspace" style="margin-top:2px">
               <span><strong>Use calibrated workspace safety</strong><br><span style="font-size:0.72rem;color:#777">Uncheck to allow positions outside the calibrated boundary. Joint limits and safe-height motion remain active.</span></span>
             </label>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -3843,6 +3848,7 @@ function setupEvents() {
       if (el.dataset.tab === 'generate3d') {
         g3dLoadCalibrationStatus();
         g3dResumeTaskStatus();
+        g3dLoadRestPosition();
         setTimeout(() => {
           if (G3D.inited) {
             const canvas = document.getElementById('g3dCanvas');
@@ -11994,6 +12000,9 @@ const G3D = {
   sceneBusy: false,
   renderedGeneration: -1,
   renderedDetectionId: null,
+  promptGeneration: 0,
+  restSaved: false,
+  restBusy: false,
 };
 
 const G3D_COLORS = ['#e8453c', '#1a73e8', '#34a853', '#f9ab00', '#9c27b0', '#00acc1', '#ff7043', '#607d8b'];
@@ -12242,6 +12251,31 @@ function g3dCanAddObject() {
     && !G3D.sceneBusy;
 }
 
+async function g3dRefreshPromptPreview() {
+  const output = document.getElementById('g3dGeminiInput');
+  const instruction = document.getElementById('g3dTaskInstruction')?.value.trim() || '';
+  if (!output || !Array.isArray(G3D.imageSize) || G3D.imageSize.length < 2) {
+    if (output) output.value = '';
+    return;
+  }
+  const generation = ++G3D.promptGeneration;
+  try {
+    const response = await fetch('/api/generate3d/prompt-preview', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        instruction,
+        image_width:G3D.imageSize[0],
+        image_height:G3D.imageSize[1],
+      }),
+    });
+    const data = await response.json();
+    if (generation === G3D.promptGeneration) output.value = data.ok ? data.prompt : '';
+  } catch (_) {
+    if (generation === G3D.promptGeneration) output.value = '';
+  }
+}
+
 function g3dCanDetect() {
   const instruction = document.getElementById('g3dTaskInstruction')?.value.trim() || '';
   return !!G3D.imageFile && !!instruction && !G3D.taskRunning && !G3D.sceneBusy;
@@ -12279,7 +12313,15 @@ function g3dSetSceneBusy(busy) {
   if (detect) detect.disabled = !g3dCanDetect();
   if (add) add.disabled = !g3dCanAddObject();
   if (run) run.disabled = !g3dCanRunTask();
+  g3dUpdateRestControls();
   if (document.getElementById('g3dObjectsList')) g3dRenderObjectsList();
+}
+
+function g3dUpdateRestControls() {
+  const save = document.getElementById('g3dSaveRestBtn');
+  const move = document.getElementById('g3dMoveRestBtn');
+  if (save) save.disabled = G3D.restBusy || G3D.taskRunning || G3D.sceneBusy;
+  if (move) move.disabled = !G3D.restSaved || G3D.restBusy || G3D.taskRunning || G3D.sceneBusy;
 }
 
 async function g3dCaptureSceneImage() {
@@ -12321,6 +12363,7 @@ function g3dDrawInputImage(b64, generation=G3D.sceneGeneration, detectionId=G3D.
       G3D.imageSize = [img.naturalWidth || img.width, img.naturalHeight || img.height];
       G3D.renderedGeneration = generation;
       G3D.renderedDetectionId = detectionId;
+      g3dRefreshPromptPreview();
       const canvas = document.getElementById('g3dImageCanvas');
       canvas.width = img.width;
       canvas.height = img.height;
@@ -12836,6 +12879,7 @@ document.getElementById('g3dTaskInstruction').addEventListener('input', () => {
     g3dSetTaskReady(false);
     document.getElementById('g3dSimStatus').textContent = 'Instruction changed. Detect the scene again.';
   }
+  g3dRefreshPromptPreview();
   g3dSetSceneBusy(G3D.sceneBusy);
 });
 document.getElementById('g3dTaskPickHeight').addEventListener('input', g3dPreviewTaskPath);
@@ -13107,8 +13151,59 @@ async function g3dUseCurrentRobotState() {
   }
 }
 
+async function g3dLoadRestPosition() {
+  const status = document.getElementById('g3dRestStatus');
+  try {
+    const data = await fetch('/api/generate3d/rest-position').then(response => response.json());
+    G3D.restSaved = !!data.saved;
+    if (status) status.textContent = G3D.restSaved ? 'Rest Position saved' : 'No Rest Position saved';
+  } catch (_) {
+    G3D.restSaved = false;
+    if (status) status.textContent = 'Could not load Rest Position';
+  }
+  g3dUpdateRestControls();
+}
+
+async function g3dSaveRestPosition() {
+  const status = document.getElementById('g3dRestStatus');
+  G3D.restBusy = true;
+  g3dUpdateRestControls();
+  if (status) status.textContent = 'Saving Rest Position...';
+  try {
+    const data = await fetch('/api/generate3d/rest-position/save', {method:'POST'}).then(response => response.json());
+    if (!data.ok) throw new Error(data.error || 'Could not save Rest Position');
+    G3D.restSaved = true;
+    if (status) status.textContent = 'Rest Position saved';
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  } finally {
+    G3D.restBusy = false;
+    g3dUpdateRestControls();
+  }
+}
+
+async function g3dMoveToRestPosition() {
+  const status = document.getElementById('g3dRestStatus');
+  G3D.restBusy = true;
+  g3dUpdateRestControls();
+  if (status) status.textContent = 'Moving to Rest Position...';
+  try {
+    const data = await fetch('/api/generate3d/rest-position/move', {method:'POST'}).then(response => response.json());
+    if (!data.ok) throw new Error(data.error || 'Could not move to Rest Position');
+    G3D.currentJoints = {...data.joints};
+    if (G3D.inited) simApplyJoints(G3D.robot, g3dJointArray(G3D.currentJoints));
+    if (status) status.textContent = 'Robot is at Rest Position';
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  } finally {
+    G3D.restBusy = false;
+    g3dUpdateRestControls();
+  }
+}
+
 g3dLoadCalibrationStatus();
 g3dResumeTaskStatus();
+g3dLoadRestPosition();
 
 // ════════════════════════════════════════════════════
 // ══ Object Detection subtab

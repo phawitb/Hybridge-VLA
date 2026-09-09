@@ -124,6 +124,83 @@ def test_generate3d_detect_image_requires_instruction_before_gemini(monkeypatch)
     assert called is False
 
 
+def test_generate3d_prompt_preview_matches_detection_prompt_builder(monkeypatch):
+    setup_task_api(monkeypatch)
+    response = TestClient(main.app).post("/api/generate3d/prompt-preview", json={
+        "instruction": "  pick pink bow into green bowl  ",
+        "image_width": 640,
+        "image_height": 480,
+    })
+
+    assert response.status_code == 200
+    prompt = response.json()["prompt"]
+    assert prompt == main._g3d_detection_prompt("pick pink bow into green bowl", 640, 480)
+    assert "640x480 pixels" in prompt
+    assert "<task_instruction>\npick pink bow into green bowl\n</task_instruction>" in prompt
+
+
+def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp_path):
+    setup_task_api(monkeypatch)
+    rest_file = tmp_path / "generate3d_rest_position.json"
+    joints = {
+        "shoulder_pan": 10.0,
+        "shoulder_lift": 20.0,
+        "elbow_flex": 30.0,
+        "wrist_flex": 40.0,
+        "wrist_roll": 5.0,
+        "gripper": 50.0,
+    }
+    monkeypatch.setattr(main, "G3D_REST_POSITION_FILE", rest_file)
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(joints))
+    client = TestClient(main.app)
+
+    saved = client.post("/api/generate3d/rest-position/save")
+    status = client.get("/api/generate3d/rest-position")
+
+    assert saved.status_code == 200
+    assert saved.json() == {"ok": True, "saved": True, "joints": joints}
+    assert json.loads(rest_file.read_text()) == joints
+    assert status.json() == {"ok": True, "saved": True, "joints": joints}
+
+
+def test_generate3d_move_to_rest_uses_hardware_lock_and_saved_joints(monkeypatch, tmp_path):
+    setup_task_api(monkeypatch)
+    rest_file = tmp_path / "generate3d_rest_position.json"
+    joints = {
+        "shoulder_pan": 10.0,
+        "shoulder_lift": 20.0,
+        "elbow_flex": 30.0,
+        "wrist_flex": 40.0,
+        "wrist_roll": 5.0,
+        "gripper": 50.0,
+    }
+    rest_file.write_text(json.dumps(joints))
+    monkeypatch.setattr(main, "G3D_REST_POSITION_FILE", rest_file)
+    calls = []
+
+    def fake_move(target, phase, stop_event, publish, **kwargs):
+        calls.append((target, phase, kwargs))
+        return True
+
+    monkeypatch.setattr(main, "_g3d_task_move", fake_move)
+    response = TestClient(main.app).post("/api/generate3d/rest-position/move")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert calls == [(joints, "moving_to_rest", {"n_steps": 30, "owner": "generate3d_rest"})]
+    assert main.robot_operation_owner is None
+
+
+def test_generate3d_move_to_rest_rejects_missing_position(monkeypatch, tmp_path):
+    setup_task_api(monkeypatch)
+    monkeypatch.setattr(main, "G3D_REST_POSITION_FILE", tmp_path / "missing.json")
+
+    response = TestClient(main.app).post("/api/generate3d/rest-position/move")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "REST_POSITION_REQUIRED"
+
+
 def test_generate3d_detect_image_filters_roles_and_computes_task_heights(monkeypatch):
     setup_task_api(monkeypatch)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")

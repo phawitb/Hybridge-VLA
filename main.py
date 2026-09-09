@@ -6255,6 +6255,7 @@ async def calibrate_move_to(request: Request):
 # ══════════ Generate 3D calibration + image-to-world mapping ══════════
 
 G3D_CALIB_FILE = ROOT / "data" / "generate3d_calibration.json"
+G3D_REST_POSITION_FILE = ROOT / "data" / "generate3d_rest_position.json"
 G3D_WORKSPACE_MARGIN = 0.03
 
 g3d_calib_state = {
@@ -6814,6 +6815,85 @@ async def generate3d_current_state():
     return {"ok": True, "joints": joints, "position_3d": _g3d_position_from_joints(joints)}
 
 
+def _g3d_normalize_rest_position(value):
+    if not isinstance(value, dict):
+        return None
+    try:
+        joints = {name: float(value[name]) for name in ROBOT_JOINTS}
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    return joints if _g3d_predicted_joints_in_bounds(joints) else None
+
+
+def _g3d_load_rest_position():
+    if not G3D_REST_POSITION_FILE.exists():
+        return None
+    try:
+        return _g3d_normalize_rest_position(json.loads(G3D_REST_POSITION_FILE.read_text()))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _g3d_save_rest_position(joints):
+    normalized = _g3d_normalize_rest_position(joints)
+    if normalized is None:
+        raise TaskResolutionError("INVALID_REST_POSITION", "Current robot joints cannot be saved as a rest position")
+    G3D_REST_POSITION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = G3D_REST_POSITION_FILE.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(normalized, indent=2))
+    temporary.replace(G3D_REST_POSITION_FILE)
+    return normalized
+
+
+@app.get("/api/generate3d/rest-position")
+async def generate3d_rest_position_status():
+    joints = _g3d_load_rest_position()
+    return {"ok": True, "saved": joints is not None, "joints": joints}
+
+
+@app.post("/api/generate3d/rest-position/save")
+async def generate3d_rest_position_save():
+    if not robot_state.get("connected"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "ROBOT_NOT_CONNECTED", "error": "Robot not connected"})
+    owner = "generate3d_rest"
+    if not acquire_robot_operation(owner):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is busy"})
+    try:
+        joints = _g3d_save_rest_position(robot_get_positions())
+        return {"ok": True, "saved": True, "joints": joints}
+    except TaskResolutionError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+    finally:
+        release_robot_operation(owner)
+
+
+@app.post("/api/generate3d/rest-position/move")
+async def generate3d_rest_position_move():
+    if not robot_state.get("connected"):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "ROBOT_NOT_CONNECTED", "error": "Robot not connected"})
+    target = _g3d_load_rest_position()
+    if target is None:
+        return JSONResponse(status_code=409, content={"ok": False, "code": "REST_POSITION_REQUIRED", "error": "Save a rest position first"})
+    owner = "generate3d_rest"
+    if not acquire_robot_operation(owner):
+        return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": "Robot hardware is busy"})
+    try:
+        await asyncio.to_thread(
+            _g3d_task_move,
+            target,
+            "moving_to_rest",
+            threading.Event(),
+            lambda *_: None,
+            n_steps=30,
+            owner=owner,
+        )
+        return {"ok": True, "joints": target}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "code": "REST_MOVE_FAILED", "error": str(exc)})
+    finally:
+        release_robot_operation(owner)
+
+
 def _g3d_waypoint_timeout(current: dict, target: dict, checked_names) -> float:
     deltas = [
         abs(float(target[name]) - float(current[name]))
@@ -6834,6 +6914,7 @@ def _g3d_task_move(
     waypoint_timeout: float | None = None,
     convergence_names=None,
     joint_tolerances=None,
+    owner: str = "generate3d",
 ) -> bool:
     current = robot_get_positions()
     names = [name for name in ROBOT_JOINTS if name in current and name in target]
@@ -6855,7 +6936,7 @@ def _g3d_task_move(
                 else round(current[name] + ratio * (target[name] - current[name]), 2)
             )
         if index < n_steps:
-            robot_send_positions(waypoint, owner="generate3d")
+            robot_send_positions(waypoint, owner=owner)
             time.sleep(0.04)
             publish(phase, robot_get_positions())
             continue
@@ -6864,7 +6945,7 @@ def _g3d_task_move(
         while True:
             if stop_event.is_set():
                 return False
-            robot_send_positions(waypoint, owner="generate3d")
+            robot_send_positions(waypoint, owner=owner)
             time.sleep(0.04)
             measured = robot_get_positions()
             publish(phase, measured)
@@ -7416,6 +7497,41 @@ async def generate3d_task_stop():
     return g3d_task_manager.status()
 
 
+def _g3d_detection_prompt(instruction: str, img_w: int, img_h: int) -> str:
+    return f"""This is a top-down camera image of a robot workspace sized {img_w}x{img_h} pixels.
+Locate only the visible objects required to perform the task below.
+Return at most one source and one target. Omit a role if its object is not visible or cannot be located confidently.
+Never return unrelated workspace objects, the robot arm, cables, shadows, hands, or desk texture.
+
+For each object return name, task_role (source or target),
+"box_2d": [y_min, x_min, y_max, x_max] using integers normalized from 0 to 1000,
+color_hex, shape_3d (box, cylinder, or sphere), estimated_size_cm [width, depth, height], and confidence.
+Always use the key "box_2d" in normalized 0-to-1000 coordinates; do not return a pixel "bbox".
+Return ONLY valid JSON with an "objects" array. Do not recommend pick or place heights.
+No explanations and no markdown.
+<task_instruction>
+{instruction.strip()}
+</task_instruction>"""
+
+
+@app.post("/api/generate3d/prompt-preview")
+async def generate3d_prompt_preview(request: Request):
+    data = await request.json()
+    try:
+        img_w = int(data.get("image_width"))
+        img_h = int(data.get("image_height"))
+        if not (1 <= img_w <= 10000 and 1 <= img_h <= 10000):
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "code": "INVALID_IMAGE_SIZE",
+            "error": "Image width and height are required",
+        })
+    instruction = str(data.get("instruction", "")).strip()
+    return {"ok": True, "prompt": _g3d_detection_prompt(instruction, img_w, img_h)}
+
+
 @app.post("/api/generate3d/detect-image")
 async def generate3d_detect_image(
     image: UploadFile = File(...),
@@ -7446,20 +7562,7 @@ async def generate3d_detect_image(
     cfg = load_config()
     gemini_model = model or cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={api_key}"
-    prompt = f"""This is a top-down camera image of a robot workspace sized {img_w}x{img_h} pixels.
-Locate only the visible objects required to perform the task below.
-Return at most one source and one target. Omit a role if its object is not visible or cannot be located confidently.
-Never return unrelated workspace objects, the robot arm, cables, shadows, hands, or desk texture.
-
-For each object return name, task_role (source or target),
-"box_2d": [y_min, x_min, y_max, x_max] using integers normalized from 0 to 1000,
-color_hex, shape_3d (box, cylinder, or sphere), estimated_size_cm [width, depth, height], and confidence.
-Always use the key "box_2d" in normalized 0-to-1000 coordinates; do not return a pixel "bbox".
-Return ONLY valid JSON with an "objects" array. Do not recommend pick or place heights.
-No explanations and no markdown.
-<task_instruction>
-{task_instruction}
-</task_instruction>"""
+    prompt = _g3d_detection_prompt(task_instruction, img_w, img_h)
 
     gemini_objects = []
     gemini_raw = ""

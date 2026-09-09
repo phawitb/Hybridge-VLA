@@ -26,19 +26,23 @@ function extractFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dTaskPickHeight', 'g3dTaskPlaceHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn', 'g3dDetectBtn']) {
+for (const id of ['g3dTaskControls', 'g3dTaskInstruction', 'g3dGeminiInput', 'g3dTaskPickHeight', 'g3dTaskPlaceHeight', 'g3dTaskSafetyHeight', 'g3dMotionSmooth', 'g3dMotionWaypoint', 'g3dExecutionSimulation', 'g3dExecutionReal', 'g3dEnforceWorkspace', 'g3dRunTaskBtn', 'g3dStopTaskBtn', 'g3dTaskStatus', 'g3dAddObjectBtn', 'g3dDetectBtn', 'g3dSaveRestBtn', 'g3dMoveRestBtn', 'g3dRestStatus']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));
 }
 assert.ok(
   html.indexOf('id="g3dTaskInstruction"') < html.indexOf('id="g3dDetectBtn"'),
   'Task instruction must appear before Detect & Generate',
 );
+assert.ok(html.indexOf('id="g3dGeminiInput"') < html.indexOf('id="g3dDetectBtn"'));
+assert.match(html, /id="g3dGeminiInput"[^>]*readonly/);
+assert.doesNotMatch(html.match(/<input[^>]*id="g3dEnforceWorkspace"[^>]*>/)[0], /\schecked(?:\s|>)/);
 
 const elements = {
   g3dTaskInstruction: {value: 'pick up white star to teal bowl'},
+  g3dGeminiInput: {value: ''},
   g3dExecutionSimulation: {checked: true},
   g3dExecutionReal: {checked: false},
-  g3dEnforceWorkspace: {checked: true},
+  g3dEnforceWorkspace: {checked: false},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
   g3dTaskPickHeight: {value: '0'},
@@ -97,6 +101,8 @@ const context = {
   document: {getElementById: id => elements[id]},
   g3dInitScene() {},
   g3dPreviewTaskPath() {},
+  g3dRefreshPromptPreview() {},
+  g3dUpdateRestControls() {},
   g3dJointArray: joints => Object.values(joints),
   simApplyJoints: (robot, joints) => applied.push({robot, joints}),
   g3dRedrawImage() {},
@@ -150,7 +156,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   pick_height_cm: 0,
   place_height_cm: 5,
   safety_height_cm: 18,
-  enforce_workspace: true,
+  enforce_workspace: false,
   execution_mode: 'simulation',
   motion_mode: 'smooth',
   initial_joints: {
@@ -283,6 +289,10 @@ assert.equal(elements.g3dTaskStatus.textContent, 'Task completed');
 assert.match(extractFunction('g3dResumeTaskStatus'), /g3dPollTaskStatus/);
 
 assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(/);
+assert.match(extractFunction('g3dRefreshPromptPreview'), /\/api\/generate3d\/prompt-preview/);
+assert.match(extractFunction('g3dLoadRestPosition'), /\/api\/generate3d\/rest-position/);
+assert.match(extractFunction('g3dSaveRestPosition'), /\/api\/generate3d\/rest-position\/save/);
+assert.match(extractFunction('g3dMoveToRestPosition'), /\/api\/generate3d\/rest-position\/move/);
 assert.match(extractFunction('g3dDetectObjects'), /append\(['"]instruction['"],\s*instruction\)/);
 assert.match(extractFunction('g3dDetectObjects'), /d\.pick_height_cm/);
 assert.match(extractFunction('g3dDetectObjects'), /d\.place_height_cm/);
