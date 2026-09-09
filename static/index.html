@@ -2391,6 +2391,8 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         <textarea id="g3dFlowInstruction" placeholder="e.g. pick up the pink bow to green bowl and pick up the star to green bowl" style="min-height:72px;margin:6px 0 10px"></textarea>
         <label for="g3dFlowGeminiInput" style="font-size:.8rem;font-weight:700">Gemini Input (full system prompt)</label>
         <textarea id="g3dFlowGeminiInput" readonly style="min-height:145px;margin-top:6px;background:#f7f7f7;font-size:.74rem"></textarea>
+        <label for="g3dFlowModel" style="display:block;font-size:.8rem;font-weight:700;margin-top:8px">Gemini model</label>
+        <input id="g3dFlowModel" type="text" placeholder="Use configured default model" style="margin-top:5px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
           <button class="btn btn-sm" id="g3dFlowCaptureBtn" onclick="g3dFlowCapture()">Capture Top View</button>
           <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">Upload Image<input id="g3dFlowImageInput" type="file" accept="image/*" style="display:none"></label>
@@ -2422,6 +2424,8 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
           <button class="btn btn-sm btn-danger" id="g3dFlowStopBtn" onclick="g3dFlowStop()" disabled>Stop Flow</button>
           <button class="btn btn-sm btn-outline" onclick="g3dSaveRestPosition()">Save Current as Rest Position</button>
           <button class="btn btn-sm btn-outline" onclick="g3dMoveToRestPosition()">Move to Rest Position</button>
+          <button class="btn btn-sm btn-outline" onclick="g3dFlowUseCurrentRobotState()">Use Current Robot State</button>
+          <span id="g3dFlowRobotState" style="font-size:.78rem;color:#777"></span>
           <span id="g3dFlowStatus" style="font-size:.8rem;color:#666"></span>
         </div>
       </div>
@@ -13264,7 +13268,7 @@ async function g3dMoveToRestPosition() {
   }
 }
 
-const G3D_FLOW = {imageB64:null, mime:'image/jpeg', state:null, selectedIndex:0, pollTimer:null};
+const G3D_FLOW = {imageB64:null, mime:'image/jpeg', state:null, selectedIndex:0, pollTimer:null,scene:null,camera:null,renderer:null,controls:null,visuals:[]};
 
 function g3dFlowTerminal(phase) {
   return ['success','failed','uncertain','stopped','interrupted'].includes(phase);
@@ -13298,7 +13302,7 @@ async function g3dFlowCapture() {
 
 async function g3dFlowPlan() {
   const status = document.getElementById('g3dFlowStatus'); status.textContent = 'Generating flow...';
-  const payload = {instruction:document.getElementById('g3dFlowInstruction').value.trim(), image_b64:G3D_FLOW.imageB64, mime:G3D_FLOW.mime};
+  const payload = {instruction:document.getElementById('g3dFlowInstruction').value.trim(), image_b64:G3D_FLOW.imageB64, mime:G3D_FLOW.mime,model:document.getElementById('g3dFlowModel').value.trim()};
   try {
     const response = await fetch('/api/generate3d/flow/plan', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'Could not generate flow');
@@ -13315,13 +13319,10 @@ function g3dFlowPhaseClass(phase) {
 
 function g3dFlowRenderPath(block) {
   const canvas = document.getElementById('g3dFlowCanvas'); if (!canvas) return;
-  canvas.width = canvas.clientWidth || 640; canvas.height = 320;
-  const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#1a1a2e';ctx.fillRect(0,0,canvas.width,canvas.height);
-  const objects = block?.objects || []; if (!objects.length) {ctx.fillStyle='#aaa';ctx.fillText('Path preview appears after fresh detection',20,30);return;}
-  const source=objects.find(o=>o.task_role==='source'), target=objects.find(o=>o.task_role==='target'); if(!source||!target)return;
-  const point=o=>[40+(o.center_pixel?.[0]||0)/Math.max(1,...objects.map(x=>x.center_pixel?.[0]||1))*(canvas.width-80),40+(o.center_pixel?.[1]||0)/Math.max(1,...objects.map(x=>x.center_pixel?.[1]||1))*(canvas.height-80)];
-  const a=point(source),b=point(target);ctx.strokeStyle='#4dd0e1';ctx.lineWidth=4;ctx.setLineDash([9,7]);ctx.beginPath();ctx.moveTo(...a);ctx.quadraticCurveTo((a[0]+b[0])/2,Math.max(25,Math.min(a[1],b[1])-65),...b);ctx.stroke();ctx.setLineDash([]);
-  [[source,a,'#34a853'],[target,b,'#f9ab00']].forEach(([o,p,c])=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(...p,9,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.fillText(o.name,p[0]+12,p[1]+4)});
+  if(!G3D_FLOW.renderer){G3D_FLOW.scene=new THREE.Scene();G3D_FLOW.scene.background=new THREE.Color(0x1a1a2e);G3D_FLOW.camera=new THREE.PerspectiveCamera(48,2,0.01,10);G3D_FLOW.camera.position.set(.28,.34,.42);G3D_FLOW.camera.lookAt(0,0,.14);G3D_FLOW.renderer=new THREE.WebGLRenderer({canvas,antialias:true});G3D_FLOW.renderer.setSize(canvas.clientWidth||640,320);G3D_FLOW.controls=new THREE.OrbitControls(G3D_FLOW.camera,canvas);G3D_FLOW.scene.add(new THREE.HemisphereLight(0xffffff,0x303050,2));const floor=new THREE.Mesh(new THREE.PlaneGeometry(.6,.5),new THREE.MeshPhongMaterial({color:0x222240}));floor.rotation.x=-Math.PI/2;floor.position.z=.14;G3D_FLOW.scene.add(floor);const animate=()=>{requestAnimationFrame(animate);G3D_FLOW.controls.update();G3D_FLOW.renderer.render(G3D_FLOW.scene,G3D_FLOW.camera)};animate();}
+  G3D_FLOW.visuals.forEach(item=>G3D_FLOW.scene.remove(item));G3D_FLOW.visuals=[];
+  const objects=block?.objects||[];objects.forEach(object=>{const p=object.position_3d||[0,0,0],size=object.estimated_size_cm||[3,3,3],w=Math.max(1,size[0])/100,d=Math.max(1,size[1])/100,h=Math.max(1,size[2])/100,color=parseInt(String(object.color_hex||'#888888').replace('#',''),16)||0x888888;let geometry=object.shape_3d==='cylinder'?new THREE.CylinderGeometry(w/2,w/2,h,24):object.shape_3d==='sphere'?new THREE.SphereGeometry(Math.max(w,d,h)/2,20,16):new THREE.BoxGeometry(w,h,d);const mesh=new THREE.Mesh(geometry,new THREE.MeshPhongMaterial({color}));mesh.position.set(p[0],h/2,p[2]);G3D_FLOW.scene.add(mesh);G3D_FLOW.visuals.push(mesh)});
+  const source=objects.find(o=>o.task_role==='source'),target=objects.find(o=>o.task_role==='target');if(source&&target){const pick=Number(block.path?.pick_height_cm||0),place=Number(block.path?.place_height_cm||0),safety=Math.max(10,pick,place),points=g3dBuildTaskPathPoints(source,target,pick,place,safety,block.path?.motion_mode||'smooth').map(p=>new THREE.Vector3(...p));const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineDashedMaterial({color:0x4dd0e1,dashSize:.012,gapSize:.007}));line.computeLineDistances();G3D_FLOW.scene.add(line);G3D_FLOW.visuals.push(line)}
 }
 
 function g3dFlowRender() {
@@ -13330,7 +13331,7 @@ function g3dFlowRender() {
   const block=state.blocks[G3D_FLOW.selectedIndex] || state.blocks[0]; G3D_FLOW.selectedIndex=block.index;
   const verification=block.verification || {}, artifacts=block.artifacts || {};
   document.getElementById('g3dFlowBlockDetail').innerHTML=`<div class="g3d-flow-detail-row"><strong>Instruction</strong><br>${esc(block.instruction)}</div><div class="g3d-flow-detail-row"><strong>Status</strong> ${esc(block.phase)}</div><div class="g3d-flow-detail-row"><strong>Mode</strong> ${esc(block.config?.execution_mode||'—')} · ${esc(block.config?.motion_mode||'—')}</div><div class="g3d-flow-detail-row"><strong>Verification</strong><br>${esc(verification.reason||'Not verified yet')}</div><div class="g3d-flow-detail-row"><strong>Evidence</strong><br>${(verification.visible_evidence||[]).map(esc).join('<br>')||'—'}</div>${block.error?`<div class="g3d-flow-detail-row" style="color:#d93025"><strong>Error</strong><br>${esc(block.error)}</div>`:''}${artifacts.before?`<div class="g3d-flow-detail-row"><a target="_blank" href="/api/generate3d/flow/artifact/${encodeURIComponent(state.flow_id)}/${encodeURIComponent(artifacts.before)}">Before frame</a>${artifacts.after?` · <a target="_blank" href="/api/generate3d/flow/artifact/${encodeURIComponent(state.flow_id)}/${encodeURIComponent(artifacts.after)}">Verification frame</a>`:''}</div>`:''}`;
-  document.getElementById('g3dFlowObjects').innerHTML=(block.objects||[]).map(o=>`<div class="g3d-flow-object"><strong>${esc(o.name)}</strong> · ${esc(o.task_role||'')}<br>bbox ${esc(JSON.stringify(o.bbox||[]))} · confidence ${esc(o.confidence??'—')} · ${o.position_valid===false?'position unavailable':'position ready'}</div>`).join('')||'<div class="g3d-flow-empty">Objects appear after this block detects a fresh frame.</div>';
+  document.getElementById('g3dFlowObjects').innerHTML=(block.objects||[]).map((o,i)=>`<div class="g3d-flow-object"><strong>${esc(o.name)}</strong> · ${esc(o.task_role||'')}<br><label>BBox <input data-flow-bbox="${i}" value="${esc((o.bbox||[]).join(', '))}" style="margin-top:4px"></label><br>confidence ${esc(o.confidence??'—')} · ${o.position_valid===false?'position unavailable':'position ready'}</div>`).join('')+(block.objects?.length?'<button class="btn btn-sm btn-outline" onclick="g3dFlowSaveObjects()">Save Object Boxes</button>':'<div class="g3d-flow-empty">Objects appear after preview or fresh detection.</div>');
   document.getElementById('g3dFlowRaw').textContent=JSON.stringify({planning:state.planning,block_prompts:block.prompts,verification:block.verification},null,2);
   g3dFlowRenderPath(block); g3dFlowUpdateControls();
 }
@@ -13339,7 +13340,7 @@ function g3dFlowSelectBlock(index) { G3D_FLOW.selectedIndex=index; g3dFlowRender
 
 function g3dFlowConfig() {
   const place=document.getElementById('g3dFlowPlaceHeight').value;
-  return {execution_mode:document.getElementById('g3dFlowExecutionReal').checked?'real':'simulation',motion_mode:document.getElementById('g3dFlowMotionWaypoint').checked?'waypoint':'smooth',pick_height_cm:Number(document.getElementById('g3dFlowPickHeight').value)||0,place_height_cm:place===''?null:Number(place),safety_height_cm:Number(document.getElementById('g3dFlowSafetyHeight').value)||10,enforce_workspace:document.getElementById('g3dFlowEnforceWorkspace').checked,return_to_rest_on_success:document.getElementById('g3dFlowReturnRest').checked,image_b64:G3D_FLOW.imageB64,mime:G3D_FLOW.mime,initial_joints:{...G3D.currentJoints}};
+  return {execution_mode:document.getElementById('g3dFlowExecutionReal').checked?'real':'simulation',motion_mode:document.getElementById('g3dFlowMotionWaypoint').checked?'waypoint':'smooth',model:document.getElementById('g3dFlowModel').value.trim(),pick_height_cm:Number(document.getElementById('g3dFlowPickHeight').value)||0,place_height_cm:place===''?null:Number(place),safety_height_cm:Number(document.getElementById('g3dFlowSafetyHeight').value)||10,enforce_workspace:document.getElementById('g3dFlowEnforceWorkspace').checked,return_to_rest_on_success:document.getElementById('g3dFlowReturnRest').checked,initial_joints:{...G3D.currentJoints}};
 }
 
 async function g3dFlowStart(scope) {
@@ -13348,10 +13349,12 @@ async function g3dFlowStart(scope) {
 }
 
 function g3dFlowRetryBlock(){return g3dFlowStart('block')}
+async function g3dFlowSaveObjects(){const block=G3D_FLOW.state?.blocks?.[G3D_FLOW.selectedIndex];if(!block)return;const objects=block.objects.map((object,index)=>({...object,bbox:String(document.querySelector(`[data-flow-bbox="${index}"]`)?.value||'').split(',').map(Number)}));try{const response=await fetch(`/api/generate3d/flow/block/${G3D_FLOW.selectedIndex}/objects`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({objects,image_size:G3D_FLOW.state.planning?.image_size})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'Could not save boxes');G3D_FLOW.state=data;g3dFlowRender();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}}
+async function g3dFlowUseCurrentRobotState(){const status=document.getElementById('g3dFlowRobotState');try{const response=await fetch('/api/generate3d/current-state');const data=await response.json();if(!data.ok)throw new Error(data.error||'Robot unavailable');G3D.currentJoints={...data.joints};const p=data.position_3d||[0,0,0];status.textContent=`Robot x:${Number(p[0]).toFixed(3)} z:${Number(p[2]).toFixed(3)}`;}catch(error){status.textContent=error.message;}}
 async function g3dFlowStop(){try{const response=await fetch('/api/generate3d/flow/stop',{method:'POST'});G3D_FLOW.state=await response.json();g3dFlowRender();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}}
 async function g3dFlowLoadStatus(){try{const response=await fetch('/api/generate3d/flow/status');G3D_FLOW.state=await response.json();g3dFlowRender();if(G3D_FLOW.state.running)g3dFlowBeginPolling();}catch(_){}}
 function g3dFlowBeginPolling(){if(G3D_FLOW.pollTimer)clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=setInterval(async()=>{await g3dFlowLoadStatus();if(!G3D_FLOW.state?.running){clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=null;}},300)}
-function g3dFlowUpdateControls(){const running=!!G3D_FLOW.state?.running,hasFlow=!!G3D_FLOW.state?.blocks?.length,block=G3D_FLOW.state?.blocks?.[G3D_FLOW.selectedIndex];document.getElementById('g3dFlowPlanBtn').disabled=running||!G3D_FLOW.imageB64||!document.getElementById('g3dFlowInstruction').value.trim();document.getElementById('g3dFlowRunAllBtn').disabled=running||!hasFlow;document.getElementById('g3dFlowRunBlockBtn').disabled=running||!block;document.getElementById('g3dFlowRetryBtn').disabled=running||!block||!g3dFlowTerminal(block.phase);document.getElementById('g3dFlowStopBtn').disabled=!running;}
+function g3dFlowUpdateControls(){const running=!!G3D_FLOW.state?.running,hasFlow=!!G3D_FLOW.state?.blocks?.length,block=G3D_FLOW.state?.blocks?.[G3D_FLOW.selectedIndex],retryable=['failed','uncertain','stopped','interrupted'].includes(block?.phase);document.getElementById('g3dFlowPlanBtn').disabled=running||!G3D_FLOW.imageB64||!document.getElementById('g3dFlowInstruction').value.trim();document.getElementById('g3dFlowRunAllBtn').disabled=running||!hasFlow;document.getElementById('g3dFlowRunBlockBtn').disabled=running||!block||block.phase!=='pending';document.getElementById('g3dFlowRetryBtn').disabled=running||!retryable;document.getElementById('g3dFlowStopBtn').disabled=!running;}
 
 document.getElementById('g3dFlowInstruction').addEventListener('input',g3dFlowLoadPrompt);
 document.getElementById('g3dFlowImageInput').addEventListener('change',event=>{const file=event.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>g3dFlowSetImage(String(reader.result).split(',')[1],file.type||'image/jpeg');reader.readAsDataURL(file)});

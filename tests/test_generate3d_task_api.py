@@ -163,6 +163,50 @@ def test_generate3d_flow_plan_rejects_empty_instruction(monkeypatch, tmp_path):
     assert response.json()["code"] == "INSTRUCTION_REQUIRED"
 
 
+def test_generate3d_flow_real_start_requires_saved_rest_position(monkeypatch, tmp_path):
+    from generate3d_flow import Generate3DFlowManager
+    manager = Generate3DFlowManager(tmp_path / "flow.json", tmp_path / "flows")
+    manager.create_flow("move", [{"instruction": "move a to b", "source_name": "a", "target_name": "b"}])
+    monkeypatch.setattr(main, "g3d_flow_manager", manager)
+    monkeypatch.setattr(main, "_g3d_load_rest_position", lambda: None)
+    response = TestClient(main.app).post("/api/generate3d/flow/start", json={
+        "scope": "all", "config": {"execution_mode": "real", "return_to_rest_on_success": True},
+    })
+    assert response.status_code == 409
+    assert response.json()["code"] == "REST_POSITION_REQUIRED"
+
+
+def test_generate3d_flow_return_to_rest_does_not_move_robot_in_simulation(monkeypatch):
+    called = False
+    async def forbidden():
+        nonlocal called
+        called = True
+    monkeypatch.setattr(main, "generate3d_rest_position_move", forbidden)
+    main._g3d_flow_return_to_rest({"execution_mode": "simulation", "return_to_rest_on_success": True})
+    assert called is False
+
+
+def test_generate3d_flow_real_run_reserves_hardware_until_finished(monkeypatch):
+    captured = {}
+    class Manager:
+        def start(self, *args, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "running": True}
+    owners = []
+    monkeypatch.setattr(main, "g3d_flow_manager", Manager())
+    monkeypatch.setattr(main, "_g3d_load_rest_position", lambda: {name: 0 for name in main.ROBOT_JOINTS})
+    monkeypatch.setitem(main.robot_state, "connected", True)
+    monkeypatch.setattr(main, "acquire_robot_operation", lambda owner: owners.append(("acquire", owner)) or True)
+    monkeypatch.setattr(main, "release_robot_operation", lambda owner: owners.append(("release", owner)))
+    response = TestClient(main.app).post("/api/generate3d/flow/start", json={
+        "scope": "all", "config": {"execution_mode": "real", "return_to_rest_on_success": True},
+    })
+    assert response.status_code == 200
+    assert owners == [("acquire", "generate3d_flow")]
+    captured["on_finished"]("success")
+    assert owners[-1] == ("release", "generate3d_flow")
+
+
 def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp_path):
     setup_task_api(monkeypatch)
     rest_file = tmp_path / "generate3d_rest_position.json"

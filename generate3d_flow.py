@@ -14,6 +14,11 @@ from typing import Callable
 
 TERMINAL = {"success", "failed", "uncertain", "stopped", "interrupted"}
 ACTIVE = {"capturing", "detecting", "planning", "executing", "capturing_verification", "verifying"}
+NEXT_PHASE = {
+    "pending": "capturing", "capturing": "detecting", "detecting": "planning",
+    "planning": "executing", "executing": "capturing_verification",
+    "capturing_verification": "verifying", "verifying": "success",
+}
 
 
 class FlowValidationError(ValueError):
@@ -47,7 +52,10 @@ def parse_flow_plan(raw: object) -> list[dict]:
             raise FlowValidationError("INVALID_FLOW_PLAN", f"Subtask {index + 1} is invalid")
         clean = {}
         for field in ("instruction", "source_name", "target_name"):
-            value = " ".join(str(item.get(field, "")).strip().split())
+            raw_value = item.get(field)
+            if not isinstance(raw_value, str):
+                raise FlowValidationError("INVALID_FLOW_PLAN", f"Subtask {index + 1} needs string {field}")
+            value = " ".join(raw_value.strip().split())
             if not value or len(value) > 500:
                 raise FlowValidationError("INVALID_FLOW_PLAN", f"Subtask {index + 1} needs {field}")
             clean[field] = value
@@ -120,9 +128,33 @@ class Generate3DFlowManager:
             self._persist()
             return self.status()
 
+    def update_planning(self, values: dict) -> dict:
+        with self._lock:
+            if not self._state.get("flow_id") or self._state.get("running"):
+                raise FlowValidationError("FLOW_NOT_EDITABLE", "Flow planning data cannot be changed now")
+            self._state.setdefault("planning", {}).update(copy.deepcopy(values))
+            self._state["updated_at"] = _now()
+            self._persist()
+            return self.status()
+
+    def update_block_preview(self, index: int, values: dict) -> dict:
+        with self._lock:
+            if self._state.get("running") or not isinstance(index, int) or not 0 <= index < len(self._state.get("blocks", [])):
+                raise FlowValidationError("FLOW_NOT_EDITABLE", "Flow block cannot be edited now")
+            allowed = {key: copy.deepcopy(value) for key, value in values.items() if key in {"objects", "path", "prompts"}}
+            self._state["blocks"][index].update(allowed)
+            self._state["updated_at"] = _now()
+            self._persist()
+            return self.status()
+
     def _update_block(self, index: int, phase: str, updates: dict | None = None) -> None:
         with self._lock:
             block = self._state["blocks"][index]
+            current = block.get("phase", "pending")
+            retry_start = current in TERMINAL and phase == "capturing"
+            terminal_exit = phase in TERMINAL
+            if phase not in ACTIVE | TERMINAL or (not retry_start and not terminal_exit and NEXT_PHASE.get(current) != phase):
+                raise FlowValidationError("INVALID_FLOW_TRANSITION", f"Cannot move block from {current} to {phase}")
             block["phase"] = phase
             block.setdefault("timestamps", {})[phase] = _now()
             if updates:
@@ -131,7 +163,8 @@ class Generate3DFlowManager:
             self._persist()
 
     def start(self, scope: str, block_index: int | None, config: dict, runner: Callable,
-              stop_active: Callable | None = None, on_all_success: Callable | None = None) -> dict:
+              stop_active: Callable | None = None, on_all_success: Callable | None = None,
+              on_finished: Callable | None = None) -> dict:
         with self._lock:
             if self._state.get("running"):
                 return {"ok": False, "code": "FLOW_RUNNING", "error": "A flow is already running"}
@@ -149,11 +182,11 @@ class Generate3DFlowManager:
             self._state.update(status="running", running=True, run_scope=scope, config=copy.deepcopy(config), error=None)
             self._persist()
             self._thread = threading.Thread(target=self._worker,
-                args=(indices, scope, copy.deepcopy(config), runner, on_all_success), daemon=True)
+                args=(indices, scope, copy.deepcopy(config), runner, on_all_success, on_finished), daemon=True)
             self._thread.start()
             return {"ok": True, **self.status()}
 
-    def _worker(self, indices, scope, config, runner, on_all_success) -> None:
+    def _worker(self, indices, scope, config, runner, on_all_success, on_finished) -> None:
         final = "success"
         try:
             for index in indices:
@@ -181,7 +214,8 @@ class Generate3DFlowManager:
                     final = outcome
                     break
             if final == "success" and scope == "all" and on_all_success:
-                on_all_success(config)
+                if not self._stop_event.is_set():
+                    on_all_success(config, self._stop_event)
         except Exception as exc:
             final = "failed"
             with self._lock:
@@ -194,6 +228,8 @@ class Generate3DFlowManager:
                                    updated_at=_now(), error=None if final == "success" else self._state.get("error"))
                 self._stop_active = None
                 self._persist()
+            if on_finished:
+                on_finished(final)
 
     def stop(self, stop_active: Callable | None = None) -> dict:
         self._stop_event.set()

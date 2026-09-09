@@ -31,6 +31,8 @@ def test_parse_flow_plan_validates_atomic_subtasks():
         parse_flow_plan(sample_plan(11))
     with pytest.raises(FlowValidationError):
         parse_flow_plan({"subtasks": [{"instruction": "move", "source_name": "x"}]})
+    with pytest.raises(FlowValidationError):
+        parse_flow_plan({"subtasks": [{"instruction": 12, "source_name": "x", "target_name": "y"}]})
 
 
 def test_manager_creates_and_persists_flow(tmp_path):
@@ -122,3 +124,21 @@ def test_artifacts_from_previous_flows_remain_available(tmp_path):
     first_path.write_bytes(b"image")
     manager.create_flow("second", sample_plan(1)["subtasks"])
     assert manager.artifact_path(first["flow_id"], "before.jpg").read_bytes() == b"image"
+
+
+def test_finished_callback_runs_once_after_failure(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    manager.create_flow("long task", sample_plan(1)["subtasks"])
+    finished = []
+    manager.start("all", None, {}, lambda *args: {"status": "failed"}, on_finished=lambda status: finished.append(status))
+    wait_until(lambda: not manager.status()["running"])
+    assert finished == ["failed"]
+
+
+def test_transition_rejects_skipped_or_unknown_phases(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    manager.create_flow("long task", sample_plan(1)["subtasks"])
+    with pytest.raises(FlowValidationError):
+        manager._update_block(0, "executing")
+    with pytest.raises(FlowValidationError):
+        manager._update_block(0, "invented")
