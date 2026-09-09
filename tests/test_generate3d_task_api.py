@@ -139,6 +139,30 @@ def test_generate3d_prompt_preview_matches_detection_prompt_builder(monkeypatch)
     assert "<task_instruction>\npick pink bow into green bowl\n</task_instruction>" in prompt
 
 
+def test_generate3d_flow_prompt_is_read_only_pick_place_contract():
+    prompt = main._g3d_flow_planning_prompt("pick star to bowl then cube to tray")
+    assert '"subtasks"' in prompt
+    assert '"source_name"' in prompt
+    assert "1 to 10" in prompt
+    assert "recommended_pick_height" not in prompt
+
+
+def test_generate3d_flow_status_is_stable_when_empty(monkeypatch, tmp_path):
+    from generate3d_flow import Generate3DFlowManager
+    monkeypatch.setattr(main, "g3d_flow_manager", Generate3DFlowManager(tmp_path / "flow.json", tmp_path / "flows"))
+    response = TestClient(main.app).get("/api/generate3d/flow/status")
+    assert response.status_code == 200
+    assert response.json()["status"] == "empty"
+
+
+def test_generate3d_flow_plan_rejects_empty_instruction(monkeypatch, tmp_path):
+    from generate3d_flow import Generate3DFlowManager
+    monkeypatch.setattr(main, "g3d_flow_manager", Generate3DFlowManager(tmp_path / "flow.json", tmp_path / "flows"))
+    response = TestClient(main.app).post("/api/generate3d/flow/plan", json={"instruction": ""})
+    assert response.status_code == 400
+    assert response.json()["code"] == "INSTRUCTION_REQUIRED"
+
+
 def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp_path):
     setup_task_api(monkeypatch)
     rest_file = tmp_path / "generate3d_rest_position.json"

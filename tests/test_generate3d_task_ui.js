@@ -305,6 +305,14 @@ assert.match(html, /g3dTaskInstruction['"]\)\.addEventListener\(['"]input['"][\s
 assert.match(extractFunction('g3dSyncEditedObjects'), /\/api\/generate3d\/detection\/manual/);
 assert.match(extractFunction('g3dRunTask'), /\/api\/generate3d\/task\/start/);
 assert.match(extractFunction('g3dStopTask'), /\/api\/generate3d\/task\/stop/);
+assert.match(html, /data-inner="g3d-flow"/);
+assert.match(html, /id="g3dFlowGeminiInput" readonly/);
+assert.match(html, /id="g3dFlowEnforceWorkspace"(?![^>]*checked)/);
+assert.match(html, /id="g3dFlowReturnRest" checked/);
+assert.match(extractFunction('g3dFlowPlan'), /\/api\/generate3d\/flow\/plan/);
+assert.match(extractFunction('g3dFlowLoadStatus'), /\/api\/generate3d\/flow\/status/);
+assert.match(extractFunction('g3dFlowStart'), /\/api\/generate3d\/flow\/start/);
+assert.match(extractFunction('g3dFlowStop'), /\/api\/generate3d\/flow\/stop/);
 
 vm.runInContext(`${extractFunction('g3dDrawInputImage')}; this.g3dDrawInputImage = g3dDrawInputImage;`, context);
 context.G3D.imageSize = [640, 480];

@@ -377,6 +377,7 @@
   .viz-ep-item.active { background:#e8f0fe;color:#1a73e8;font-weight:600;border-left:3px solid #1a73e8 }
   .viz-ep-item .ep-meta { font-size:0.75rem;color:#999;margin-top:2px }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .g3d-flow-settings{display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:10px}.g3d-flow-settings label{font-size:.78rem;font-weight:600}.g3d-flow-settings input{margin-top:5px}.g3d-flow-chart{display:flex;align-items:stretch;gap:28px;overflow-x:auto;padding:8px 2px 14px}.g3d-flow-block{position:relative;min-width:210px;border:2px solid #ddd;border-radius:10px;padding:12px;background:#fafafa;text-align:left;cursor:pointer}.g3d-flow-block:not(:last-child):after{content:'→';position:absolute;right:-22px;top:42%;color:#999;font-size:20px}.g3d-flow-block.pending{border-color:#bbb}.g3d-flow-block.active{border-color:#1a73e8;background:#e8f0fe}.g3d-flow-block.executing{border-color:#f9ab00;background:#fff7e0}.g3d-flow-block.verifying{border-color:#9334e6;background:#f3e8fd}.g3d-flow-block.success{border-color:#34a853;background:#e6f4ea}.g3d-flow-block.failed,.g3d-flow-block.uncertain,.g3d-flow-block.interrupted,.g3d-flow-block.stopped{border-color:#d93025;background:#fce8e6}.g3d-flow-block.selected{box-shadow:0 0 0 3px rgba(26,115,232,.2)}.g3d-flow-title{font-weight:700;font-size:.85rem}.g3d-flow-meta{font-size:.72rem;color:#666;margin-top:5px}.g3d-flow-empty{color:#888;font-size:.82rem;padding:20px;text-align:center}.g3d-flow-detail-grid{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(420px,1.1fr);gap:16px}.g3d-flow-detail-row{border-bottom:1px solid #eee;padding:7px 0;font-size:.78rem}.g3d-flow-object{padding:8px;border:1px solid #ddd;border-radius:7px;margin-bottom:7px;font-size:.76rem}@media(max-width:850px){.g3d-flow-detail-grid{grid-template-columns:1fr}.g3d-flow-settings{grid-template-columns:1fr}.g3d-flow-chart{flex-direction:column}.g3d-flow-block:not(:last-child):after{content:'↓';right:auto;left:48%;top:auto;bottom:-27px}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -2230,6 +2231,7 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
     <div class="inner-tabs">
       <button class="inner-tab active" data-inner="g3d-calib">Camera Calibrate</button>
       <button class="inner-tab" data-inner="g3d-sim">3D Simulation</button>
+      <button class="inner-tab" data-inner="g3d-flow">Flow Run</button>
     </div>
 
     <div class="inner-page active" id="inner-g3d-calib">
@@ -2381,6 +2383,67 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
         </div>
       </div>
     </div><!-- /inner-g3d-sim -->
+
+    <div class="inner-page" id="inner-g3d-flow">
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Long Task &amp; Gemini Input</h3>
+        <label for="g3dFlowInstruction" style="font-size:.8rem;font-weight:700">Long task instruction</label>
+        <textarea id="g3dFlowInstruction" placeholder="e.g. pick up the pink bow to green bowl and pick up the star to green bowl" style="min-height:72px;margin:6px 0 10px"></textarea>
+        <label for="g3dFlowGeminiInput" style="font-size:.8rem;font-weight:700">Gemini Input (full system prompt)</label>
+        <textarea id="g3dFlowGeminiInput" readonly style="min-height:145px;margin-top:6px;background:#f7f7f7;font-size:.74rem"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <button class="btn btn-sm" id="g3dFlowCaptureBtn" onclick="g3dFlowCapture()">Capture Top View</button>
+          <label class="btn btn-sm btn-outline" style="cursor:pointer;margin:0">Upload Image<input id="g3dFlowImageInput" type="file" accept="image/*" style="display:none"></label>
+          <button class="btn btn-sm" id="g3dFlowPlanBtn" onclick="g3dFlowPlan()" disabled>Detect &amp; Generate Flow</button>
+          <span id="g3dFlowImageStatus" style="font-size:.78rem;color:#777"></span>
+        </div>
+        <img id="g3dFlowImagePreview" alt="Flow source frame" style="display:none;max-width:360px;max-height:220px;margin-top:10px;border-radius:8px">
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Flow Controls</h3>
+        <div class="g3d-flow-settings">
+          <label>Pick Height (cm)<input id="g3dFlowPickHeight" type="number" value="0" min="0" max="30"></label>
+          <label>Place Height (cm)<input id="g3dFlowPlaceHeight" type="number" placeholder="Target + 2" min="0" max="30"></label>
+          <label>Safety Height (cm)<input id="g3dFlowSafetyHeight" type="number" value="10" min="0" max="40"></label>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:.8rem">
+          <label><input type="radio" name="g3dFlowExecution" id="g3dFlowExecutionSimulation" checked> Simulation only</label>
+          <label><input type="radio" name="g3dFlowExecution" id="g3dFlowExecutionReal"> Use real robot</label>
+          <label><input type="radio" name="g3dFlowMotion" id="g3dFlowMotionSmooth" checked> Smooth Natural</label>
+          <label><input type="radio" name="g3dFlowMotion" id="g3dFlowMotionWaypoint"> Waypoint</label>
+        </div>
+        <label style="display:block;margin-top:10px;font-size:.8rem"><input type="checkbox" id="g3dFlowEnforceWorkspace"> Use calibrated workspace safety</label>
+        <label style="display:block;margin-top:7px;font-size:.8rem"><input type="checkbox" id="g3dFlowReturnRest" checked> Return to Rest Position after successful Run All</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-sm" id="g3dFlowRunAllBtn" onclick="g3dFlowStart('all')" disabled>Run All</button>
+          <button class="btn btn-sm btn-outline" id="g3dFlowRunBlockBtn" onclick="g3dFlowStart('block')" disabled>Run This Block</button>
+          <button class="btn btn-sm btn-outline" id="g3dFlowRetryBtn" onclick="g3dFlowRetryBlock()" disabled>Retry Block</button>
+          <button class="btn btn-sm btn-danger" id="g3dFlowStopBtn" onclick="g3dFlowStop()" disabled>Stop Flow</button>
+          <button class="btn btn-sm btn-outline" onclick="g3dSaveRestPosition()">Save Current as Rest Position</button>
+          <button class="btn btn-sm btn-outline" onclick="g3dMoveToRestPosition()">Move to Rest Position</button>
+          <span id="g3dFlowStatus" style="font-size:.8rem;color:#666"></span>
+        </div>
+      </div>
+
+      <div class="config-card" style="margin-bottom:16px">
+        <h3>Progress</h3>
+        <div id="g3dFlowChart" class="g3d-flow-chart"><div class="g3d-flow-empty">Generate a flow to see its steps.</div></div>
+      </div>
+
+      <div class="g3d-flow-detail-grid">
+        <div class="config-card">
+          <h3>Selected Block</h3>
+          <div id="g3dFlowBlockDetail" class="g3d-flow-empty">Select a block to inspect input, output, and evidence.</div>
+        </div>
+        <div class="config-card">
+          <h3>Objects &amp; Path Preview</h3>
+          <div id="g3dFlowObjects"></div>
+          <canvas id="g3dFlowCanvas" style="width:100%;height:320px;background:#1a1a2e;border-radius:8px"></canvas>
+          <pre id="g3dFlowRaw" style="max-height:220px;overflow:auto;white-space:pre-wrap;background:#f5f5f5;padding:10px;border-radius:6px;font-size:.72rem"></pre>
+        </div>
+      </div>
+    </div><!-- /inner-g3d-flow -->
   </div><!-- /page-generate3d -->
 
   <!-- ==================== Fake Camera ==================== -->
@@ -13200,6 +13263,100 @@ async function g3dMoveToRestPosition() {
     g3dUpdateRestControls();
   }
 }
+
+const G3D_FLOW = {imageB64:null, mime:'image/jpeg', state:null, selectedIndex:0, pollTimer:null};
+
+function g3dFlowTerminal(phase) {
+  return ['success','failed','uncertain','stopped','interrupted'].includes(phase);
+}
+
+async function g3dFlowLoadPrompt() {
+  const instruction = document.getElementById('g3dFlowInstruction')?.value.trim() || '';
+  try {
+    const response = await fetch('/api/generate3d/flow/prompt-preview', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction})});
+    const data = await response.json();
+    document.getElementById('g3dFlowGeminiInput').value = data.prompt || '';
+  } catch (_) { document.getElementById('g3dFlowGeminiInput').value = ''; }
+  g3dFlowUpdateControls();
+}
+
+function g3dFlowSetImage(b64, mime='image/jpeg') {
+  G3D_FLOW.imageB64 = b64; G3D_FLOW.mime = mime;
+  const image = document.getElementById('g3dFlowImagePreview');
+  image.src = `data:${mime};base64,${b64}`; image.style.display = 'block';
+  g3dFlowUpdateControls();
+}
+
+async function g3dFlowCapture() {
+  const status = document.getElementById('g3dFlowImageStatus'); status.textContent = 'Capturing...';
+  try {
+    const response = await fetch('/api/generate3d/calibration/capture', {method:'POST'}); const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Capture failed');
+    g3dFlowSetImage(data.image); status.textContent = `Captured ${data.image_width}x${data.image_height}`;
+  } catch (error) { status.textContent = error.message; }
+}
+
+async function g3dFlowPlan() {
+  const status = document.getElementById('g3dFlowStatus'); status.textContent = 'Generating flow...';
+  const payload = {instruction:document.getElementById('g3dFlowInstruction').value.trim(), image_b64:G3D_FLOW.imageB64, mime:G3D_FLOW.mime};
+  try {
+    const response = await fetch('/api/generate3d/flow/plan', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'Could not generate flow');
+    G3D_FLOW.state = data; G3D_FLOW.selectedIndex = 0; g3dFlowRender(); status.textContent = `${data.blocks.length} blocks ready`;
+  } catch (error) { status.textContent = error.message; }
+}
+
+function g3dFlowPhaseClass(phase) {
+  if (['capturing','detecting','planning'].includes(phase)) return 'active';
+  if (phase === 'executing') return 'executing';
+  if (['capturing_verification','verifying'].includes(phase)) return 'verifying';
+  return phase || 'pending';
+}
+
+function g3dFlowRenderPath(block) {
+  const canvas = document.getElementById('g3dFlowCanvas'); if (!canvas) return;
+  canvas.width = canvas.clientWidth || 640; canvas.height = 320;
+  const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#1a1a2e';ctx.fillRect(0,0,canvas.width,canvas.height);
+  const objects = block?.objects || []; if (!objects.length) {ctx.fillStyle='#aaa';ctx.fillText('Path preview appears after fresh detection',20,30);return;}
+  const source=objects.find(o=>o.task_role==='source'), target=objects.find(o=>o.task_role==='target'); if(!source||!target)return;
+  const point=o=>[40+(o.center_pixel?.[0]||0)/Math.max(1,...objects.map(x=>x.center_pixel?.[0]||1))*(canvas.width-80),40+(o.center_pixel?.[1]||0)/Math.max(1,...objects.map(x=>x.center_pixel?.[1]||1))*(canvas.height-80)];
+  const a=point(source),b=point(target);ctx.strokeStyle='#4dd0e1';ctx.lineWidth=4;ctx.setLineDash([9,7]);ctx.beginPath();ctx.moveTo(...a);ctx.quadraticCurveTo((a[0]+b[0])/2,Math.max(25,Math.min(a[1],b[1])-65),...b);ctx.stroke();ctx.setLineDash([]);
+  [[source,a,'#34a853'],[target,b,'#f9ab00']].forEach(([o,p,c])=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(...p,9,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.fillText(o.name,p[0]+12,p[1]+4)});
+}
+
+function g3dFlowRender() {
+  const state=G3D_FLOW.state, chart=document.getElementById('g3dFlowChart'); if(!state?.blocks?.length){chart.innerHTML='<div class="g3d-flow-empty">Generate a flow to see its steps.</div>';g3dFlowUpdateControls();return;}
+  chart.innerHTML=state.blocks.map((block,index)=>`<button class="g3d-flow-block ${g3dFlowPhaseClass(block.phase)} ${index===G3D_FLOW.selectedIndex?'selected':''}" onclick="g3dFlowSelectBlock(${index})"><div class="g3d-flow-title">${index+1}. ${esc(block.source_name)} → ${esc(block.target_name)}</div><div class="g3d-flow-meta">${esc(block.phase || 'pending')}</div></button>`).join('');
+  const block=state.blocks[G3D_FLOW.selectedIndex] || state.blocks[0]; G3D_FLOW.selectedIndex=block.index;
+  const verification=block.verification || {}, artifacts=block.artifacts || {};
+  document.getElementById('g3dFlowBlockDetail').innerHTML=`<div class="g3d-flow-detail-row"><strong>Instruction</strong><br>${esc(block.instruction)}</div><div class="g3d-flow-detail-row"><strong>Status</strong> ${esc(block.phase)}</div><div class="g3d-flow-detail-row"><strong>Mode</strong> ${esc(block.config?.execution_mode||'—')} · ${esc(block.config?.motion_mode||'—')}</div><div class="g3d-flow-detail-row"><strong>Verification</strong><br>${esc(verification.reason||'Not verified yet')}</div><div class="g3d-flow-detail-row"><strong>Evidence</strong><br>${(verification.visible_evidence||[]).map(esc).join('<br>')||'—'}</div>${block.error?`<div class="g3d-flow-detail-row" style="color:#d93025"><strong>Error</strong><br>${esc(block.error)}</div>`:''}${artifacts.before?`<div class="g3d-flow-detail-row"><a target="_blank" href="/api/generate3d/flow/artifact/${encodeURIComponent(state.flow_id)}/${encodeURIComponent(artifacts.before)}">Before frame</a>${artifacts.after?` · <a target="_blank" href="/api/generate3d/flow/artifact/${encodeURIComponent(state.flow_id)}/${encodeURIComponent(artifacts.after)}">Verification frame</a>`:''}</div>`:''}`;
+  document.getElementById('g3dFlowObjects').innerHTML=(block.objects||[]).map(o=>`<div class="g3d-flow-object"><strong>${esc(o.name)}</strong> · ${esc(o.task_role||'')}<br>bbox ${esc(JSON.stringify(o.bbox||[]))} · confidence ${esc(o.confidence??'—')} · ${o.position_valid===false?'position unavailable':'position ready'}</div>`).join('')||'<div class="g3d-flow-empty">Objects appear after this block detects a fresh frame.</div>';
+  document.getElementById('g3dFlowRaw').textContent=JSON.stringify({planning:state.planning,block_prompts:block.prompts,verification:block.verification},null,2);
+  g3dFlowRenderPath(block); g3dFlowUpdateControls();
+}
+
+function g3dFlowSelectBlock(index) { G3D_FLOW.selectedIndex=index; g3dFlowRender(); }
+
+function g3dFlowConfig() {
+  const place=document.getElementById('g3dFlowPlaceHeight').value;
+  return {execution_mode:document.getElementById('g3dFlowExecutionReal').checked?'real':'simulation',motion_mode:document.getElementById('g3dFlowMotionWaypoint').checked?'waypoint':'smooth',pick_height_cm:Number(document.getElementById('g3dFlowPickHeight').value)||0,place_height_cm:place===''?null:Number(place),safety_height_cm:Number(document.getElementById('g3dFlowSafetyHeight').value)||10,enforce_workspace:document.getElementById('g3dFlowEnforceWorkspace').checked,return_to_rest_on_success:document.getElementById('g3dFlowReturnRest').checked,image_b64:G3D_FLOW.imageB64,mime:G3D_FLOW.mime,initial_joints:{...G3D.currentJoints}};
+}
+
+async function g3dFlowStart(scope) {
+  const body={scope,config:g3dFlowConfig()}; if(scope==='block')body.block_index=G3D_FLOW.selectedIndex;
+  try{const response=await fetch('/api/generate3d/flow/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'Could not start flow');G3D_FLOW.state=data;g3dFlowRender();g3dFlowBeginPolling();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}
+}
+
+function g3dFlowRetryBlock(){return g3dFlowStart('block')}
+async function g3dFlowStop(){try{const response=await fetch('/api/generate3d/flow/stop',{method:'POST'});G3D_FLOW.state=await response.json();g3dFlowRender();}catch(error){document.getElementById('g3dFlowStatus').textContent=error.message;}}
+async function g3dFlowLoadStatus(){try{const response=await fetch('/api/generate3d/flow/status');G3D_FLOW.state=await response.json();g3dFlowRender();if(G3D_FLOW.state.running)g3dFlowBeginPolling();}catch(_){}}
+function g3dFlowBeginPolling(){if(G3D_FLOW.pollTimer)clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=setInterval(async()=>{await g3dFlowLoadStatus();if(!G3D_FLOW.state?.running){clearInterval(G3D_FLOW.pollTimer);G3D_FLOW.pollTimer=null;}},300)}
+function g3dFlowUpdateControls(){const running=!!G3D_FLOW.state?.running,hasFlow=!!G3D_FLOW.state?.blocks?.length,block=G3D_FLOW.state?.blocks?.[G3D_FLOW.selectedIndex];document.getElementById('g3dFlowPlanBtn').disabled=running||!G3D_FLOW.imageB64||!document.getElementById('g3dFlowInstruction').value.trim();document.getElementById('g3dFlowRunAllBtn').disabled=running||!hasFlow;document.getElementById('g3dFlowRunBlockBtn').disabled=running||!block;document.getElementById('g3dFlowRetryBtn').disabled=running||!block||!g3dFlowTerminal(block.phase);document.getElementById('g3dFlowStopBtn').disabled=!running;}
+
+document.getElementById('g3dFlowInstruction').addEventListener('input',g3dFlowLoadPrompt);
+document.getElementById('g3dFlowImageInput').addEventListener('change',event=>{const file=event.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>g3dFlowSetImage(String(reader.result).split(',')[1],file.type||'image/jpeg');reader.readAsDataURL(file)});
+g3dFlowLoadPrompt();
+g3dFlowLoadStatus();
 
 g3dLoadCalibrationStatus();
 g3dResumeTaskStatus();

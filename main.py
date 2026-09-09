@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from generate3d_task import Generate3DTaskManager, TaskResolutionError, resolve_pick_place_objects
+from generate3d_flow import FlowValidationError, Generate3DFlowManager, parse_flow_plan
 from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
 from planner_config import (
     execution_loop_settings,
@@ -6256,6 +6257,8 @@ async def calibrate_move_to(request: Request):
 
 G3D_CALIB_FILE = ROOT / "data" / "generate3d_calibration.json"
 G3D_REST_POSITION_FILE = ROOT / "data" / "generate3d_rest_position.json"
+G3D_FLOW_STATE_FILE = ROOT / "data" / "generate3d_flow_state.json"
+G3D_FLOW_ARTIFACT_ROOT = ROOT / "data" / "generate3d_flows"
 G3D_WORKSPACE_MARGIN = 0.03
 G3D_REST_JOINT_LIMITS = {
     "shoulder_pan": (-180.0, 180.0),
@@ -6278,6 +6281,7 @@ g3d_detection_state = {
     "calibration_revision": None,
     "instruction": "",
 }
+g3d_flow_manager = Generate3DFlowManager(G3D_FLOW_STATE_FILE, G3D_FLOW_ARTIFACT_ROOT)
 
 
 def _g3d_calibration_revision() -> str:
@@ -7526,6 +7530,89 @@ No explanations and no markdown.
 </task_instruction>"""
 
 
+def _g3d_flow_planning_prompt(instruction: str) -> str:
+    return f"""Split the user's long robot task into 1 to 10 ordered atomic pick-and-place subtasks.
+Each subtask must move exactly one visible source object to exactly one visible target object.
+Do not add actions, do not skip repeated operations, and do not recommend heights.
+Return ONLY valid JSON with this exact shape:
+{{"subtasks":[{{"instruction":"Pick up SOURCE and place it in TARGET.","source_name":"SOURCE","target_name":"TARGET"}}]}}
+No explanations and no markdown.
+<task_instruction>
+{instruction.strip()}
+</task_instruction>"""
+
+
+def _g3d_flow_verification_prompt(block: dict) -> str:
+    return f"""Compare the before and after workspace images and verify this pick-and-place task:
+{block.get('instruction', '')}
+Source: {block.get('source_name', '')}
+Target: {block.get('target_name', '')}
+Return ONLY JSON: {{"status":"success|failed|uncertain","reason":"visible outcome","visible_evidence":["evidence"]}}
+Use uncertain whenever the visible evidence is insufficient. No markdown."""
+
+
+async def _g3d_flow_gemini(prompt: str, image_b64: str, mime: str, model: str) -> tuple[dict | None, str]:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise FlowValidationError("GEMINI_NOT_CONFIGURED", "GEMINI_API_KEY not set")
+    gemini_model = model or load_config().get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={api_key}"
+    async with httpx.AsyncClient(timeout=45) as client:
+        data, _, status_code = await call_gemini(client, url, image_b64, mime, prompt)
+    if status_code != 200:
+        raise FlowValidationError("GEMINI_REQUEST_FAILED", data.get("error", {}).get("message", "Gemini request failed"))
+    raw = extract_text(data)
+    return parse_json_response(raw), raw
+
+
+def _g3d_capture_top_bytes() -> tuple[bytes, str]:
+    import cv2
+    state = cam_state.get("top")
+    if not state:
+        raise FlowValidationError("CAMERA_UNAVAILABLE", "Top camera not available")
+    with state["lock"]:
+        frame = None if state.get("frame") is None else state["frame"].copy()
+    if frame is None:
+        raise FlowValidationError("CAMERA_UNAVAILABLE", "No top camera frame available")
+    ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        raise FlowValidationError("CAPTURE_FAILED", "Could not encode top camera frame")
+    return jpg.tobytes(), "image/jpeg"
+
+
+@app.post("/api/generate3d/flow/prompt-preview")
+async def generate3d_flow_prompt_preview(request: Request):
+    instruction = str((await request.json()).get("instruction", "")).strip()
+    return {"ok": True, "prompt": _g3d_flow_planning_prompt(instruction)}
+
+
+@app.get("/api/generate3d/flow/status")
+async def generate3d_flow_status():
+    return g3d_flow_manager.status()
+
+
+@app.post("/api/generate3d/flow/plan")
+async def generate3d_flow_plan(request: Request):
+    body = await request.json()
+    instruction = str(body.get("instruction", "")).strip()
+    if not instruction:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INSTRUCTION_REQUIRED", "error": "Enter a long task instruction"})
+    try:
+        image_b64 = str(body.get("image_b64", "")).strip()
+        mime = str(body.get("mime", "image/jpeg"))
+        if not image_b64:
+            image_bytes, mime = _g3d_capture_top_bytes()
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+        prompt = _g3d_flow_planning_prompt(instruction)
+        parsed, raw = await _g3d_flow_gemini(prompt, image_b64, mime, str(body.get("model", "")))
+        subtasks = parse_flow_plan(parsed)
+        state = g3d_flow_manager.create_flow(instruction, subtasks, planning={"prompt": prompt, "raw": raw, "image_b64": image_b64, "mime": mime})
+        return state
+    except FlowValidationError as exc:
+        status = 409 if exc.code == "FLOW_RUNNING" else 400
+        return JSONResponse(status_code=status, content={"ok": False, "code": exc.code, "error": str(exc)})
+
+
 @app.post("/api/generate3d/prompt-preview")
 async def generate3d_prompt_preview(request: Request):
     data = await request.json()
@@ -7673,6 +7760,161 @@ async def generate3d_detect_image(
             if math.isfinite(target_height):
                 response["place_height_cm"] = max(0.0, min(30.0, target_height + 2.0))
     return response
+
+
+class _G3DJsonRequest:
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def json(self):
+        return self.payload
+
+
+def _g3d_flow_image_for_block(config: dict) -> tuple[bytes, str]:
+    if config.get("execution_mode") == "real":
+        return _g3d_capture_top_bytes()
+    encoded = str(config.get("image_b64", ""))
+    if not encoded:
+        encoded = str(g3d_flow_manager.status().get("planning", {}).get("image_b64", ""))
+    if not encoded:
+        return _g3d_capture_top_bytes()
+    try:
+        return base64.b64decode(encoded, validate=True), str(config.get("mime", "image/jpeg"))
+    except (ValueError, TypeError) as exc:
+        raise FlowValidationError("INVALID_IMAGE", "Flow image is invalid") from exc
+
+
+def _g3d_wait_task(should_stop, timeout=180.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if should_stop():
+            g3d_task_manager.stop()
+        state = g3d_task_manager.status()
+        if not state.get("running"):
+            return state
+        time.sleep(0.05)
+    g3d_task_manager.stop()
+    raise FlowValidationError("TASK_TIMEOUT", "Generate 3D block timed out")
+
+
+def _run_g3d_flow_block(block, config, transition, should_stop):
+    image_bytes, mime = _g3d_flow_image_for_block(config)
+    flow_id = g3d_flow_manager.status()["flow_id"]
+    before_name = f"block-{block['index'] + 1}-before.jpg"
+    before_path = g3d_flow_manager.artifact_path(flow_id, before_name)
+    before_path.write_bytes(image_bytes)
+    before_b64 = base64.b64encode(image_bytes).decode("ascii")
+    transition("capturing", {"artifacts": {"before": before_name}})
+    if should_stop():
+        return {"status": "stopped"}
+
+    transition("detecting")
+    upload = UploadFile(file=io.BytesIO(image_bytes), filename=before_name, headers={"content-type": mime})
+    detected = asyncio.run(generate3d_detect_image(upload, block["instruction"], str(config.get("model", ""))))
+    if isinstance(detected, Response):
+        detected = json.loads(detected.body)
+    if not detected.get("ok"):
+        return {"status": "failed", "error": detected.get("error", "Detection failed"), "error_code": detected.get("code", "DETECTION_FAILED")}
+    objects = detected.get("objects", [])
+    source = next((item for item in objects if item.get("task_role") == "source"), None)
+    target = next((item for item in objects if item.get("task_role") == "target"), None)
+    if not source or not target:
+        return {"status": "failed", "objects": objects, "error": "Source or target was not found in the fresh frame", "error_code": "OBJECT_NOT_FOUND"}
+    place_height = config.get("place_height_cm")
+    if place_height is None:
+        place_height = detected.get("place_height_cm", 5.0)
+    transition("planning", {"objects": objects, "prompts": {"detection_raw": detected.get("gemini_raw", "")},
+                            "path": {"motion_mode": config.get("motion_mode", "smooth"), "source": source.get("position_3d"), "target": target.get("position_3d"),
+                                     "pick_height_cm": float(config.get("pick_height_cm", 0)), "place_height_cm": float(place_height)}})
+    payload = {"instruction": block["instruction"], "detection_id": detected["detection_id"],
+               "pick_height_cm": config.get("pick_height_cm", 0), "place_height_cm": place_height,
+               "safety_height_cm": config.get("safety_height_cm", 10), "enforce_workspace": bool(config.get("enforce_workspace", False)),
+               "execution_mode": config.get("execution_mode", "simulation"), "motion_mode": config.get("motion_mode", "smooth")}
+    if payload["execution_mode"] == "simulation" and config.get("initial_joints"):
+        payload["initial_joints"] = config["initial_joints"]
+    transition("executing")
+    started = asyncio.run(generate3d_task_start(_G3DJsonRequest(payload)))
+    if isinstance(started, Response):
+        started = json.loads(started.body)
+    if not started.get("ok"):
+        return {"status": "failed", "objects": objects, "error": started.get("error", "Execution failed"), "error_code": started.get("code", "EXECUTION_FAILED")}
+    task_state = _g3d_wait_task(should_stop, float(config.get("timeout_seconds", 180)))
+    if task_state.get("state") == "stopped":
+        return {"status": "stopped", "objects": objects}
+    if task_state.get("state") != "completed":
+        return {"status": "failed", "objects": objects, "error": task_state.get("error", "Execution failed"), "error_code": "EXECUTION_FAILED"}
+
+    transition("capturing_verification")
+    after_bytes, after_mime = _g3d_flow_image_for_block(config)
+    after_name = f"block-{block['index'] + 1}-after.jpg"
+    g3d_flow_manager.artifact_path(flow_id, after_name).write_bytes(after_bytes)
+    artifacts = {"before": before_name, "after": after_name}
+    transition("verifying", {"artifacts": artifacts})
+    if payload["execution_mode"] == "simulation":
+        verification = {"status": "success", "reason": "Simulated motion completed and source reached the target", "visible_evidence": ["Generate 3D simulation task completed"]}
+    else:
+        before = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        after = Image.open(io.BytesIO(after_bytes)).convert("RGB")
+        height = max(before.height, after.height)
+        combined = Image.new("RGB", (before.width + after.width, height), "white")
+        combined.paste(before, (0, 0)); combined.paste(after, (before.width, 0))
+        buffer = io.BytesIO(); combined.save(buffer, format="JPEG", quality=90)
+        prompt = _g3d_flow_verification_prompt(block)
+        try:
+            parsed, raw = asyncio.run(_g3d_flow_gemini(prompt, base64.b64encode(buffer.getvalue()).decode("ascii"), "image/jpeg", str(config.get("model", ""))))
+            status = parsed.get("status") if isinstance(parsed, dict) else None
+            evidence = parsed.get("visible_evidence") if isinstance(parsed, dict) else None
+            if status not in {"success", "failed", "uncertain"} or not isinstance(evidence, list):
+                status = "uncertain"
+            verification = {"status": status, "reason": str((parsed or {}).get("reason", "Verification output was incomplete")),
+                            "visible_evidence": evidence or [], "prompt": prompt, "raw": raw}
+        except Exception as exc:
+            verification = {"status": "uncertain", "reason": str(exc), "visible_evidence": []}
+    return {"status": verification["status"], "objects": objects, "artifacts": artifacts, "verification": verification}
+
+
+def _g3d_flow_return_to_rest(config):
+    if config.get("return_to_rest_on_success", True):
+        result = asyncio.run(generate3d_rest_position_move())
+        if isinstance(result, Response) or not result.get("ok"):
+            raise RuntimeError("Flow completed, but the robot could not return to Rest Position")
+
+
+@app.post("/api/generate3d/flow/start")
+async def generate3d_flow_start(request: Request):
+    body = await request.json()
+    config = dict(body.get("config") or {})
+    config.setdefault("execution_mode", "simulation")
+    config.setdefault("motion_mode", "smooth")
+    config.setdefault("pick_height_cm", 0.0)
+    config.setdefault("place_height_cm", None)
+    config.setdefault("safety_height_cm", 10.0)
+    config.setdefault("enforce_workspace", False)
+    config.setdefault("return_to_rest_on_success", True)
+    if config["execution_mode"] not in {"simulation", "real"} or config["motion_mode"] not in {"smooth", "waypoint"}:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_CONFIG", "error": "Invalid execution or motion mode"})
+    if config["execution_mode"] == "real" and config["return_to_rest_on_success"] and not _load_g3d_rest_position():
+        return JSONResponse(status_code=409, content={"ok": False, "code": "REST_POSITION_REQUIRED", "error": "Save a Rest Position before enabling automatic return"})
+    result = g3d_flow_manager.start(str(body.get("scope", "all")), body.get("block_index"), config,
+                                    _run_g3d_flow_block, stop_active=g3d_task_manager.stop,
+                                    on_all_success=_g3d_flow_return_to_rest)
+    return result if result.get("ok") else JSONResponse(status_code=409, content=result)
+
+
+@app.post("/api/generate3d/flow/stop")
+async def generate3d_flow_stop():
+    return await asyncio.to_thread(g3d_flow_manager.stop, g3d_task_manager.stop)
+
+
+@app.get("/api/generate3d/flow/artifact/{flow_id}/{filename}")
+async def generate3d_flow_artifact(flow_id: str, filename: str):
+    try:
+        path = g3d_flow_manager.artifact_path(flow_id, filename)
+    except FlowValidationError as exc:
+        return JSONResponse(status_code=404, content={"ok": False, "code": exc.code, "error": str(exc)})
+    if not path.is_file():
+        return JSONResponse(status_code=404, content={"ok": False, "code": "ARTIFACT_NOT_FOUND", "error": "Artifact not found"})
+    return FileResponse(path)
 
 
 def _g3d_rebuild_detection_objects(records, image_size):
