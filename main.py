@@ -7451,8 +7451,10 @@ Locate only the visible objects required to perform the task below.
 Return at most one source and one target. Omit a role if its object is not visible or cannot be located confidently.
 Never return unrelated workspace objects, the robot arm, cables, shadows, hands, or desk texture.
 
-For each object return name, task_role (source or target), bbox [x_min, y_min, x_max, y_max],
+For each object return name, task_role (source or target),
+"box_2d": [y_min, x_min, y_max, x_max] using integers normalized from 0 to 1000,
 color_hex, shape_3d (box, cylinder, or sphere), estimated_size_cm [width, depth, height], and confidence.
+Always use the key "box_2d" in normalized 0-to-1000 coordinates; do not return a pixel "bbox".
 Also recommend pick and place heights as absolute centimeters from the calibrated floor.
 Pick height is the gripper target height for grasping the source.
 Place height is the gripper release height from the floor with no implicit target-height or clearance addition.

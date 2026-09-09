@@ -160,6 +160,8 @@ def test_generate3d_detect_image_filters_roles_and_clamps_heights(monkeypatch):
     assert result["recommended_place_height_cm"] == 30
     assert "<task_instruction>\npick cube into bowl\n</task_instruction>" in prompts[0]
     assert "at most one source and one target" in prompts[0].lower()
+    assert '"box_2d": [y_min, x_min, y_max, x_max]' in prompts[0]
+    assert "normalized from 0 to 1000" in prompts[0]
     assert main.g3d_detection_state["instruction"] == "pick cube into bowl"
 
 
