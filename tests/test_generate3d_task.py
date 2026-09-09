@@ -61,6 +61,40 @@ def test_resolve_pick_place_objects_rejects_duplicate_detected_names():
         raise AssertionError("duplicate detected names must be ambiguous")
 
 
+def test_resolve_pick_place_objects_prefers_roles_over_display_names():
+    objects = [
+        {"name": "item", "task_role": "source", "center_pixel": [1, 1]},
+        {"name": "container", "task_role": "target", "center_pixel": [2, 2]},
+    ]
+
+    source, target = resolve_pick_place_objects("pick red cube into blue bowl", objects)
+
+    assert source["center_pixel"] == [1, 1]
+    assert target["center_pixel"] == [2, 2]
+
+
+def test_resolve_pick_place_objects_rejects_incomplete_role_set():
+    objects = [{"name": "item", "task_role": "source"}]
+
+    try:
+        resolve_pick_place_objects("pick item into missing bowl", objects)
+    except TaskResolutionError as exc:
+        assert exc.code == "OBJECT_MATCH_REQUIRED"
+        assert "target" in str(exc).lower()
+    else:
+        raise AssertionError("an incomplete role set must fail")
+
+
+def test_resolve_pick_place_objects_keeps_legacy_exact_name_matching():
+    source, target = resolve_pick_place_objects(
+        "pick white star to teal bowl",
+        [{"name": "white star"}, {"name": "teal bowl"}],
+    )
+
+    assert source["name"] == "white star"
+    assert target["name"] == "teal bowl"
+
+
 def test_task_manager_publishes_live_joints_and_completes():
     manager = Generate3DTaskManager()
 

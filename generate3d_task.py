@@ -19,6 +19,25 @@ def _normalized(value: str) -> str:
 
 
 def resolve_pick_place_objects(instruction: str, objects: list[dict]) -> tuple[dict, dict]:
+    role_objects = [
+        obj for obj in objects
+        if isinstance(obj, dict) and obj.get("task_role") in {"source", "target"}
+    ]
+    if role_objects:
+        sources = [obj for obj in role_objects if obj["task_role"] == "source"]
+        targets = [obj for obj in role_objects if obj["task_role"] == "target"]
+        incomplete = [
+            role
+            for role, matches in (("source", sources), ("target", targets))
+            if len(matches) != 1
+        ]
+        if incomplete:
+            raise TaskResolutionError(
+                "OBJECT_MATCH_REQUIRED",
+                f"Detected task objects are incomplete; missing or ambiguous: {', '.join(incomplete)}",
+            )
+        return copy.deepcopy(sources[0]), copy.deepcopy(targets[0])
+
     normalized_instruction = _normalized(instruction)
     matches = []
     names = []
