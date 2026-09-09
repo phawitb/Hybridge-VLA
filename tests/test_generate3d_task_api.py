@@ -163,6 +163,25 @@ def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp
     assert status.json() == {"ok": True, "saved": True, "joints": joints}
 
 
+def test_generate3d_rest_position_accepts_current_pose_outside_ik_envelope(monkeypatch, tmp_path):
+    setup_task_api(monkeypatch)
+    joints = {
+        "shoulder_pan": -54.64,
+        "shoulder_lift": -9.8,
+        "elbow_flex": -35.38,
+        "wrist_flex": 95.0,
+        "wrist_roll": -50.0,
+        "gripper": 0.54,
+    }
+    monkeypatch.setattr(main, "G3D_REST_POSITION_FILE", tmp_path / "rest.json")
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(joints))
+
+    response = TestClient(main.app).post("/api/generate3d/rest-position/save")
+
+    assert response.status_code == 200
+    assert response.json()["joints"] == joints
+
+
 def test_generate3d_move_to_rest_uses_hardware_lock_and_saved_joints(monkeypatch, tmp_path):
     setup_task_api(monkeypatch)
     rest_file = tmp_path / "generate3d_rest_position.json"

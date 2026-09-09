@@ -6257,6 +6257,14 @@ async def calibrate_move_to(request: Request):
 G3D_CALIB_FILE = ROOT / "data" / "generate3d_calibration.json"
 G3D_REST_POSITION_FILE = ROOT / "data" / "generate3d_rest_position.json"
 G3D_WORKSPACE_MARGIN = 0.03
+G3D_REST_JOINT_LIMITS = {
+    "shoulder_pan": (-180.0, 180.0),
+    "shoulder_lift": (-180.0, 180.0),
+    "elbow_flex": (-180.0, 180.0),
+    "wrist_flex": (-180.0, 180.0),
+    "wrist_roll": (-180.0, 180.0),
+    "gripper": (0.0, 100.0),
+}
 
 g3d_calib_state = {
     "points": [],
@@ -6822,7 +6830,11 @@ def _g3d_normalize_rest_position(value):
         joints = {name: float(value[name]) for name in ROBOT_JOINTS}
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
-    return joints if _g3d_predicted_joints_in_bounds(joints) else None
+    valid = all(
+        math.isfinite(joints[name]) and minimum <= joints[name] <= maximum
+        for name, (minimum, maximum) in G3D_REST_JOINT_LIMITS.items()
+    )
+    return joints if valid else None
 
 
 def _g3d_load_rest_position():
