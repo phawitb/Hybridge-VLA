@@ -124,7 +124,7 @@ def test_generate3d_detect_image_requires_instruction_before_gemini(monkeypatch)
     assert called is False
 
 
-def test_generate3d_detect_image_filters_roles_and_clamps_heights(monkeypatch):
+def test_generate3d_detect_image_filters_roles_and_computes_task_heights(monkeypatch):
     setup_task_api(monkeypatch)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     prompts = []
@@ -133,6 +133,10 @@ def test_generate3d_detect_image_filters_roles_and_clamps_heights(monkeypatch):
             detected_candidate("cube", "source"),
             detected_candidate("lamp", "unrelated", [40, 10, 60, 30]),
             detected_candidate("second cube", "source", [65, 10, 85, 30]),
+            {
+                **detected_candidate("bowl", "target", [35, 40, 60, 70]),
+                "estimated_size_cm": [10, 10, 6],
+            },
         ],
         "recommended_pick_height_cm": -4,
         "recommended_place_height_cm": 42,
@@ -155,17 +159,24 @@ def test_generate3d_detect_image_filters_roles_and_clamps_heights(monkeypatch):
 
     assert response.status_code == 200
     result = response.json()
-    assert [(obj["name"], obj["task_role"]) for obj in result["objects"]] == [("cube", "source")]
-    assert result["recommended_pick_height_cm"] == 0
-    assert result["recommended_place_height_cm"] == 30
+    assert [(obj["name"], obj["task_role"]) for obj in result["objects"]] == [
+        ("cube", "source"),
+        ("bowl", "target"),
+    ]
+    assert result["pick_height_cm"] == 0
+    assert result["place_height_cm"] == 8
+    assert "recommended_pick_height_cm" not in result
+    assert "recommended_place_height_cm" not in result
     assert "<task_instruction>\npick cube into bowl\n</task_instruction>" in prompts[0]
     assert "at most one source and one target" in prompts[0].lower()
     assert '"box_2d": [y_min, x_min, y_max, x_max]' in prompts[0]
     assert "normalized from 0 to 1000" in prompts[0]
+    assert "recommended_pick_height_cm" not in prompts[0]
+    assert "recommended_place_height_cm" not in prompts[0]
     assert main.g3d_detection_state["instruction"] == "pick cube into bowl"
 
 
-def test_generate3d_detect_image_keeps_valid_partial_and_omits_invalid_heights(monkeypatch):
+def test_generate3d_detect_image_computes_only_available_partial_height(monkeypatch):
     setup_task_api(monkeypatch)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     payload = {
@@ -194,6 +205,8 @@ def test_generate3d_detect_image_keeps_valid_partial_and_omits_invalid_heights(m
     assert response.status_code == 200
     result = response.json()
     assert [(obj["name"], obj["task_role"]) for obj in result["objects"]] == [("bowl", "target")]
+    assert "pick_height_cm" not in result
+    assert result["place_height_cm"] == 4
     assert "recommended_pick_height_cm" not in result
     assert "recommended_place_height_cm" not in result
 

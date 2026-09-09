@@ -284,8 +284,10 @@ assert.match(extractFunction('g3dResumeTaskStatus'), /g3dPollTaskStatus/);
 
 assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(/);
 assert.match(extractFunction('g3dDetectObjects'), /append\(['"]instruction['"],\s*instruction\)/);
-assert.match(extractFunction('g3dDetectObjects'), /recommended_pick_height_cm/);
-assert.match(extractFunction('g3dDetectObjects'), /recommended_place_height_cm/);
+assert.match(extractFunction('g3dDetectObjects'), /d\.pick_height_cm/);
+assert.match(extractFunction('g3dDetectObjects'), /d\.place_height_cm/);
+assert.doesNotMatch(extractFunction('g3dDetectObjects'), /recommended_pick_height_cm/);
+assert.doesNotMatch(extractFunction('g3dDetectObjects'), /recommended_place_height_cm/);
 assert.match(extractFunction('g3dDetectObjects'), /g3dSetTaskReady\(ready\)/);
 assert.doesNotMatch(extractFunction('g3dDetectObjects'), /g3dUpdateDefaultInstruction/);
 assert.doesNotMatch(extractFunction('g3dCaptureSceneImage'), /g3dTaskInstruction['"]\)\.value\s*=\s*['"]/);

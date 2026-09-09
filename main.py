@@ -7455,11 +7455,7 @@ For each object return name, task_role (source or target),
 "box_2d": [y_min, x_min, y_max, x_max] using integers normalized from 0 to 1000,
 color_hex, shape_3d (box, cylinder, or sphere), estimated_size_cm [width, depth, height], and confidence.
 Always use the key "box_2d" in normalized 0-to-1000 coordinates; do not return a pixel "bbox".
-Also recommend pick and place heights as absolute centimeters from the calibrated floor.
-Pick height is the gripper target height for grasping the source.
-Place height is the gripper release height from the floor with no implicit target-height or clearance addition.
-
-Return ONLY valid JSON with objects, recommended_pick_height_cm, and recommended_place_height_cm.
+Return ONLY valid JSON with an "objects" array. Do not recommend pick or place heights.
 No explanations and no markdown.
 <task_instruction>
 {task_instruction}
@@ -7551,14 +7547,16 @@ No explanations and no markdown.
         "elapsed": elapsed,
         "model": g3d_calib_state.get("model"),
     }
-    if isinstance(parsed, dict):
-        for key in ("recommended_pick_height_cm", "recommended_place_height_cm"):
-            value = parsed.get(key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            value = float(value)
-            if math.isfinite(value):
-                response[key] = max(0.0, min(30.0, value))
+    source = next((obj for obj in objects if obj.get("task_role") == "source"), None)
+    target = next((obj for obj in objects if obj.get("task_role") == "target"), None)
+    if source is not None:
+        response["pick_height_cm"] = 0.0
+    if target is not None:
+        target_size = target.get("estimated_size_cm")
+        if isinstance(target_size, list) and len(target_size) >= 3:
+            target_height = float(target_size[2])
+            if math.isfinite(target_height):
+                response["place_height_cm"] = max(0.0, min(30.0, target_height + 2.0))
     return response
 
 

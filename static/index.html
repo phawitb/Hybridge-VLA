@@ -12626,11 +12626,11 @@ async function g3dDetectObjects() {
     G3D.hasRawDetection = !!d.gemini_raw;
     G3D.instructionAuto = false;
     G3D.editsValid = true;
-    if (Number.isFinite(d.recommended_pick_height_cm)) {
-      document.getElementById('g3dTaskPickHeight').value = String(d.recommended_pick_height_cm);
+    if (Number.isFinite(d.pick_height_cm)) {
+      document.getElementById('g3dTaskPickHeight').value = String(d.pick_height_cm);
     }
-    if (Number.isFinite(d.recommended_place_height_cm)) {
-      document.getElementById('g3dTaskPlaceHeight').value = String(d.recommended_place_height_cm);
+    if (Number.isFinite(d.place_height_cm)) {
+      document.getElementById('g3dTaskPlaceHeight').value = String(d.place_height_cm);
     }
     await g3dDrawInputImage(G3D.imageB64, generation, G3D.detectionId);
     if (!g3dSceneIsCurrent(generation, G3D.detectionId)) return;
