@@ -6262,7 +6262,13 @@ g3d_calib_state = {
     "model": None,
     "last_image_size": None,
 }
-g3d_detection_state = {"id": None, "objects": [], "image_size": None, "calibration_revision": None}
+g3d_detection_state = {
+    "id": None,
+    "objects": [],
+    "image_size": None,
+    "calibration_revision": None,
+    "instruction": "",
+}
 
 
 def _g3d_calibration_revision() -> str:
@@ -6281,6 +6287,7 @@ def _g3d_invalidate_detection() -> None:
         "objects": [],
         "image_size": None,
         "calibration_revision": None,
+        "instruction": "",
     })
 
 
@@ -7291,8 +7298,8 @@ async def generate3d_task_start(request: Request):
     image_size = g3d_detection_state.get("image_size")
     if not instruction:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INSTRUCTION_REQUIRED", "error": "Task instruction is required"})
-    if not isinstance(objects, list) or len(objects) < 2:
-        return JSONResponse(status_code=400, content={"ok": False, "code": "OBJECTS_REQUIRED", "error": "Detect at least two objects first"})
+    if not isinstance(objects, list):
+        return JSONResponse(status_code=400, content={"ok": False, "code": "OBJECTS_REQUIRED", "error": "Detect task objects first"})
     if not isinstance(image_size, list) or len(image_size) < 2:
         return JSONResponse(status_code=400, content={"ok": False, "code": "IMAGE_SIZE_REQUIRED", "error": "Detect objects again before running"})
     try:
@@ -7406,9 +7413,16 @@ async def generate3d_task_stop():
 @app.post("/api/generate3d/detect-image")
 async def generate3d_detect_image(
     image: UploadFile = File(...),
-    prompt: str = Form(""),
+    instruction: str = Form(""),
     model: str = Form(""),
 ):
+    task_instruction = instruction.strip()
+    if not task_instruction:
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "code": "INSTRUCTION_REQUIRED",
+            "error": "Enter a task instruction before detection",
+        })
     if not g3d_calib_state.get("model"):
         return {"ok": False, "error": "Generate 3D calibration is not computed"}
 
@@ -7426,20 +7440,22 @@ async def generate3d_detect_image(
     cfg = load_config()
     gemini_model = model or cfg.get("gemini", {}).get("default_model", "gemini-2.5-flash-lite")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={api_key}"
-    if not prompt:
-        prompt = f"""This is a top-down camera image of a robot workspace.
-Detect every movable object on the workspace. Exclude the robot arm, cables, shadows, hands, and desk texture.
+    prompt = f"""This is a top-down camera image of a robot workspace sized {img_w}x{img_h} pixels.
+Locate only the visible objects required to perform the task below.
+Return at most one source and one target. Omit a role if its object is not visible or cannot be located confidently.
+Never return unrelated workspace objects, the robot arm, cables, shadows, hands, or desk texture.
 
-For each object return:
-- "name": short descriptive name
-- "bbox": [x_min, y_min, x_max, y_max] in pixel coordinates for an image sized {img_w}x{img_h}
-- "color_hex": dominant object color
-- "shape_3d": one of "box", "cylinder", "sphere"
-- "estimated_size_cm": [width, depth, height] in centimeters
-- "confidence": 0.0 to 1.0
+For each object return name, task_role (source or target), bbox [x_min, y_min, x_max, y_max],
+color_hex, shape_3d (box, cylinder, or sphere), estimated_size_cm [width, depth, height], and confidence.
+Also recommend pick and place heights as absolute centimeters from the calibrated floor.
+Pick height is the gripper target height for grasping the source.
+Place height is the gripper release height from the floor with no implicit target-height or clearance addition.
 
-Return ONLY valid JSON: {{"objects": [...]}}
-No explanations, no markdown."""
+Return ONLY valid JSON with objects, recommended_pick_height_cm, and recommended_place_height_cm.
+No explanations and no markdown.
+<task_instruction>
+{task_instruction}
+</task_instruction>"""
 
     gemini_objects = []
     gemini_raw = ""
@@ -7456,40 +7472,68 @@ No explanations, no markdown."""
         gemini_objects = parsed["objects"]
 
     objects = []
+    seen_roles = set()
     for idx, obj in enumerate(gemini_objects):
         if not isinstance(obj, dict):
             continue
-        if "label" in obj and "name" not in obj:
-            obj["name"] = obj.pop("label")
-        bbox = _g3d_normalize_bbox(obj, img_w, img_h)
-        x1, y1, x2, y2 = bbox
-        center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
-        pred = _g3d_predict_from_pixel(center, image_size=[img_w, img_h])
-        if not pred:
+        role = obj.get("task_role")
+        if role not in {"source", "target"} or role in seen_roles:
             continue
-        size = obj.get("estimated_size_cm") or [3, 3, 3]
-        if not isinstance(size, list) or len(size) < 3:
-            size = [3, 3, 3]
+        try:
+            if "label" in obj and "name" not in obj:
+                obj["name"] = obj.pop("label")
+            raw_bbox = obj.get("box_2d") or obj.get("bbox") or obj.get("box")
+            if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+                raise ValueError
+            raw_bbox_values = [float(value) for value in raw_bbox]
+            if not all(math.isfinite(value) for value in raw_bbox_values):
+                raise ValueError
+            bbox = _g3d_normalize_bbox(obj, img_w, img_h)
+            x1, y1, x2, y2 = bbox
+            center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
+            pred = _g3d_predict_from_pixel(center, image_size=[img_w, img_h])
+            if not pred:
+                continue
+            size = obj.get("estimated_size_cm") or [3, 3, 3]
+            if not isinstance(size, list) or len(size) < 3:
+                size = [3, 3, 3]
+            size = [float(value) for value in size[:3]]
+            if not all(math.isfinite(value) for value in size):
+                raise ValueError
+            confidence = float(obj.get("confidence", 1.0))
+            if not math.isfinite(confidence):
+                raise ValueError
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        color = str(obj.get("color_hex", "#888888"))
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            color = "#888888"
+        shape = str(obj.get("shape_3d", "box"))
+        if shape not in {"box", "cylinder", "sphere"}:
+            shape = "box"
         objects.append({
             "name": obj.get("name") or f"object {idx + 1}",
+            "task_role": role,
             "bbox": bbox,
             "bbox_raw": obj.get("bbox_raw", []),
             "center_pixel": [round(center[0], 2), round(center[1], 2)],
             "position_3d": pred["position_3d"],
             "predicted_joints": pred["joints"],
-            "color_hex": obj.get("color_hex", "#888888"),
-            "shape_3d": obj.get("shape_3d", "box"),
-            "estimated_size_cm": size[:3],
-            "confidence": float(obj.get("confidence", 1.0)),
+            "color_hex": color,
+            "shape_3d": shape,
+            "estimated_size_cm": size,
+            "confidence": max(0.0, min(confidence, 1.0)),
         })
+        seen_roles.add(role)
 
     detection_id = uuid.uuid4().hex
     g3d_detection_state["id"] = detection_id
     g3d_detection_state["objects"] = objects
     g3d_detection_state["image_size"] = [img_w, img_h]
     g3d_detection_state["calibration_revision"] = _g3d_calibration_revision()
+    g3d_detection_state["instruction"] = task_instruction
 
-    return {
+    response = {
         "ok": True,
         "image_width": img_w,
         "image_height": img_h,
@@ -7500,6 +7544,15 @@ No explanations, no markdown."""
         "elapsed": elapsed,
         "model": g3d_calib_state.get("model"),
     }
+    if isinstance(parsed, dict):
+        for key in ("recommended_pick_height_cm", "recommended_place_height_cm"):
+            value = parsed.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            value = float(value)
+            if math.isfinite(value):
+                response[key] = max(0.0, min(30.0, value))
+    return response
 
 
 def _g3d_rebuild_detection_objects(records, image_size):
@@ -7569,7 +7622,7 @@ def _g3d_rebuild_detection_objects(records, image_size):
             confidence = max(0.0, min(confidence, 1.0))
         except (TypeError, ValueError, OverflowError):
             confidence = 1.0
-        rebuilt.append({
+        rebuilt_object = {
             "name": name,
             "bbox": bbox,
             "bbox_raw": list(raw_bbox),
@@ -7580,18 +7633,25 @@ def _g3d_rebuild_detection_objects(records, image_size):
             "shape_3d": shape,
             "estimated_size_cm": size,
             "confidence": confidence,
-        })
+        }
+        role = record.get("task_role")
+        if role in {"source", "target"}:
+            rebuilt_object["task_role"] = role
+        rebuilt.append(rebuilt_object)
     return rebuilt, [img_w, img_h]
 
 
-def _g3d_store_detection(objects, image_size):
+def _g3d_store_detection(objects, image_size, instruction=None):
     detection_id = uuid.uuid4().hex
-    g3d_detection_state.update({
+    state = {
         "id": detection_id,
         "objects": objects,
         "image_size": image_size,
         "calibration_revision": _g3d_calibration_revision(),
-    })
+    }
+    if instruction is not None:
+        state["instruction"] = instruction
+    g3d_detection_state.update(state)
     return detection_id
 
 
@@ -7606,7 +7666,7 @@ async def generate3d_detection_manual(request: Request):
         rebuilt, image_size = _g3d_rebuild_detection_objects(data.get("objects"), data.get("image_size"))
     except TaskResolutionError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
-    detection_id = _g3d_store_detection(rebuilt, image_size)
+    detection_id = _g3d_store_detection(rebuilt, image_size, instruction="")
     return {"ok": True, "objects": rebuilt, "detection_id": detection_id}
 
 

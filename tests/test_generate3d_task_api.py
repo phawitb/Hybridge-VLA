@@ -2,9 +2,11 @@ import threading
 import time
 import asyncio
 import json
+import io
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import main
 from generate3d_task import Generate3DTaskManager
@@ -56,6 +58,163 @@ def setup_task_api(monkeypatch):
     })
     monkeypatch.setattr(main, "robot_operation_owner", None)
     return manager
+
+
+def scene_image_bytes():
+    output = io.BytesIO()
+    Image.new("RGB", (100, 80), "white").save(output, format="PNG")
+    return output.getvalue()
+
+
+def gemini_response(payload):
+    return {
+        "candidates": [{
+            "content": {"parts": [{"text": json.dumps(payload)}]},
+        }],
+    }
+
+
+def detected_candidate(name, task_role, bbox=None):
+    return {
+        "name": name,
+        "task_role": task_role,
+        "bbox": bbox or [10, 10, 30, 30],
+        "color_hex": "#336699",
+        "shape_3d": "box",
+        "estimated_size_cm": [4, 4, 2],
+        "confidence": 0.9,
+    }
+
+
+def test_generate3d_detect_image_requires_instruction_before_gemini(monkeypatch):
+    setup_task_api(monkeypatch)
+    called = False
+
+    async def forbidden_call(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("Gemini must not run")
+
+    monkeypatch.setattr(main, "call_gemini", forbidden_call)
+    response = TestClient(main.app).post(
+        "/api/generate3d/detect-image",
+        files={"image": ("scene.png", scene_image_bytes(), "image/png")},
+        data={"instruction": "   "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "INSTRUCTION_REQUIRED"
+    assert called is False
+
+
+def test_generate3d_detect_image_filters_roles_and_clamps_heights(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    prompts = []
+    payload = {
+        "objects": [
+            detected_candidate("cube", "source"),
+            detected_candidate("lamp", "unrelated", [40, 10, 60, 30]),
+            detected_candidate("second cube", "source", [65, 10, 85, 30]),
+        ],
+        "recommended_pick_height_cm": -4,
+        "recommended_place_height_cm": 42,
+    }
+
+    async def fake_call(client, url, b64, mime, text):
+        prompts.append(text)
+        return gemini_response(payload), 0.1, 200
+
+    monkeypatch.setattr(main, "call_gemini", fake_call)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, **kwargs: {
+        "position_3d": [pixel[0] / 100, 0.0, pixel[1] / 100],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    response = TestClient(main.app).post(
+        "/api/generate3d/detect-image",
+        files={"image": ("scene.png", scene_image_bytes(), "image/png")},
+        data={"instruction": "  pick cube into bowl  "},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert [(obj["name"], obj["task_role"]) for obj in result["objects"]] == [("cube", "source")]
+    assert result["recommended_pick_height_cm"] == 0
+    assert result["recommended_place_height_cm"] == 30
+    assert "<task_instruction>\npick cube into bowl\n</task_instruction>" in prompts[0]
+    assert "at most one source and one target" in prompts[0].lower()
+    assert main.g3d_detection_state["instruction"] == "pick cube into bowl"
+
+
+def test_generate3d_detect_image_keeps_valid_partial_and_omits_invalid_heights(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    payload = {
+        "objects": [
+            detected_candidate("broken cube", "source", ["bad", 10, 30, 30]),
+            detected_candidate("bowl", "target", [40, 10, 70, 40]),
+        ],
+        "recommended_pick_height_cm": "high",
+        "recommended_place_height_cm": None,
+    }
+
+    async def fake_call(*args):
+        return gemini_response(payload), 0.1, 200
+
+    monkeypatch.setattr(main, "call_gemini", fake_call)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, **kwargs: {
+        "position_3d": [0.0, 0.0, 0.0],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    response = TestClient(main.app).post(
+        "/api/generate3d/detect-image",
+        files={"image": ("scene.png", scene_image_bytes(), "image/png")},
+        data={"instruction": "pick cube into bowl"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert [(obj["name"], obj["task_role"]) for obj in result["objects"]] == [("bowl", "target")]
+    assert "recommended_pick_height_cm" not in result
+    assert "recommended_place_height_cm" not in result
+
+
+def test_generate3d_task_start_reports_missing_detected_role(monkeypatch):
+    setup_task_api(monkeypatch)
+    main.g3d_detection_state["objects"] = [{
+        **OBJECTS[0],
+        "task_role": "source",
+    }]
+    response = TestClient(main.app).post("/api/generate3d/task/start", json={
+        "instruction": "pick red cube into blue bowl",
+        "detection_id": "det-1",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "OBJECT_MATCH_REQUIRED"
+    assert "target" in response.json()["error"].lower()
+
+
+def test_generate3d_detection_update_preserves_existing_task_roles(monkeypatch):
+    setup_task_api(monkeypatch)
+    main.g3d_detection_state["objects"] = [
+        {**OBJECTS[0], "task_role": "source"},
+        {**OBJECTS[1], "task_role": "target"},
+    ]
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, **kwargs: {
+        "position_3d": [0.0, 0.0, 0.0],
+        "joints": {name: 0.0 for name in main.ROBOT_JOINTS},
+    })
+    response = TestClient(main.app).post("/api/generate3d/detection/update", json={
+        "detection_id": "det-1",
+        "objects": [
+            {**main.g3d_detection_state["objects"][0], "bbox": [10, 10, 30, 30]},
+            {**main.g3d_detection_state["objects"][1], "bbox": [40, 10, 70, 40]},
+        ],
+    })
+
+    assert response.status_code == 200
+    assert [obj.get("task_role") for obj in response.json()["objects"]] == ["source", "target"]
 
 
 def test_generate3d_task_start_resolves_objects_and_exposes_status(monkeypatch):
