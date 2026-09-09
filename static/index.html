@@ -12251,7 +12251,8 @@ function g3dHasCompleteTaskObjects(objects=G3D.objects) {
   const roleObjects = objects.filter(object => object?.task_role === 'source' || object?.task_role === 'target');
   if (roleObjects.length) {
     return roleObjects.filter(object => object.task_role === 'source').length === 1
-      && roleObjects.filter(object => object.task_role === 'target').length === 1;
+      && roleObjects.filter(object => object.task_role === 'target').length === 1
+      && roleObjects.every(object => object.position_valid !== false);
   }
   return !!g3dResolveTaskObjects(document.getElementById('g3dTaskInstruction')?.value || '');
 }
@@ -12643,6 +12644,7 @@ async function g3dDetectObjects() {
     if (!G3D.objects.length) st.textContent = 'No requested objects found';
     else if (!roles.has('source')) st.textContent = 'Found target; source not found';
     else if (!roles.has('target')) st.textContent = 'Found source; target not found';
+    else if (G3D.objects.some(object => object.position_valid === false)) st.textContent = 'Found requested objects; adjust boxes or calibration before Run';
     else st.textContent = `Generated ${G3D.objects.length} requested objects (${d.elapsed}s)`;
     g3dPreviewTaskPath();
   } catch (e) {
@@ -12661,13 +12663,16 @@ function g3dRenderObjectsList() {
   }
   G3D.objects.forEach((obj, i) => {
     const p = obj.position_3d || [0, 0, 0];
+    const positionText = obj.position_valid === false
+      ? 'position unavailable — adjust box or calibration'
+      : `x:${p[0].toFixed(3)} z:${p[2].toFixed(3)}`;
     const color = obj.color_hex || G3D_COLORS[i % G3D_COLORS.length];
     const row = document.createElement('div');
     row.style.cssText = `border:1px solid ${i === G3D.selectedObject ? '#1a73e8' : '#e0e0e0'};border-radius:8px;padding:8px 10px;background:#fff;display:flex;align-items:center;gap:8px`;
     row.innerHTML = `<span style="width:12px;height:12px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0"></span>
       <div style="flex:1;min-width:0">
         <input type="text" value="${esc(obj.name).replace(/&quot;|\"/g, '&quot;')}" aria-label="Object ${i + 1} name" onchange="g3dRenameObject(${i},this.value)" ${G3D.taskRunning || G3D.editSyncing || G3D.sceneBusy ? 'disabled' : ''} style="padding:5px 7px;font-size:0.82rem;font-weight:600">
-        <div style="font-size:0.73rem;color:#777">px ${obj.center_pixel?.join(', ')} · x:${p[0].toFixed(3)} z:${p[2].toFixed(3)} · ${obj.shape_3d}</div>
+        <div style="font-size:0.73rem;color:${obj.position_valid === false ? '#d93025' : '#777'}">px ${obj.center_pixel?.join(', ')} · ${positionText} · ${obj.shape_3d}</div>
       </div>
       <button class="btn btn-sm btn-outline" onclick="g3dPreviewObject(${i})" style="font-size:0.72rem;padding:3px 8px">Preview</button>
       <button class="btn btn-sm btn-danger" onclick="g3dDeleteObject(${i})" ${G3D.taskRunning || G3D.editSyncing || G3D.sceneBusy ? 'disabled' : ''} style="font-size:0.72rem;padding:3px 8px">Delete</button>`;

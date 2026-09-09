@@ -7319,6 +7319,12 @@ async def generate3d_task_start(request: Request):
         source, target = resolve_pick_place_objects(instruction, objects)
     except TaskResolutionError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+    if any(obj.get("position_valid") is False for obj in (source, target)):
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "code": "POSITION_REQUIRED",
+            "error": "A requested object is outside the calibrated robot area; adjust its box or calibration",
+        })
     enforce_workspace = data.get("enforce_workspace", True) is not False
     if enforce_workspace and not all(_g3d_point_in_calibrated_workspace(obj["center_pixel"], image_size) for obj in (source, target)):
         return JSONResponse(status_code=400, content={
@@ -7492,8 +7498,6 @@ No explanations and no markdown.
             x1, y1, x2, y2 = bbox
             center = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
             pred = _g3d_predict_from_pixel(center, image_size=[img_w, img_h])
-            if not pred:
-                continue
             size = obj.get("estimated_size_cm") or [3, 3, 3]
             if not isinstance(size, list) or len(size) < 3:
                 size = [3, 3, 3]
@@ -7517,8 +7521,9 @@ No explanations and no markdown.
             "bbox": bbox,
             "bbox_raw": obj.get("bbox_raw", []),
             "center_pixel": [round(center[0], 2), round(center[1], 2)],
-            "position_3d": pred["position_3d"],
-            "predicted_joints": pred["joints"],
+            "position_valid": pred is not None,
+            "position_3d": pred["position_3d"] if pred else None,
+            "predicted_joints": pred["joints"] if pred else None,
             "color_hex": color,
             "shape_3d": shape,
             "estimated_size_cm": size,

@@ -180,6 +180,9 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dResolveTaskObjects('names 
   source: context.G3D.objects[0],
   target: context.G3D.objects[1],
 });
+context.G3D.objects[0].position_valid = false;
+assert.equal(context.g3dHasCompleteTaskObjects(), false);
+delete context.G3D.objects[0].position_valid;
 delete context.G3D.objects[0].task_role;
 delete context.G3D.objects[1].task_role;
 assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPathPoints(

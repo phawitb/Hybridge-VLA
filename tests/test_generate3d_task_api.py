@@ -179,6 +179,34 @@ def test_generate3d_detect_image_keeps_valid_partial_and_omits_invalid_heights(m
     assert "recommended_place_height_cm" not in result
 
 
+def test_generate3d_detect_image_displays_found_objects_when_position_prediction_fails(monkeypatch):
+    setup_task_api(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    payload = {
+        "objects": [
+            detected_candidate("star tie", "source", [197, 166, 281, 246]),
+            detected_candidate("green bowl", "target", [275, 278, 553, 561]),
+        ],
+    }
+
+    async def fake_call(*args):
+        return gemini_response(payload), 0.1, 200
+
+    monkeypatch.setattr(main, "call_gemini", fake_call)
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda *args, **kwargs: None)
+    response = TestClient(main.app).post(
+        "/api/generate3d/detect-image",
+        files={"image": ("scene.png", scene_image_bytes(), "image/png")},
+        data={"instruction": "pick star tie into green bowl"},
+    )
+
+    assert response.status_code == 200
+    objects = response.json()["objects"]
+    assert [obj["name"] for obj in objects] == ["star tie", "green bowl"]
+    assert all(obj["position_valid"] is False for obj in objects)
+    assert all(obj["position_3d"] is None for obj in objects)
+
+
 def test_generate3d_task_start_reports_missing_detected_role(monkeypatch):
     setup_task_api(monkeypatch)
     main.g3d_detection_state["objects"] = [{
@@ -193,6 +221,21 @@ def test_generate3d_task_start_reports_missing_detected_role(monkeypatch):
     assert response.status_code == 400
     assert response.json()["code"] == "OBJECT_MATCH_REQUIRED"
     assert "target" in response.json()["error"].lower()
+
+
+def test_generate3d_task_start_rejects_objects_without_robot_positions(monkeypatch):
+    setup_task_api(monkeypatch)
+    main.g3d_detection_state["objects"] = [
+        {**OBJECTS[0], "task_role": "source", "position_valid": False, "position_3d": None},
+        {**OBJECTS[1], "task_role": "target", "position_valid": False, "position_3d": None},
+    ]
+    response = TestClient(main.app).post("/api/generate3d/task/start", json={
+        "instruction": "pick star tie into green bowl",
+        "detection_id": "det-1",
+    })
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "POSITION_REQUIRED"
 
 
 def test_generate3d_detection_update_preserves_existing_task_roles(monkeypatch):
