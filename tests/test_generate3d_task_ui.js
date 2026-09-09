@@ -320,6 +320,8 @@ assert.match(extractFunction('g3dFlowRenderPath'), /simApplyJoints/);
 assert.match(extractFunction('g3dFlowRenderPath'), /endEffector/);
 assert.match(extractFunction('g3dFlowRenderPath'), /\.dispose/);
 assert.match(extractFunction('g3dFlowRenderPath'), /grasping.*lifting_source.*moving_to_target.*placing/);
+assert.match(html, /id="g3dFlowVisualGrid"[\s\S]*id="g3dFlowImageOverlay"[\s\S]*id="g3dFlowCanvas"[\s\S]*id="g3dFlowChart"/);
+assert.match(extractFunction('g3dFlowRender'), /g3dFlowVisualGrid/);
 
 vm.runInContext(`${extractFunction('g3dDrawInputImage')}; this.g3dDrawInputImage = g3dDrawInputImage;`, context);
 context.G3D.imageSize = [640, 480];
