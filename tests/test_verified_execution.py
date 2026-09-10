@@ -1,4 +1,5 @@
 import time
+import threading
 
 from verified_execution import VerifiedExecutionManager
 
@@ -51,6 +52,69 @@ def test_success_advances_through_remaining_plan_with_snapshotted_actions():
     assert calls == [(1, 100), (2, 100)]
     assert state["state"] == "completed"
     assert [item["step_index"] for item in state["completed_steps"]] == [1, 2]
+
+
+def test_prepare_finishes_before_first_step_executes():
+    events = []
+    manager = VerifiedExecutionManager()
+    manager.start(
+        "pick",
+        {"steps": [step()]},
+        0,
+        settings(),
+        lambda current, actions, stop: events.append("execute") or {"ok": True},
+        lambda current: {"ok": True, "status": "success"},
+        lambda context: {"ok": False},
+        prepare=lambda plan, index: events.append("prepare") or {"ok": True},
+    )
+
+    state = wait_terminal(manager)
+    assert events == ["prepare", "execute"]
+    assert state["state"] == "completed"
+
+
+def test_prepare_failure_prevents_first_step():
+    events = []
+    manager = VerifiedExecutionManager()
+    manager.start(
+        "pick", {"steps": [step()]}, 0, settings(),
+        lambda current, actions, stop: events.append("execute") or {"ok": True},
+        lambda current: {"ok": True, "status": "success"},
+        lambda context: {"ok": False},
+        prepare=lambda plan, index: {"ok": False, "error": "model load failed"},
+    )
+
+    state = wait_terminal(manager)
+    assert events == []
+    assert state["state"] == "needs_human_review"
+    assert state["error"] == "model load failed"
+
+
+def test_stop_during_prepare_prevents_first_step():
+    entered = threading.Event()
+    release = threading.Event()
+    events = []
+    manager = VerifiedExecutionManager()
+
+    def prepare(plan, index):
+        entered.set()
+        release.wait(1)
+        return {"ok": True}
+
+    manager.start(
+        "pick", {"steps": [step()]}, 0, settings(),
+        lambda current, actions, stop: events.append("execute") or {"ok": True},
+        lambda current: {"ok": True, "status": "success"},
+        lambda context: {"ok": False},
+        prepare=prepare,
+    )
+    assert entered.wait(1)
+    manager.stop()
+    release.set()
+
+    state = wait_terminal(manager)
+    assert state["state"] == "stopped"
+    assert events == []
 
 
 def test_continue_and_uncertain_retry_same_task_until_success():

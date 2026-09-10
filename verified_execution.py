@@ -57,6 +57,7 @@ class VerifiedExecutionManager:
         verify_step: Callable,
         replan: Callable,
         run_mode: str = "all",
+        prepare: Callable | None = None,
     ) -> dict:
         with self._lock:
             if self._state["running"]:
@@ -82,7 +83,7 @@ class VerifiedExecutionManager:
             }
         self._thread = threading.Thread(
             target=self._worker,
-            args=(execute_step, verify_step, replan),
+            args=(execute_step, verify_step, replan, prepare),
             daemon=True,
         )
         self._thread.start()
@@ -99,7 +100,23 @@ class VerifiedExecutionManager:
         if self._on_terminal:
             self._on_terminal()
 
-    def _worker(self, execute_step: Callable, verify_step: Callable, replan: Callable) -> None:
+    def _worker(
+        self,
+        execute_step: Callable,
+        verify_step: Callable,
+        replan: Callable,
+        prepare: Callable | None,
+    ) -> None:
+        if prepare is not None:
+            self._update(phase="loading_model")
+            state = self.status()
+            prepared = prepare(state["plan"], state["current_step_index"])
+            if self._stop_requested():
+                return
+            if not prepared.get("ok"):
+                self._review(prepared.get("error", "VLA model preparation failed"))
+                return
+            self._update(phase="model_ready")
         while True:
             if self._stop_requested():
                 return
