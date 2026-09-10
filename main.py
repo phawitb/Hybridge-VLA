@@ -6552,7 +6552,10 @@ def _g3d_ik_solve(target_pos, calibration=None, preferred_joints=None):
     return best_q
 
 
-def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=None):
+def _g3d_predict_from_pixel(
+    pixel, image_size=None, height_cm=0.0, calibration=None,
+    allow_unpreferred_wrist=False,
+):
     calibration = calibration or g3d_calib_state
     model = calibration.get("model")
     if not model:
@@ -6587,12 +6590,13 @@ def _g3d_predict_from_pixel(pixel, image_size=None, height_cm=0.0, calibration=N
     joint_values = _g3d_valid_joint_vector(raw_joint_values)
     if joint_values is None:
         return None
-    if _g3d_preferred_wrist(joint_values) is None:
+    preferred_joints = joint_values if _g3d_preferred_wrist(joint_values) is not None else None
+    if preferred_joints is None and not allow_unpreferred_wrist:
         return None
     ik_result = _g3d_ik_solve(
         target_urdf,
         calibration=calibration,
-        preferred_joints=joint_values,
+        preferred_joints=preferred_joints,
     )
 
     if ik_result is not None:
@@ -6988,13 +6992,14 @@ def _g3d_task_grip(
     stop_event: threading.Event,
     publish,
     command_cycles: int = 10,
+    owner: str = "generate3d",
 ) -> bool:
     """Command a grasp for a bounded period without requiring full closure."""
     for _ in range(command_cycles):
         if stop_event.is_set():
             return False
         command = {**robot_get_positions(), "gripper": float(value)}
-        robot_send_positions(command, owner="generate3d")
+        robot_send_positions(command, owner=owner)
         time.sleep(0.04)
         publish(phase, robot_get_positions())
     return True
@@ -7010,7 +7015,9 @@ G3D_TASK_JOINT_LIMITS = {
 }
 G3D_TASK_OPEN_GRIPPER = 50.0
 G3D_TASK_ARM_TOLERANCE_DEG = 3.0
+G3D_TASK_INITIAL_RAISE_TOLERANCES = {"shoulder_lift": 4.0}
 G3D_TASK_LOADED_LIFT_TOLERANCES = {"shoulder_lift": 4.0}
+G3D_TASK_POST_RELEASE_TOLERANCES = {"shoulder_lift": 4.5}
 G3D_TASK_GRIPPER_TOLERANCE = 2.0
 G3D_TASK_TARGET_CLEARANCE_CM = 5.0
 
@@ -7051,6 +7058,7 @@ def _g3d_build_pick_place_plan(
     initial_joints: dict,
     calibration=None,
     place_height_cm: float | None = None,
+    allow_unpreferred_wrist: bool = False,
 ) -> list[dict]:
     source_pixel = source.get("center_pixel")
     target_pixel = target.get("center_pixel")
@@ -7074,10 +7082,13 @@ def _g3d_build_pick_place_plan(
     )
     transfer_height_cm = max(safety_height_cm, target_release_height_cm)
 
-    source_low = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=target_height_cm, calibration=calibration)
-    source_safe = _g3d_predict_from_pixel(source_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
-    target_low = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=target_release_height_cm, calibration=calibration)
-    target_safe = _g3d_predict_from_pixel(target_pixel, image_size=image_size, height_cm=transfer_height_cm, calibration=calibration)
+    predict_kwargs = {"image_size": image_size, "calibration": calibration}
+    if allow_unpreferred_wrist:
+        predict_kwargs["allow_unpreferred_wrist"] = True
+    source_low = _g3d_predict_from_pixel(source_pixel, height_cm=target_height_cm, **predict_kwargs)
+    source_safe = _g3d_predict_from_pixel(source_pixel, height_cm=transfer_height_cm, **predict_kwargs)
+    target_low = _g3d_predict_from_pixel(target_pixel, height_cm=target_release_height_cm, **predict_kwargs)
+    target_safe = _g3d_predict_from_pixel(target_pixel, height_cm=transfer_height_cm, **predict_kwargs)
     if not all((source_low, source_safe, target_low, target_safe)):
         raise RuntimeError("Could not calculate a safe pick-and-place path")
     for prediction in (source_low, source_safe, target_low, target_safe):
@@ -7109,7 +7120,7 @@ def _g3d_build_pick_place_plan(
         _g3d_validate_joint_target(waypoint)
 
     return [
-        {"phase": "raising_to_safety", "joints": raised, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
+        {"phase": "raising_to_safety", "joints": raised, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG, "joint_tolerances": G3D_TASK_INITIAL_RAISE_TOLERANCES},
         {"phase": "moving_to_source", "joints": source_approach, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "opening_gripper", "joints": opened_at_source, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
         {"phase": "descending_to_source", "joints": source_pick, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
@@ -7118,7 +7129,7 @@ def _g3d_build_pick_place_plan(
         {"phase": "moving_to_target", "joints": target_approach, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "placing", "joints": target_place, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG},
         {"phase": "releasing", "joints": released, "n_steps": 10, "convergence_names": ["gripper"], "tolerance_deg": G3D_TASK_GRIPPER_TOLERANCE},
-        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG, "joint_tolerances": G3D_TASK_LOADED_LIFT_TOLERANCES},
+        {"phase": "lifting_after_release", "joints": final_waypoint, "n_steps": 15, "convergence_names": arm_names, "tolerance_deg": G3D_TASK_ARM_TOLERANCE_DEG, "joint_tolerances": G3D_TASK_POST_RELEASE_TOLERANCES},
     ]
 
 
@@ -7156,16 +7167,16 @@ def _g3d_predict_trajectory_samples(
     image_size: list,
     calibration,
     gripper: float,
+    allow_unpreferred_wrist: bool = False,
 ) -> list[dict]:
     trajectory = []
     for sample in path_samples:
         try:
-            prediction = _g3d_predict_from_pixel(
-                sample["pixel"],
-                image_size=image_size,
-                height_cm=sample["height_cm"],
-                calibration=calibration,
-            )
+            predict_kwargs = {"image_size": image_size, "height_cm": sample["height_cm"],
+                              "calibration": calibration}
+            if allow_unpreferred_wrist:
+                predict_kwargs["allow_unpreferred_wrist"] = True
+            prediction = _g3d_predict_from_pixel(sample["pixel"], **predict_kwargs)
             if not prediction or not isinstance(prediction.get("joints"), dict):
                 raise RuntimeError("prediction unavailable")
             joints = {**prediction["joints"], "gripper": float(gripper)}
@@ -7185,6 +7196,7 @@ def _g3d_build_smooth_pick_place_plan(
     initial_joints: dict,
     calibration=None,
     place_height_cm: float | None = None,
+    allow_unpreferred_wrist: bool = False,
 ) -> list[dict]:
     plan = _g3d_build_pick_place_plan(
         source,
@@ -7195,6 +7207,7 @@ def _g3d_build_smooth_pick_place_plan(
         initial_joints,
         calibration=calibration,
         place_height_cm=place_height_cm,
+        allow_unpreferred_wrist=allow_unpreferred_wrist,
     )
     by_phase = {step["phase"]: step for step in plan}
     source_pixel = source["center_pixel"]
@@ -7237,6 +7250,7 @@ def _g3d_build_smooth_pick_place_plan(
         gripper = G3D_TASK_OPEN_GRIPPER if phase == "lifting_after_release" else 0.0
         trajectory = _g3d_predict_trajectory_samples(
             phase, samples, image_size, calibration, gripper,
+            allow_unpreferred_wrist=allow_unpreferred_wrist,
         )
         by_phase[phase]["path_samples"] = samples
         by_phase[phase]["trajectory"] = trajectory
@@ -7244,14 +7258,16 @@ def _g3d_build_smooth_pick_place_plan(
     return plan
 
 
-def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publish) -> None:
+def _g3d_execute_real_plan(
+    plan: list[dict], stop_event: threading.Event, publish, owner: str = "generate3d",
+) -> None:
     for step in plan:
         trajectory = step.get("trajectory")
         if trajectory:
             for waypoint in trajectory[:-1]:
                 if stop_event.is_set():
                     return
-                robot_send_positions(waypoint, owner="generate3d")
+                robot_send_positions(waypoint, owner=owner)
                 time.sleep(0.04)
                 publish(step["phase"], robot_get_positions())
             if stop_event.is_set():
@@ -7262,12 +7278,14 @@ def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publis
                 tolerance_deg=step.get("tolerance_deg", 2.0),
                 convergence_names=step.get("convergence_names"),
                 joint_tolerances=step.get("joint_tolerances"),
+                owner=owner,
             ):
                 return
         elif step.get("kind") == "grip":
             if not _g3d_task_grip(
                 step["joints"]["gripper"], step["phase"], stop_event, publish,
                 command_cycles=step.get("command_cycles", 10),
+                owner=owner,
             ):
                 return
         elif not _g3d_task_move(
@@ -7276,6 +7294,7 @@ def _g3d_execute_real_plan(plan: list[dict], stop_event: threading.Event, publis
             tolerance_deg=step.get("tolerance_deg", 2.0),
             convergence_names=step.get("convergence_names"),
             joint_tolerances=step.get("joint_tolerances"),
+            owner=owner,
         ):
             return
 
@@ -7332,14 +7351,17 @@ def _g3d_execute_pick_place(
     publish,
     calibration=None,
     place_height_cm: float | None = None,
+    owner: str = "generate3d",
+    allow_unpreferred_wrist: bool = False,
 ) -> None:
     initial_joints = robot_get_positions()
     plan = _g3d_build_pick_place_plan(
         source, target, image_size, target_height_cm, safety_height_cm,
         initial_joints, calibration=calibration,
         place_height_cm=place_height_cm,
+        allow_unpreferred_wrist=allow_unpreferred_wrist,
     )
-    _g3d_execute_real_plan(plan, stop_event, publish)
+    _g3d_execute_real_plan(plan, stop_event, publish, owner=owner)
 
 
 def _g3d_execute_smooth_pick_place(
@@ -7352,14 +7374,17 @@ def _g3d_execute_smooth_pick_place(
     publish,
     calibration=None,
     place_height_cm: float | None = None,
+    owner: str = "generate3d",
+    allow_unpreferred_wrist: bool = False,
 ) -> None:
     initial_joints = robot_get_positions()
     plan = _g3d_build_smooth_pick_place_plan(
         source, target, image_size, target_height_cm, safety_height_cm,
         initial_joints, calibration=calibration,
         place_height_cm=place_height_cm,
+        allow_unpreferred_wrist=allow_unpreferred_wrist,
     )
-    _g3d_execute_real_plan(plan, stop_event, publish)
+    _g3d_execute_real_plan(plan, stop_event, publish, owner=owner)
 
 
 @app.post("/api/generate3d/task/start")
@@ -7416,13 +7441,24 @@ async def generate3d_task_start(request: Request):
         source, target = resolve_pick_place_objects(instruction, objects)
     except TaskResolutionError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "code": exc.code, "error": str(exc)})
+    enforce_workspace = data.get("enforce_workspace", True) is not False
+    if not enforce_workspace:
+        for obj in (source, target):
+            if obj.get("position_valid") is not False:
+                continue
+            prediction = _g3d_predict_from_pixel(
+                obj["center_pixel"], image_size=image_size,
+                allow_unpreferred_wrist=True,
+            )
+            if prediction:
+                obj.update(position_valid=True, position_3d=prediction["position_3d"],
+                           predicted_joints=prediction["joints"])
     if any(obj.get("position_valid") is False for obj in (source, target)):
         return JSONResponse(status_code=400, content={
             "ok": False,
             "code": "POSITION_REQUIRED",
-            "error": "A requested object is outside the calibrated robot area; adjust its box or calibration",
+            "error": "Robot cannot reach a requested object; adjust its box or calibration",
         })
-    enforce_workspace = data.get("enforce_workspace", True) is not False
     if enforce_workspace and not all(_g3d_point_in_calibrated_workspace(obj["center_pixel"], image_size) for obj in (source, target)):
         return JSONResponse(status_code=400, content={
             "ok": False,
@@ -7453,13 +7489,17 @@ async def generate3d_task_start(request: Request):
     hardware_acquired = False
     if use_real_robot and not flow_owned and not acquire_robot_operation("generate3d"):
         return JSONResponse(status_code=409, content={"ok": False, "code": "HARDWARE_BUSY", "error": f"Robot hardware is busy with {robot_operation_owner}"})
-    hardware_acquired = use_real_robot
+    hardware_acquired = use_real_robot and not flow_owned
 
     def execute(resolved_source, resolved_target, stop_event, publish):
         if use_real_robot:
             try:
                 execute_real = _g3d_execute_smooth_pick_place if motion_mode == "smooth" else _g3d_execute_pick_place
                 execute_kwargs = {"calibration": calibration_snapshot}
+                if not enforce_workspace:
+                    execute_kwargs["allow_unpreferred_wrist"] = True
+                if flow_owned:
+                    execute_kwargs["owner"] = "generate3d_flow"
                 if place_height_cm is not None:
                     execute_kwargs["place_height_cm"] = place_height_cm
                 return execute_real(
@@ -7478,6 +7518,8 @@ async def generate3d_task_start(request: Request):
         initial_joints = simulation_initial_joints
         build_plan = _g3d_build_smooth_pick_place_plan if motion_mode == "smooth" else _g3d_build_pick_place_plan
         plan_kwargs = {"calibration": calibration_snapshot}
+        if not enforce_workspace:
+            plan_kwargs["allow_unpreferred_wrist"] = True
         if place_height_cm is not None:
             plan_kwargs["place_height_cm"] = place_height_cm
         plan = build_plan(
@@ -7548,12 +7590,13 @@ No explanations and no markdown.
 
 
 def _g3d_flow_verification_prompt(block: dict) -> str:
-    return f"""Compare the before and after workspace images and verify this pick-and-place task:
+    return f"""Inspect the final workspace image and verify this pick-and-place task:
 {block.get('instruction', '')}
 Source: {block.get('source_name', '')}
 Target: {block.get('target_name', '')}
-Return ONLY JSON: {{"status":"success|failed|uncertain","reason":"visible outcome","visible_evidence":["evidence"]}}
-Use uncertain whenever the visible evidence is insufficient. No markdown."""
+Return ONLY JSON: {{"source_location":"inside_target|held_by_gripper|outside_target|unclear","reason":"visible outcome","visible_evidence":["evidence"]}}
+Report inside_target only when the source is visibly released inside the target. Report held_by_gripper when it is still held or above the target, outside_target when it is visibly elsewhere, and unclear when the final location cannot be determined.
+Judge only the final state shown in this image. Report unclear whenever occlusion or image quality makes the final state uncertain. No markdown."""
 
 
 async def _g3d_flow_gemini(prompt: str, image_b64: str, mime: str, model: str) -> tuple[dict | None, str]:
@@ -7568,6 +7611,35 @@ async def _g3d_flow_gemini(prompt: str, image_b64: str, mime: str, model: str) -
         raise FlowValidationError("GEMINI_REQUEST_FAILED", data.get("error", {}).get("message", "Gemini request failed"))
     raw = extract_text(data)
     return parse_json_response(raw), raw
+
+
+async def _g3d_flow_verify_after_frame(block: dict, after_bytes: bytes, mime: str, model: str) -> dict:
+    prompt = _g3d_flow_verification_prompt(block)
+    parsed, raw = await _g3d_flow_gemini(
+        prompt,
+        base64.b64encode(after_bytes).decode("ascii"),
+        mime,
+        model,
+    )
+    source_location = parsed.get("source_location") if isinstance(parsed, dict) else None
+    evidence = parsed.get("visible_evidence") if isinstance(parsed, dict) else None
+    status_by_location = {
+        "inside_target": "success",
+        "held_by_gripper": "failed",
+        "outside_target": "failed",
+        "unclear": "uncertain",
+    }
+    status = status_by_location.get(source_location, "uncertain")
+    if not isinstance(evidence, list):
+        evidence = []
+    return {
+        "status": status,
+        "source_location": source_location if source_location in status_by_location else "unclear",
+        "reason": str((parsed or {}).get("reason", "Verification output was incomplete")),
+        "visible_evidence": evidence,
+        "prompt": prompt,
+        "raw": raw,
+    }
 
 
 def _g3d_capture_top_bytes() -> tuple[bytes, str]:
@@ -7891,6 +7963,18 @@ def _run_g3d_flow_block(block, config, transition, should_stop):
     if task_state.get("state") != "completed":
         return {"status": "failed", "objects": objects, "error": task_state.get("error", "Execution failed"), "error_code": "EXECUTION_FAILED"}
 
+    if config.get("skip_verification"):
+        return {
+            "status": "success",
+            "objects": objects,
+            "artifacts": {"before": before_name},
+            "verification": {
+                "status": "skipped",
+                "reason": "Verification skipped",
+                "visible_evidence": [],
+            },
+        }
+
     transition("capturing_verification")
     after_bytes, after_mime = _g3d_flow_image_for_block(config)
     if payload["execution_mode"] == "simulation":
@@ -7918,21 +8002,13 @@ def _run_g3d_flow_block(block, config, transition, should_stop):
                         "visible_evidence": [f"{source['name']} is attached to {target['name']} in simulated state"] if verified else [],
                         "simulated_state": simulated_state}
     else:
-        before = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        after = Image.open(io.BytesIO(after_bytes)).convert("RGB")
-        height = max(before.height, after.height)
-        combined = Image.new("RGB", (before.width + after.width, height), "white")
-        combined.paste(before, (0, 0)); combined.paste(after, (before.width, 0))
-        buffer = io.BytesIO(); combined.save(buffer, format="JPEG", quality=90)
-        prompt = _g3d_flow_verification_prompt(block)
         try:
-            parsed, raw = asyncio.run(_g3d_flow_gemini(prompt, base64.b64encode(buffer.getvalue()).decode("ascii"), "image/jpeg", str(config.get("model", ""))))
-            status = parsed.get("status") if isinstance(parsed, dict) else None
-            evidence = parsed.get("visible_evidence") if isinstance(parsed, dict) else None
-            if status not in {"success", "failed", "uncertain"} or not isinstance(evidence, list):
-                status = "uncertain"
-            verification = {"status": status, "reason": str((parsed or {}).get("reason", "Verification output was incomplete")),
-                            "visible_evidence": evidence or [], "prompt": prompt, "raw": raw}
+            verification = asyncio.run(_g3d_flow_verify_after_frame(
+                block,
+                after_bytes,
+                after_mime,
+                str(config.get("model", "")),
+            ))
         except Exception as exc:
             verification = {"status": "uncertain", "reason": str(exc), "visible_evidence": []}
     return {"status": verification["status"], "objects": objects, "artifacts": artifacts, "verification": verification}
@@ -7958,6 +8034,7 @@ async def generate3d_flow_start(request: Request):
     config.setdefault("safety_height_cm", 10.0)
     config.setdefault("enforce_workspace", False)
     config.setdefault("return_to_rest_on_success", True)
+    config["skip_verification"] = bool(config.get("skip_verification", False))
     if config["execution_mode"] not in {"simulation", "real"} or config["motion_mode"] not in {"smooth", "waypoint"}:
         return JSONResponse(status_code=400, content={"ok": False, "code": "INVALID_CONFIG", "error": "Invalid execution or motion mode"})
     try:

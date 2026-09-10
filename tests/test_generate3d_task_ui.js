@@ -36,12 +36,14 @@ assert.ok(
 assert.ok(html.indexOf('id="g3dGeminiInput"') < html.indexOf('id="g3dDetectBtn"'));
 assert.match(html, /id="g3dGeminiInput"[^>]*readonly/);
 assert.doesNotMatch(html.match(/<input[^>]*id="g3dEnforceWorkspace"[^>]*>/)[0], /\schecked(?:\s|>)/);
+assert.match(html.match(/<input[^>]*id="g3dExecutionReal"[^>]*>/)[0], /\schecked(?:\s|>)/);
+assert.doesNotMatch(html.match(/<input[^>]*id="g3dExecutionSimulation"[^>]*>/)[0], /\schecked(?:\s|>)/);
 
 const elements = {
   g3dTaskInstruction: {value: 'pick up white star to teal bowl'},
   g3dGeminiInput: {value: ''},
-  g3dExecutionSimulation: {checked: true},
-  g3dExecutionReal: {checked: false},
+  g3dExecutionSimulation: {checked: false},
+  g3dExecutionReal: {checked: true},
   g3dEnforceWorkspace: {checked: false},
   g3dTargetHeight: {value: '1'},
   g3dSafetyHeight: {value: '10'},
@@ -157,16 +159,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(context.g3dBuildTaskPayload())), {
   place_height_cm: 5,
   safety_height_cm: 18,
   enforce_workspace: false,
-  execution_mode: 'simulation',
+  execution_mode: 'real',
   motion_mode: 'smooth',
-  initial_joints: {
-    shoulder_pan: 4,
-    shoulder_lift: -12,
-    elbow_flex: 18,
-    wrist_flex: 25,
-    wrist_roll: 3,
-    gripper: 35,
-  },
 });
 elements.g3dMotionSmooth.checked = false;
 elements.g3dMotionWaypoint.checked = true;

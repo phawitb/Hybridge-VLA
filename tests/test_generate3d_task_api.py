@@ -220,6 +220,106 @@ def test_generate3d_flow_wait_publishes_live_task_phase_and_joints(monkeypatch):
     assert updates[0]["joints"]["shoulder_pan"] == 4.0
 
 
+def test_generate3d_flow_verification_sends_only_after_frame(monkeypatch):
+    after_bytes = b"after-frame-only"
+    captured = {}
+
+    async def fake_gemini(prompt, image_b64, mime, model):
+        captured.update(
+            prompt=prompt,
+            image=main.base64.b64decode(image_b64),
+            mime=mime,
+            model=model,
+        )
+        return {
+            "status": "failed",
+            "source_location": "inside_target",
+            "reason": "pink bow is inside green bowl",
+            "visible_evidence": ["source is released inside target"],
+        }, "raw-json"
+
+    monkeypatch.setattr(main, "_g3d_flow_gemini", fake_gemini)
+    verification = asyncio.run(main._g3d_flow_verify_after_frame(
+        {
+            "instruction": "Pick up the pink bow and place it in the green bowl.",
+            "source_name": "pink bow",
+            "target_name": "green bowl",
+        },
+        after_bytes,
+        "image/jpeg",
+        "gemini-test",
+    ))
+
+    assert captured["image"] == after_bytes
+    assert captured["mime"] == "image/jpeg"
+    assert captured["model"] == "gemini-test"
+    assert "final workspace image" in captured["prompt"]
+    assert "before and after" not in captured["prompt"].lower()
+    assert '"source_location":"inside_target|held_by_gripper|outside_target|unclear"' in captured["prompt"]
+    assert verification["status"] == "success"
+    assert verification["source_location"] == "inside_target"
+
+
+def test_generate3d_flow_block_skips_after_capture_and_verification(monkeypatch, tmp_path):
+    captures = []
+    before_bytes = b"before-frame"
+    artifact_root = tmp_path / "artifacts" / "flow-1"
+    artifact_root.mkdir(parents=True)
+
+    class Manager:
+        def status(self):
+            return {"flow_id": "flow-1"}
+
+        def artifact_path(self, flow_id, filename):
+            assert flow_id == "flow-1"
+            return artifact_root / filename
+
+    async def fake_detect(upload, instruction, model):
+        return {
+            "ok": True,
+            "detection_id": "det-1",
+            "objects": [
+                {"name": "star", "task_role": "source", "position_3d": [0.1, 0.0, 0.1]},
+                {"name": "bowl", "task_role": "target", "position_3d": [0.2, 0.0, 0.1]},
+            ],
+            "gemini_raw": "{}",
+            "place_height_cm": 5.0,
+        }
+
+    async def fake_start(request):
+        return {"ok": True}
+
+    def fake_capture(config):
+        captures.append(config)
+        return before_bytes, "image/jpeg"
+
+    monkeypatch.setattr(main, "g3d_flow_manager", Manager())
+    monkeypatch.setattr(main, "_g3d_flow_image_for_block", fake_capture)
+    monkeypatch.setattr(main, "generate3d_detect_image", fake_detect)
+    monkeypatch.setattr(main, "generate3d_task_start", fake_start)
+    monkeypatch.setattr(main, "_g3d_wait_task", lambda *args, **kwargs: {"state": "completed"})
+    monkeypatch.setattr(main, "_g3d_flow_verify_after_frame", lambda *args, **kwargs: pytest.fail("verification must not run"))
+
+    transitions = []
+    result = main._run_g3d_flow_block(
+        {"index": 0, "instruction": "move star to bowl"},
+        {"execution_mode": "real", "skip_verification": True},
+        lambda phase, updates=None: transitions.append((phase, updates)),
+        lambda: False,
+    )
+
+    assert len(captures) == 1
+    assert [phase for phase, _ in transitions] == ["capturing", "detecting", "planning", "executing"]
+    assert result["status"] == "success"
+    assert result["verification"] == {
+        "status": "skipped",
+        "reason": "Verification skipped",
+        "visible_evidence": [],
+    }
+    assert result["artifacts"] == {"before": "block-1-before.jpg"}
+    assert not (artifact_root / "block-1-after.jpg").exists()
+
+
 def test_generate3d_rest_position_is_saved_and_loaded_from_disk(monkeypatch, tmp_path):
     setup_task_api(monkeypatch)
     rest_file = tmp_path / "generate3d_rest_position.json"
@@ -416,6 +516,37 @@ def test_generate3d_detect_image_displays_found_objects_when_position_prediction
     assert all(obj["position_3d"] is None for obj in objects)
 
 
+def test_generate3d_prediction_uses_unconstrained_wrist_ik_when_calibrated_wrist_extrapolation_is_invalid(monkeypatch):
+    calibration = {
+        "model": {
+            "type": "affine",
+            "world_coeff": [[0.1, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            "joint_coeff": [
+                [0.0, 0.0, 0.0, 120.0, 0.0, 50.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ],
+        },
+        "last_image_size": [800, 600],
+        "points": [{"pixel": [0, 0], "position_3d": [0.1, 0.0, 0.0], "joints": {name: 0.0 for name in main.ROBOT_JOINTS}}],
+    }
+    calls = []
+
+    def fake_ik(target_pos, calibration=None, preferred_joints=None):
+        calls.append(preferred_joints)
+        return [0.0, 0.0, 0.0, 20.0, 0.0]
+
+    monkeypatch.setattr(main, "_g3d_ik_solve", fake_ik)
+    prediction = main._g3d_predict_from_pixel(
+        [900, 300], image_size=[800, 600], calibration=calibration,
+        allow_unpreferred_wrist=True,
+    )
+
+    assert prediction is not None
+    assert calls == [None]
+    assert prediction["joints"]["wrist_flex"] == 20.0
+
+
 def test_generate3d_task_start_reports_missing_detected_role(monkeypatch):
     setup_task_api(monkeypatch)
     main.g3d_detection_state["objects"] = [{
@@ -445,6 +576,7 @@ def test_generate3d_task_start_rejects_objects_without_robot_positions(monkeypat
 
     assert response.status_code == 400
     assert response.json()["code"] == "POSITION_REQUIRED"
+    assert response.json()["error"] == "Robot cannot reach a requested object; adjust its box or calibration"
 
 
 def test_generate3d_detection_update_preserves_existing_task_roles(monkeypatch):
@@ -749,6 +881,30 @@ def test_real_plan_streams_intermediate_trajectory_then_converges_final_anchor(m
     assert converged[0][0][1] == "moving_to_target"
 
 
+def test_real_plan_uses_flow_hardware_owner_for_every_command(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    target = {**initial, "shoulder_pan": 5.0}
+    owners = []
+    monkeypatch.setattr(main, "robot_send_positions", lambda joints, owner=None: owners.append(owner))
+    monkeypatch.setattr(main, "robot_get_positions", lambda: dict(target))
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+
+    main._g3d_execute_real_plan(
+        [{
+            "phase": "moving_to_target",
+            "joints": target,
+            "trajectory": [initial, target],
+            "convergence_names": main.ROBOT_JOINTS[:5],
+        }],
+        threading.Event(),
+        lambda phase, joints: None,
+        owner="generate3d_flow",
+    )
+
+    assert owners
+    assert set(owners) == {"generate3d_flow"}
+
+
 def test_real_plan_stops_during_trajectory_stream(monkeypatch):
     initial = {name: 0.0 for name in main.ROBOT_JOINTS}
     trajectory = [{**initial, "shoulder_pan": value} for value in (2.0, 5.0, 9.0)]
@@ -811,6 +967,29 @@ def test_generate3d_pick_place_uses_partial_gripper_opening(monkeypatch):
     assert by_phase["descending_to_source"]["gripper"] == 50.0
     assert by_phase["releasing"]["gripper"] == 50.0
     assert by_phase["lifting_after_release"]["gripper"] == 50.0
+
+
+def test_pick_place_relaxes_shoulder_only_after_object_is_released(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", lambda pixel, image_size=None, height_cm=0, calibration=None: {
+        "position_3d": [0.0, height_cm / 100, 0.0],
+        "joints": {
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 16.0,
+            "elbow_flex": 20.0,
+            "wrist_flex": 30.0,
+            "wrist_roll": 0.0,
+            "gripper": 50.0,
+        },
+    })
+
+    plan = main._g3d_build_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 0.0, 10.0, initial,
+    )
+    by_phase = {step["phase"]: step for step in plan}
+
+    assert by_phase["lifting_source"]["joint_tolerances"]["shoulder_lift"] == 4.0
+    assert by_phase["lifting_after_release"]["joint_tolerances"]["shoulder_lift"] == 4.5
 
 
 def test_pick_place_plan_uses_absolute_place_height_from_floor(monkeypatch):
@@ -1699,6 +1878,31 @@ def test_lifting_source_accepts_loaded_shoulder_residual_up_to_four_degrees(monk
         threading.Event(),
         lambda phase, joints: None,
     )
+
+
+def test_raising_to_safety_allows_shoulder_lift_residual_up_to_four_degrees(monkeypatch):
+    initial = {name: 0.0 for name in main.ROBOT_JOINTS}
+
+    def fake_predict(pixel, image_size=None, height_cm=0.0, calibration=None):
+        return {
+            "position_3d": [0.0, height_cm / 100, 0.0],
+            "joints": {
+                "shoulder_pan": 0.0,
+                "shoulder_lift": -height_cm,
+                "elbow_flex": 0.0,
+                "wrist_flex": 0.0,
+                "wrist_roll": 0.0,
+                "gripper": 50.0,
+            },
+        }
+
+    monkeypatch.setattr(main, "_g3d_predict_from_pixel", fake_predict)
+    plan = main._g3d_build_pick_place_plan(
+        OBJECTS[0], OBJECTS[1], [800, 600], 1.0, 10.0, initial,
+    )
+
+    raising_step = next(step for step in plan if step["phase"] == "raising_to_safety")
+    assert raising_step["joint_tolerances"] == {"shoulder_lift": 4.0}
 
 
 def test_lifting_source_rejects_loaded_shoulder_residual_over_four_degrees(monkeypatch):

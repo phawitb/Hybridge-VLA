@@ -46,7 +46,7 @@ available_methods:
 - ik_reach_object_v1
 - smolVLA_v1
 planner:
-  use_ik: false
+  use_ik: true
   selected_models:
   - smolvla_DS4_2B2O_FF_removeidle_rand400
   prompt_templates:

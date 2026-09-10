@@ -101,6 +101,34 @@ def test_block_run_and_stop_are_scoped_and_idempotent(tmp_path):
     assert manager.stop()["ok"] is True
 
 
+def test_success_can_follow_execution_when_verification_is_skipped(tmp_path):
+    manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
+    manager.create_flow("long task", sample_plan(2)["subtasks"])
+    calls = []
+
+    def runner(block, config, transition, should_stop):
+        calls.append(block["index"])
+        for phase in ("capturing", "detecting", "planning", "executing"):
+            transition(phase)
+        return {
+            "status": "success",
+            "verification": {
+                "status": "skipped",
+                "reason": "Verification skipped",
+                "visible_evidence": [],
+            },
+        }
+
+    manager.start("all", None, {"skip_verification": True}, runner)
+    wait_until(lambda: not manager.status()["running"])
+
+    state = manager.status()
+    assert calls == [0, 1]
+    assert state["status"] == "success"
+    assert [block["phase"] for block in state["blocks"]] == ["success", "success"]
+    assert state["blocks"][0]["verification"]["status"] == "skipped"
+
+
 def test_artifact_path_rejects_traversal(tmp_path):
     manager = Generate3DFlowManager(tmp_path / "state.json", tmp_path / "artifacts")
     flow = manager.create_flow("long task", sample_plan(1)["subtasks"])
