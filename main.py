@@ -9677,7 +9677,13 @@ async def _run_direct_step_owned(data: dict, method: str, bbox):
 async def run_status():
     verified = verified_manager.status()
     if verified.get("state") != "idle":
-        verified["lines"] = vla_manager.status().get("lines", [])
+        worker = vla_manager.status()
+        verified["lines"] = worker.get("lines", [])
+        verified["model_id"] = worker.get("model_id")
+        verified["model_ready"] = worker.get("model_ready", False)
+        verified["hardware_connected"] = worker.get("hardware_connected", False)
+        if worker.get("state") in {"releasing_hardware", "connecting_vla_hardware"}:
+            verified["phase"] = worker["state"]
         return verified
     return vla_manager.status()
 

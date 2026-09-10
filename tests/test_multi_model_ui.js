@@ -108,6 +108,10 @@ assert.equal(latestCheck.cycle, 2);
 assert.equal(context.verifiedRunLabel({phase: 'executing', cycle: 2, cycles_before_replan: 5, actions_per_cycle: 100}), 'Executing cycle 2/5 · 100 actions');
 assert.equal(context.verifiedRunLabel({phase: 'replanning', replan_count: 1, max_replans: 3}), 'Re-planning remaining work 1/3');
 assert.equal(context.verifiedRunLabel({state: 'needs_human_review', error: 'limit'}), 'Needs human review: limit');
+assert.equal(context.verifiedRunLabel({phase: 'loading_model', model_id: 'model_a'}), 'Loading model model_a…');
+assert.equal(context.verifiedRunLabel({phase: 'model_ready', model_id: 'model_a'}), 'Model model_a ready');
+assert.equal(context.verifiedRunLabel({phase: 'releasing_hardware'}), 'Releasing VLA hardware…');
+assert.equal(context.verifiedRunLabel({phase: 'connecting_vla_hardware'}), 'Connecting VLA hardware…');
 
 for (const id of ['cfgActionsPerCycle', 'cfgCyclesBeforeReplan', 'cfgMaxReplans']) {
   assert.match(html, new RegExp(`id=["']${id}["']`));

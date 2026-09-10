@@ -4826,6 +4826,10 @@ function runStateLabel(state) {
 function verifiedRunLabel(state) {
   if (state.state === 'needs_human_review') return `Needs human review: ${state.error || 'Unknown reason'}`;
   if (state.state === 'awaiting_step_selection') return 'Re-plan ready · select a step to continue';
+  if (state.phase === 'loading_model') return `Loading model ${state.model_id || 'VLA'}…`;
+  if (state.phase === 'model_ready') return `Model ${state.model_id || 'VLA'} ready`;
+  if (state.phase === 'releasing_hardware') return 'Releasing VLA hardware…';
+  if (state.phase === 'connecting_vla_hardware') return 'Connecting VLA hardware…';
   if (state.phase === 'executing') return `Executing cycle ${state.cycle}/${state.cycles_before_replan} · ${state.actions_per_cycle} actions`;
   if (state.phase === 'verifying') return `Verifying cycle ${state.cycle}/${state.cycles_before_replan} with Gemini`;
   if (state.phase === 'replanning') return `Re-planning remaining work ${state.replan_count}/${state.max_replans}`;

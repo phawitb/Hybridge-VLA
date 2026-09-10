@@ -293,6 +293,8 @@ class VlaProcessManager:
         current = self.status()
         if not current["model_ready"] or current["hardware_connected"]:
             return {"ok": False, "code": "VLA_NOT_READY", "error": "VLA model is not ready for a new task"}
+        with self._lock:
+            self._state = "connecting_vla_hardware"
         sent = self._send_command({
             "command": "run_task",
             "task": task,
@@ -313,6 +315,8 @@ class VlaProcessManager:
         current = self.status()
         if not current["running"] or not current["hardware_connected"]:
             return {"ok": True, "pid": current["pid"], "already_released": True}
+        with self._lock:
+            self._state = "releasing_hardware"
         sent = self._send_command({"command": "release_hardware"})
         if not sent.get("ok"):
             return sent
