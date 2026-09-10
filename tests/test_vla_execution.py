@@ -35,6 +35,13 @@ def wait_until(predicate, timeout: float = 3.0):
     raise AssertionError("condition did not become true")
 
 
+def fake_persistent_worker_command(tmp_path: Path, model_id: str = "model_a") -> list[str]:
+    return [
+        sys.executable, "-u", "infer_python.py", "--worker-protocol-test",
+        f"--model-path={tmp_path}", f"--model-id={model_id}",
+    ]
+
+
 def test_worker_command_parser_accepts_only_declared_json_commands():
     assert normalize_worker_command('{"command":"release_hardware"}') == {
         "command": "release_hardware"
@@ -122,6 +129,69 @@ def test_worker_releases_hardware_and_runs_new_task_without_restarting(tmp_path)
     finally:
         send({"command": "shutdown"})
         process.wait(timeout=2)
+
+
+def test_ensure_model_reuses_ready_process_for_same_model(tmp_path):
+    manager = VlaProcessManager(max_log_lines=20)
+    command = fake_persistent_worker_command(tmp_path)
+    try:
+        first = manager.ensure_model(command, "model_a", timeout=3)
+        second = manager.ensure_model(command, "model_a", timeout=3)
+
+        assert first["ok"] is True
+        assert second["ok"] is True
+        assert first["pid"] == second["pid"]
+        assert second["reused"] is True
+        assert manager.status()["model_ready"] is True
+    finally:
+        manager.stop()
+
+
+def test_manager_releases_hardware_and_reuses_worker_for_new_task(tmp_path):
+    manager = VlaProcessManager(max_log_lines=20)
+    try:
+        ready = manager.ensure_model(fake_persistent_worker_command(tmp_path), "model_a", timeout=3)
+        started = manager.run_task("pick", 1, str(tmp_path / "latest.jpg"), timeout=3)
+        wait_until(lambda: manager.status()["state"] == "waiting_for_verification")
+        released = manager.release_hardware(timeout=3)
+        first_pid = manager.status()["pid"]
+        second = manager.run_task("place", 1, str(tmp_path / "latest.jpg"), timeout=3)
+
+        assert ready["ok"] is True
+        assert started["ok"] is True
+        assert released["ok"] is True
+        assert second["ok"] is True
+        assert manager.status()["pid"] == first_pid
+        assert manager.status()["active_task"] == "place"
+    finally:
+        manager.stop()
+
+
+def test_ensure_model_replaces_worker_when_model_changes(tmp_path):
+    manager = VlaProcessManager(max_log_lines=20)
+    try:
+        first = manager.ensure_model(fake_persistent_worker_command(tmp_path, "model_a"), "model_a", timeout=3)
+        second = manager.ensure_model(fake_persistent_worker_command(tmp_path, "model_b"), "model_b", timeout=3)
+
+        assert first["ok"] is True
+        assert second["ok"] is True
+        assert second["reused"] is False
+        assert second["pid"] != first["pid"]
+        assert manager.status()["model_id"] == "model_b"
+    finally:
+        manager.stop()
+
+
+def test_ensure_model_times_out_when_worker_never_becomes_ready():
+    manager = VlaProcessManager(max_log_lines=20)
+    command = [sys.executable, "-u", "-c", "import time; time.sleep(2)", "--persistent-worker"]
+    try:
+        result = manager.ensure_model(command, "model_a", timeout=0.05)
+
+        assert result["ok"] is False
+        assert result["code"] == "MODEL_LOAD_TIMEOUT"
+    finally:
+        manager.stop(timeout=0.1)
 
 
 def test_build_infer_command_uses_registry_path_exact_task_and_required_camera(tmp_path):

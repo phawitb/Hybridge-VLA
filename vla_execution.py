@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 
@@ -60,6 +61,7 @@ class VlaProcessManager:
     def __init__(self, max_log_lines: int = 500):
         self.max_log_lines = max_log_lines
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._process: subprocess.Popen | None = None
         self._state = "idle"
         self._model_id: str | None = None
@@ -68,8 +70,13 @@ class VlaProcessManager:
         self._lines: list[str] = []
         self._cycle_ready_count = 0
         self._verification_image: str | None = None
+        self._model_ready = False
+        self._hardware_connected = False
+        self._active_task: str | None = None
+        self._last_error: dict | None = None
+        self._persistent = False
 
-    def start(self, command: list[str], model_id: str, task: str) -> dict:
+    def start(self, command: list[str], model_id: str, task: str | None) -> dict:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 return {"ok": False, "code": "VLA_ALREADY_RUNNING", "error": "VLA inference is already running"}
@@ -80,6 +87,11 @@ class VlaProcessManager:
             self._lines = []
             self._cycle_ready_count = 0
             self._verification_image = None
+            self._model_ready = False
+            self._hardware_connected = False
+            self._active_task = None
+            self._last_error = None
+            self._persistent = "--persistent-worker" in command or "--worker-protocol-test" in command
         try:
             process = subprocess.Popen(
                 command,
@@ -109,14 +121,39 @@ class VlaProcessManager:
                     continue
                 with self._lock:
                     self._lines.append(line)
-                    if line.startswith("CYCLE_READY "):
+                    event_name, separator, raw_event = line.partition(" ")
+                    event = None
+                    if separator and event_name in {
+                        "MODEL_READY", "HARDWARE_READY", "CYCLE_READY",
+                        "HARDWARE_RELEASED", "WORKER_ERROR",
+                    }:
                         try:
-                            event = json.loads(line.removeprefix("CYCLE_READY "))
+                            event = json.loads(raw_event)
+                        except json.JSONDecodeError:
+                            event = None
+                    if event_name == "MODEL_READY" and isinstance(event, dict):
+                        self._model_ready = True
+                        self._state = "model_ready"
+                    elif event_name == "HARDWARE_READY" and isinstance(event, dict):
+                        self._hardware_connected = True
+                        self._active_task = str(event.get("task", ""))
+                        self._task = self._active_task
+                        self._state = "running"
+                    elif event_name == "CYCLE_READY" and isinstance(event, dict):
+                        try:
                             self._cycle_ready_count += 1
                             self._verification_image = str(event.get("image", ""))
                             self._state = "waiting_for_verification"
-                        except json.JSONDecodeError:
+                        except (TypeError, ValueError):
                             pass
+                    elif event_name == "HARDWARE_RELEASED" and isinstance(event, dict):
+                        self._hardware_connected = False
+                        self._active_task = None
+                        self._task = None
+                        self._state = "model_ready"
+                    elif event_name == "WORKER_ERROR" and isinstance(event, dict):
+                        self._last_error = event
+                    self._condition.notify_all()
                     if len(self._lines) > self.max_log_lines:
                         self._lines = self._lines[-self.max_log_lines:]
         exit_code = process.wait()
@@ -124,6 +161,9 @@ class VlaProcessManager:
             self._exit_code = exit_code
             if self._state != "stopped":
                 self._state = "completed" if exit_code == 0 else "failed"
+            self._hardware_connected = False
+            self._model_ready = False
+            self._condition.notify_all()
 
     def status(self) -> dict:
         with self._lock:
@@ -138,8 +178,113 @@ class VlaProcessManager:
                 "pid": self._process.pid if self._process is not None else None,
                 "cycle_ready_count": self._cycle_ready_count,
                 "verification_image": self._verification_image,
+                "model_ready": self._model_ready,
+                "hardware_connected": self._hardware_connected,
+                "active_task": self._active_task,
+                "last_error": dict(self._last_error) if self._last_error else None,
                 "lines": list(self._lines),
             }
+
+    def _send_command(self, payload: dict, legacy: str | None = None) -> dict:
+        with self._lock:
+            process = self._process
+            stream = process.stdin if process is not None else None
+            running = process is not None and process.poll() is None
+            persistent = self._persistent
+        if not running or stream is None:
+            return {"ok": False, "code": "VLA_CONTROL_UNAVAILABLE", "error": "VLA control channel is unavailable"}
+        line = json.dumps(payload, separators=(",", ":")) if persistent or legacy is None else legacy
+        try:
+            stream.write((line + "\n").encode())
+            stream.flush()
+        except (BrokenPipeError, OSError) as exc:
+            with self._lock:
+                self._state = "failed"
+            return {"ok": False, "code": "VLA_CONTROL_FAILED", "error": str(exc)}
+        return {"ok": True, "pid": process.pid}
+
+    def _wait_for(self, predicate, timeout: float, code: str, message: str) -> dict:
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while not predicate():
+                process = self._process
+                if process is None or process.poll() is not None:
+                    return {"ok": False, "code": "VLA_PROCESS_EXITED", "error": "VLA worker exited before acknowledgement"}
+                if self._last_error:
+                    return {
+                        "ok": False,
+                        "code": str(self._last_error.get("code", "WORKER_ERROR")),
+                        "error": str(self._last_error.get("error", "VLA worker error")),
+                    }
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return {"ok": False, "code": code, "error": message}
+                self._condition.wait(remaining)
+            process = self._process
+            return {"ok": True, "pid": process.pid if process is not None else None}
+
+    def ensure_model(self, command: list[str], model_id: str, timeout: float = 120.0) -> dict:
+        current = self.status()
+        if current["running"] and current["model_id"] == model_id and current["model_ready"]:
+            return {"ok": True, "pid": current["pid"], "reused": True}
+        if current["running"]:
+            released = self.release_hardware()
+            if not released.get("ok"):
+                return released
+            self.stop()
+        started = self.start(command, model_id, None)
+        if not started.get("ok"):
+            return started
+        ready = self._wait_for(
+            lambda: self._model_ready,
+            timeout,
+            "MODEL_LOAD_TIMEOUT",
+            f"Timed out loading VLA model {model_id}",
+        )
+        if ready.get("ok"):
+            ready["reused"] = False
+        return ready
+
+    def run_task(
+        self,
+        task: str,
+        max_steps: int,
+        verification_image: str,
+        verification_timeout: float = 120.0,
+        timeout: float = 30.0,
+    ) -> dict:
+        current = self.status()
+        if not current["model_ready"] or current["hardware_connected"]:
+            return {"ok": False, "code": "VLA_NOT_READY", "error": "VLA model is not ready for a new task"}
+        sent = self._send_command({
+            "command": "run_task",
+            "task": task,
+            "max_steps": int(max_steps),
+            "verification_image": verification_image,
+            "verification_timeout": float(verification_timeout),
+        })
+        if not sent.get("ok"):
+            return sent
+        return self._wait_for(
+            lambda: self._hardware_connected and self._active_task == task,
+            timeout,
+            "HARDWARE_CONNECT_TIMEOUT",
+            "Timed out connecting VLA hardware",
+        )
+
+    def release_hardware(self, timeout: float = 10.0) -> dict:
+        current = self.status()
+        if not current["running"] or not current["hardware_connected"]:
+            return {"ok": True, "pid": current["pid"], "already_released": True}
+        sent = self._send_command({"command": "release_hardware"})
+        if not sent.get("ok"):
+            return sent
+        return self._wait_for(
+            lambda: not self._hardware_connected,
+            timeout,
+            "HARDWARE_RELEASE_TIMEOUT",
+            "Timed out releasing VLA hardware",
+        )
 
     def continue_cycle(self) -> dict:
         with self._lock:
@@ -150,20 +295,26 @@ class VlaProcessManager:
             self._state = "running"
         if stream is None:
             return {"ok": False, "code": "VLA_CONTROL_UNAVAILABLE", "error": "VLA control channel is unavailable"}
-        try:
-            stream.write(b"continue\n")
-            stream.flush()
-        except (BrokenPipeError, OSError) as exc:
-            with self._lock:
-                self._state = "failed"
-            return {"ok": False, "code": "VLA_CONTROL_FAILED", "error": str(exc)}
-        return {"ok": True, "pid": process.pid}
+        return self._send_command({"command": "continue"}, legacy="continue")
 
     def stop(self, timeout: float = 5.0) -> dict:
         with self._lock:
             process = self._process
         if process is None or process.poll() is not None:
             return {"ok": True, "state": self.status()["state"]}
+        if self._persistent:
+            self._send_command({"command": "shutdown"})
+            try:
+                process.wait(timeout=min(timeout, 1.0))
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                with self._lock:
+                    self._state = "stopped"
+                    self._exit_code = process.returncode
+                    self._model_ready = False
+                    self._hardware_connected = False
+                return {"ok": True, "state": "stopped"}
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGINT)
         except (ProcessLookupError, OSError):
