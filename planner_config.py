@@ -87,6 +87,35 @@ DEFAULT_NO_IK_PROMPT = """You are a robotic task planner for end-to-end VLA poli
 {"task_id":"descriptive_id","total_steps":1,"steps":[{"step_index":1,"description":"exact training task","target_bbox":null,"method_id":"vla_model","model_id":"selected_model_id"}]}"""
 
 
+DEFAULT_VERIFY_PROMPT = """You are a robotic plan verifier.
+
+## Instruction
+{instruction}
+
+## Proposed Plan
+{plan_json}
+
+## Selected VLA Models and Exact Training Tasks
+{available_models}
+
+## Active Execution Contract
+{ik_mode_rules}
+
+## Verification Rules
+- Judge the plan against the active execution contract and the selected model training tasks above.
+- Every VLA step must use a selected model ID and its description must exactly match one task declared for that model.
+- A declared training task is one complete end-to-end policy invocation, even when its text includes several physical actions.
+- Do not decompose a declared end-to-end training task into invented pick, carry, or place commands.
+- Reject unsupported methods, models, tasks, invalid normalized bounding boxes, or violations of the active IK mode.
+- Do not impose a fixed number of primitive steps. The required structure comes from the active IK mode.
+
+## Output
+Output ONLY valid JSON with no explanations or markdown fences:
+{"verified":true,"reason":"brief reason"}
+or
+{"verified":false,"reason":"specific error"}"""
+
+
 def planner_settings(config: dict) -> dict:
     planner = config.get("planner")
     if not isinstance(planner, dict):
@@ -142,6 +171,41 @@ def render_planner_prompt(config: dict, instruction: str, records: list[dict]) -
         "{available_models}", render_available_models(records, settings["selected_models"])
     )
     return prompt, [record["id"] for record in selected]
+
+
+def _verifier_template(config: dict) -> str:
+    prompt = str(config.get("verify_prompt_template") or "")
+    required = ("{instruction}", "{plan_json}", "{available_models}", "{ik_mode_rules}")
+    return prompt if all(marker in prompt for marker in required) else DEFAULT_VERIFY_PROMPT
+
+
+def _ik_mode_rules(use_ik: bool) -> str:
+    if use_ik:
+        return (
+            "IK mode: enabled. Every vla_model step must be immediately preceded by exactly "
+            "one ik_reach_object_v1 step. The IK step only reaches the interaction location; "
+            "the following VLA step executes the complete declared training task."
+        )
+    return (
+        "IK mode: disabled. Every step must use vla_model and no ik_reach_object_v1 step "
+        "is allowed. Each VLA step executes one complete declared training task."
+    )
+
+
+def render_verifier_prompt(
+    config: dict, instruction: str, plan_json: str, records: list[dict]
+) -> str:
+    settings = planner_settings(config)
+    prompt = _verifier_template(config)
+    replacements = {
+        "{instruction}": instruction,
+        "{plan_json}": plan_json,
+        "{available_models}": render_available_models(records, settings["selected_models"]),
+        "{ik_mode_rules}": _ik_mode_rules(settings["use_ik"]),
+    }
+    for marker, value in replacements.items():
+        prompt = prompt.replace(marker, value)
+    return prompt
 
 
 def _error(code: str, message: str, step_index: int | None) -> dict:

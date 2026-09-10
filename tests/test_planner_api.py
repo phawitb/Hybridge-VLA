@@ -204,6 +204,9 @@ def test_infer_rejects_plan_with_task_outside_model_capabilities(monkeypatch, tm
     assert response.status_code == 200
     assert response.json()["error_code"] == "INVALID_PLAN"
     assert response.json()["validation_errors"][0]["code"] == "TASK_NOT_SUPPORTED"
+    assert response.json()["error"] == (
+        "Generated plan is invalid: Task on step 1 is not declared for model model_a"
+    )
 
 
 def test_infer_accepts_selected_model_exact_training_task(monkeypatch, tmp_path):
@@ -219,6 +222,33 @@ def test_infer_accepts_selected_model_exact_training_task(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.json()["plan"]["steps"][0]["model_id"] == "model_a"
     assert response.json()["methods"] == ["vla_model:model_a"]
+
+
+def test_infer_verifies_with_capability_aware_prompt(monkeypatch, tmp_path):
+    setup_infer(monkeypatch, tmp_path, '{"task_id":"good","total_steps":1,"steps":[{"step_index":1,"description":"pick up the bow","target_bbox":null,"method_id":"vla_model","model_id":"model_a"}]}')
+    config = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    config["verify"] = {"enabled": True, "max_retries": 1}
+    config["verify_prompt_template"] = "legacy verifier demands four primitive steps"
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    seen = {}
+
+    async def fake_verify_plan(client, url, b64, mime, verify_prompt):
+        seen["prompt"] = verify_prompt
+        return {"verified": True, "reason": "matches selected capability"}
+
+    monkeypatch.setattr(main, "verify_plan", fake_verify_plan)
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/infer",
+        data={"model": "gemini-test", "instruction": "pick up the bow"},
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+    )
+
+    assert response.json()["verify"]["passed"] is True
+    assert "legacy verifier" not in seen["prompt"]
+    assert "IK mode: disabled" in seen["prompt"]
+    assert "MODEL_ID: model_a" in seen["prompt"]
 
 
 def test_infer_reports_invalid_plan_format_after_all_attempts(monkeypatch, tmp_path):

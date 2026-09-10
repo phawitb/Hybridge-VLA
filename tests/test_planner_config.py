@@ -1,10 +1,12 @@
 from planner_config import (
+    DEFAULT_VERIFY_PROMPT,
     DEFAULT_NO_IK_PROMPT,
     DEFAULT_USE_IK_PROMPT,
     execution_loop_settings,
     planner_settings,
     render_available_models,
     render_planner_prompt,
+    render_verifier_prompt,
     validate_plan,
 )
 
@@ -138,6 +140,48 @@ def test_render_planner_prompt_selects_no_ik_template():
     assert prompt.startswith("NO pick up the bow")
     assert "pick up the bow" in prompt
     assert selected == ["model_a"]
+
+
+def test_render_verifier_prompt_replaces_legacy_primitive_step_contract():
+    config = {
+        "planner": {"use_ik": True, "selected_models": ["model_a"]},
+        "verify_prompt_template": (
+            "{instruction} {plan_json} {available_methods} "
+            "A pick and place plan must always contain four primitive steps."
+        ),
+    }
+
+    prompt = render_verifier_prompt(
+        config,
+        "pick up the bow to the green bowl",
+        '{"steps": []}',
+        [model_record("model_a", ["pick up the bow to the green bowl"])],
+    )
+
+    assert "four primitive steps" not in prompt
+    assert "IK mode: enabled" in prompt
+    assert "pick up the bow to the green bowl" in prompt
+    assert "Do not decompose a declared end-to-end training task" in prompt
+    assert prompt.startswith(DEFAULT_VERIFY_PROMPT.split("{instruction}")[0])
+
+
+def test_render_verifier_prompt_preserves_capability_aware_custom_template():
+    custom = "VERIFY {instruction} {plan_json} {available_models} {ik_mode_rules}"
+    config = {
+        "planner": {"use_ik": False, "selected_models": ["model_a"]},
+        "verify_prompt_template": custom,
+    }
+
+    prompt = render_verifier_prompt(
+        config,
+        "pick up the bow",
+        '{"steps": []}',
+        [model_record("model_a", ["pick up the bow"])],
+    )
+
+    assert prompt.startswith("VERIFY pick up the bow")
+    assert "IK mode: disabled" in prompt
+    assert "MODEL_ID: model_a" in prompt
 
 
 def test_validate_plan_requires_ik_before_vla_in_use_ik_mode():

@@ -33,6 +33,7 @@ from planner_config import (
     planner_settings,
     render_available_models,
     render_planner_prompt,
+    render_verifier_prompt,
     validate_plan,
     validation_feedback,
     validate_execution_loop_settings,
@@ -201,18 +202,9 @@ async def verify_plan(
     url: str,
     b64: str,
     mime: str,
-    instruction: str,
-    plan_json: str,
-    available_methods: str,
-    verify_template: str,
+    verify_prompt: str,
 ) -> dict | None:
     """Send plan + image to Gemini for verification. Returns parsed result or None."""
-    verify_prompt = (
-        verify_template
-        .replace("{instruction}", instruction)
-        .replace("{plan_json}", plan_json)
-        .replace("{available_methods}", available_methods)
-    )
     parts = [
         {"inlineData": {"mimeType": mime, "data": b64}},
         {"text": verify_prompt},
@@ -1009,10 +1001,18 @@ async def infer(
                 break
 
             plan_json_str = json.dumps(plan_data, indent=2)
-            v_result = await verify_plan(
-                client, url, b64, mime,
-                instruction, plan_json_str, methods_str, verify_template,
-            )
+            if settings["selected_models"]:
+                verifier_prompt = render_verifier_prompt(
+                    cfg, instruction, plan_json_str, registry
+                )
+            else:
+                verifier_prompt = (
+                    verify_template
+                    .replace("{instruction}", instruction)
+                    .replace("{plan_json}", plan_json_str)
+                    .replace("{available_methods}", methods_str)
+                )
+            v_result = await verify_plan(client, url, b64, mime, verifier_prompt)
 
             if v_result and v_result.get("verified"):
                 attempt_record["verify_result"] = v_result
@@ -1045,8 +1045,12 @@ async def infer(
         }
 
     if last_validation_errors:
+        validation_summary = "; ".join(
+            error.get("message", error.get("code", "Unknown validation error"))
+            for error in last_validation_errors
+        )
         return {
-            "error": "Generated plan violates selected model capabilities or IK mode",
+            "error": f"Generated plan is invalid: {validation_summary}",
             "error_code": "INVALID_PLAN",
             "validation_errors": last_validation_errors,
             "verify": verify_info,
@@ -9314,14 +9318,24 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
             return {"ok": False, "error": f"VLA process {status.get('state')} (exit {status.get('exit_code')})"}
 
 
+def _verified_completion_prompt(step: dict) -> str:
+    task = str(step.get("description", ""))
+    return f"""You verify whether the current image visibly satisfies a robot task.
+Task: {task}
+
+Judge the requested final spatial state, not whether you observed every earlier motion.
+For pick-and-place, return success when the named object is visibly released inside or on the named destination. This does not require seeing the earlier pickup. The fact that the arm is above or near the destination is not evidence of failure when the object is already released correctly.
+Return continue only when the object is clearly outside the requested destination or clearly still held by the gripper. Return uncertain when object identity, containment, release, or the specific named destination cannot be determined.
+The status, reason, and visible_evidence must agree. Evidence that directly satisfies the requested final state cannot accompany continue.
+
+Return ONLY JSON: {{"status":"success|continue|uncertain","reason":"brief reason","visible_evidence":"what is visible"}}.
+"""
+
+
 def _verified_completion(step: dict) -> dict:
     try:
         image_bytes, mime = _capture_verified_frame(step)
-        prompt = f"""You verify whether a robot task is visibly complete.
-Task: {step.get('description', '')}
-Return ONLY JSON: {{"status":"success|continue|uncertain","reason":"brief reason","visible_evidence":"what is visible"}}.
-Use success only with clear visible evidence. For pick-and-place, the object must be visibly released at the requested destination; holding it above or near the destination is not success.
-"""
+        prompt = _verified_completion_prompt(step)
         raw = _gemini_image_json(prompt, image_bytes, mime)["raw"]
         parsed = parse_json_response(raw)
         if not isinstance(parsed, dict) or parsed.get("status") not in {"success", "continue", "uncertain"}:
