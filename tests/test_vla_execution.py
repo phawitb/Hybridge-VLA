@@ -4,7 +4,13 @@ import sys
 import time
 from pathlib import Path
 
-from infer_python import cycle_boundary_reached, normalize_cycle_command, should_continue
+from infer_python import (
+    cycle_boundary_reached,
+    normalize_cycle_command,
+    normalize_worker_command,
+    reset_policy_task_state,
+    should_continue,
+)
 from vla_execution import VlaProcessManager, build_infer_command
 
 
@@ -27,6 +33,95 @@ def wait_until(predicate, timeout: float = 3.0):
             return
         time.sleep(0.02)
     raise AssertionError("condition did not become true")
+
+
+def test_worker_command_parser_accepts_only_declared_json_commands():
+    assert normalize_worker_command('{"command":"release_hardware"}') == {
+        "command": "release_hardware"
+    }
+    assert normalize_worker_command('{"command":"unknown"}') is None
+    assert normalize_worker_command("continue") is None
+
+
+def test_new_task_clears_actions_and_language_cache():
+    class Policy:
+        def __init__(self):
+            self._queues = {"action": [1, 2, 3]}
+
+    policy = Policy()
+    cache = {"tokens": object(), "mask": object(), "embeddings": object()}
+    reset_policy_task_state(policy, cache)
+
+    assert policy._queues["action"] == []
+    assert cache == {"tokens": None, "mask": None, "embeddings": None}
+
+
+def test_worker_emits_model_ready_before_hardware_ready(tmp_path):
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-u",
+            "infer_python.py",
+            "--worker-protocol-test",
+            f"--model-path={tmp_path}",
+            "--model-id=model_a",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        first = process.stdout.readline()
+        process.stdin.write(json.dumps({
+            "command": "run_task",
+            "task": "pick",
+            "max_steps": 1,
+            "verification_image": str(tmp_path / "latest.jpg"),
+        }) + "\n")
+        process.stdin.flush()
+        second = process.stdout.readline()
+
+        assert first.startswith("MODEL_READY ")
+        assert second.startswith("HARDWARE_READY ")
+    finally:
+        process.stdin.write('{"command":"shutdown"}\n')
+        process.stdin.flush()
+        process.wait(timeout=2)
+
+
+def test_worker_releases_hardware_and_runs_new_task_without_restarting(tmp_path):
+    process = subprocess.Popen(
+        [
+            sys.executable, "-u", "infer_python.py", "--worker-protocol-test",
+            f"--model-path={tmp_path}", "--model-id=model_a",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    pid = process.pid
+
+    def send(payload):
+        process.stdin.write(json.dumps(payload) + "\n")
+        process.stdin.flush()
+
+    try:
+        assert process.stdout.readline().startswith("MODEL_READY ")
+        send({"command": "run_task", "task": "pick", "max_steps": 1})
+        assert process.stdout.readline().startswith("HARDWARE_READY ")
+        assert process.stdout.readline().startswith("CYCLE_READY ")
+        send({"command": "release_hardware"})
+        assert process.stdout.readline().startswith("HARDWARE_RELEASED ")
+        send({"command": "run_task", "task": "place", "max_steps": 1})
+        second_ready = process.stdout.readline()
+
+        assert second_ready.startswith("HARDWARE_READY ")
+        assert json.loads(second_ready.split(" ", 1)[1])["task"] == "place"
+        assert process.pid == pid
+        assert process.poll() is None
+    finally:
+        send({"command": "shutdown"})
+        process.wait(timeout=2)
 
 
 def test_build_infer_command_uses_registry_path_exact_task_and_required_camera(tmp_path):

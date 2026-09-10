@@ -24,6 +24,9 @@ import time
 from pathlib import Path
 
 
+WORKER_COMMANDS = {"run_task", "continue", "release_hardware", "shutdown"}
+
+
 def prepare_runtime():
     """Load OpenCV before Torch to keep a single compatible OpenMP runtime on macOS."""
     import cv2
@@ -39,6 +42,58 @@ def cycle_boundary_reached(step: int, cycle_start: int, cycle_steps: int) -> boo
 def normalize_cycle_command(value: str) -> str:
     command = str(value or "").strip().casefold()
     return command if command in {"continue", "stop"} else "stop"
+
+
+def normalize_worker_command(value: str) -> dict | None:
+    try:
+        command = json.loads(str(value or ""))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(command, dict) or command.get("command") not in WORKER_COMMANDS:
+        return None
+    return command
+
+
+def reset_policy_task_state(policy, language_cache: dict) -> None:
+    queue = policy._queues.get("action")
+    if hasattr(queue, "clear"):
+        queue.clear()
+    else:
+        policy._queues["action"] = []
+    language_cache.update(tokens=None, mask=None, embeddings=None)
+
+
+def emit_worker_event(name: str, payload: dict) -> None:
+    print(f"{name} {json.dumps(payload, separators=(',', ':'))}", flush=True)
+
+
+def run_worker_protocol_test(model_id: str) -> int:
+    """Exercise the worker protocol without importing ML or hardware dependencies."""
+    emit_worker_event("MODEL_READY", {"model_id": model_id})
+    hardware_connected = False
+    for line in sys.stdin:
+        command = normalize_worker_command(line)
+        if command is None:
+            emit_worker_event("WORKER_ERROR", {"code": "INVALID_COMMAND", "error": "Invalid worker command"})
+            continue
+        name = command["command"]
+        if name == "shutdown":
+            return 0
+        if name == "run_task":
+            hardware_connected = True
+            task = str(command.get("task", ""))
+            emit_worker_event("HARDWARE_READY", {"task": task})
+            emit_worker_event("CYCLE_READY", {"step": int(command.get("max_steps", 1)), "image": str(command.get("verification_image", ""))})
+            continue
+        if name == "release_hardware":
+            hardware_connected = False
+            emit_worker_event("HARDWARE_RELEASED", {"task": str(command.get("task", ""))})
+            continue
+        if name == "continue" and hardware_connected:
+            emit_worker_event("CYCLE_READY", {"step": 1, "image": ""})
+            continue
+        emit_worker_event("WORKER_ERROR", {"code": "INVALID_STATE", "error": f"Cannot {name} in current state"})
+    return 0
 
 
 def save_verification_image(observation: dict, camera_names: list[str], target: Path) -> Path:
@@ -83,11 +138,39 @@ def wait_for_cycle_command(timeout: float) -> str:
     return "stop"
 
 
+def wait_for_worker_command(timeout: float | None = None) -> dict:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while _running and (deadline is None or time.monotonic() < deadline):
+        wait = 0.1 if deadline is None else min(0.1, max(0.0, deadline - time.monotonic()))
+        ready, _, _ = select.select([sys.stdin], [], [], wait)
+        if not ready:
+            continue
+        line = sys.stdin.readline()
+        if not line:
+            return {"command": "shutdown"}
+        command = normalize_worker_command(line)
+        if command is not None:
+            return command
+        emit_worker_event("WORKER_ERROR", {"code": "INVALID_COMMAND", "error": "Invalid worker command"})
+    return {"command": "shutdown"}
+
+
+def apply_run_task_command(args, policy, language_cache: dict, command: dict) -> None:
+    task = str(command.get("task", "")).strip()
+    if not task:
+        raise ValueError("run_task requires task")
+    reset_policy_task_state(policy, language_cache)
+    args.task = task
+    args.max_steps = max(1, int(command.get("max_steps", 1)))
+    args.verification_image = str(command.get("verification_image", ""))
+    args.verification_timeout = float(command.get("verification_timeout", 120.0))
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Python VLA inference")
     p.add_argument("--model-path", required=True, help="Path to model directory")
     p.add_argument("--task", default="", help="Task instruction text")
-    p.add_argument("--robot-port", required=True, help="Robot serial port")
+    p.add_argument("--robot-port", default="", help="Robot serial port")
     p.add_argument("--robot-id", default="my_awesome_follower_arm", help="Robot ID")
     p.add_argument("--cameras", default='{"top": 0, "wrist": 1}', help="JSON dict of camera_name: index")
     p.add_argument("--fps", type=int, default=30, help="Control loop FPS")
@@ -100,6 +183,9 @@ def parse_args():
     p.add_argument("--max-steps", type=int, default=0, help="Actions per verification cycle (0=run until interrupted)")
     p.add_argument("--verification-image", default="", help="JPEG snapshot written at each action-cycle boundary")
     p.add_argument("--verification-timeout", type=float, default=120.0, help="Seconds to wait for continue/stop before disconnecting")
+    p.add_argument("--persistent-worker", action="store_true", help="Keep the model loaded and accept JSON control commands")
+    p.add_argument("--worker-protocol-test", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--model-id", default="", help=argparse.SUPPRESS)
     return p.parse_args()
 
 
@@ -132,6 +218,11 @@ def main():
     _, torch = prepare_runtime()
 
     args = parse_args()
+
+    if args.worker_protocol_test:
+        return run_worker_protocol_test(args.model_id)
+    if not args.robot_port:
+        raise SystemExit("--robot-port is required")
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -183,6 +274,18 @@ def main():
     )
     print("[infer_python] Pre/post processors ready", flush=True)
 
+    language_cache = {"tokens": None, "mask": None, "embeddings": None}
+    if args.persistent_worker:
+        emit_worker_event("MODEL_READY", {"model_id": args.model_id})
+        initial_command = wait_for_worker_command()
+        if initial_command.get("command") != "run_task":
+            return 0
+        try:
+            apply_run_task_command(args, policy, language_cache, initial_command)
+        except (TypeError, ValueError) as exc:
+            emit_worker_event("WORKER_ERROR", {"code": "INVALID_TASK", "error": str(exc)})
+            return 1
+
     # --- Connect robot ---
     print("[infer_python] Connecting robot...", flush=True)
     from lerobot.robots import make_robot_from_config
@@ -212,6 +315,9 @@ def main():
     print("[infer_python] Calling robot.connect()...", flush=True)
     robot.connect()
     print("[infer_python] Robot connected", flush=True)
+    hardware_connected = True
+    if args.persistent_worker:
+        emit_worker_event("HARDWARE_READY", {"task": args.task})
 
     # --- Build dataset features for observation frame ---
     print("[infer_python] Building dataset features...", flush=True)
@@ -299,10 +405,6 @@ def main():
         print("[infer_python] Detailed PREDICT timing ENABLED", flush=True)
 
     # --- Setup language cache if requested ---
-    cached_lang_tokens = None
-    cached_lang_mask = None
-    cached_lang_embeds = None
-
     # Exact key names from lerobot constants
     LANG_TOKENS_KEY = "observation.language.tokens"
     LANG_MASK_KEY = "observation.language.attention_mask"
@@ -315,11 +417,10 @@ def main():
         _orig_embed_lang = _vlm_expert.embed_language_tokens
 
         def _cached_embed_language_tokens(tokens):
-            nonlocal cached_lang_embeds
-            if cached_lang_embeds is not None:
-                return cached_lang_embeds
+            if language_cache["embeddings"] is not None:
+                return language_cache["embeddings"]
             result = _orig_embed_lang(tokens)
-            cached_lang_embeds = result.detach()
+            language_cache["embeddings"] = result.detach()
             print(f"[infer_python] Cached language embeddings: {result.shape}", flush=True)
             return result
 
@@ -360,16 +461,16 @@ def main():
 
             # Cache language tokens after first preprocess, reuse on subsequent steps
             if args.cache_language and policy_type == "smolvla":
-                if cached_lang_tokens is None:
+                if language_cache["tokens"] is None:
                     if LANG_TOKENS_KEY in obs_processed:
-                        cached_lang_tokens = obs_processed[LANG_TOKENS_KEY].clone()
+                        language_cache["tokens"] = obs_processed[LANG_TOKENS_KEY].clone()
                     if LANG_MASK_KEY in obs_processed:
-                        cached_lang_mask = obs_processed[LANG_MASK_KEY].clone()
+                        language_cache["mask"] = obs_processed[LANG_MASK_KEY].clone()
                 else:
                     if LANG_TOKENS_KEY in obs_processed:
-                        obs_processed[LANG_TOKENS_KEY] = cached_lang_tokens
+                        obs_processed[LANG_TOKENS_KEY] = language_cache["tokens"]
                     if LANG_MASK_KEY in obs_processed:
-                        obs_processed[LANG_MASK_KEY] = cached_lang_mask
+                        obs_processed[LANG_MASK_KEY] = language_cache["mask"]
 
             # Predict action
             queue_empty = len(policy._queues.get("action", [])) == 0
@@ -414,11 +515,51 @@ def main():
                     "CYCLE_READY " + _json.dumps({"step": step, "image": str(target)}),
                     flush=True,
                 )
-                command = wait_for_cycle_command(args.verification_timeout)
-                print(f"[infer_python] Verification command: {command}", flush=True)
-                if command != "continue":
+                if not args.persistent_worker:
+                    command = wait_for_cycle_command(args.verification_timeout)
+                    print(f"[infer_python] Verification command: {command}", flush=True)
+                    if command != "continue":
+                        break
+                    cycle_start = step
+                    continue
+
+                command = wait_for_worker_command(args.verification_timeout)
+                name = command.get("command")
+                print(f"[infer_python] Worker command: {name}", flush=True)
+                if name == "continue":
+                    cycle_start = step
+                    continue
+                if name == "shutdown":
                     break
-                cycle_start = step
+                if name != "release_hardware":
+                    emit_worker_event("WORKER_ERROR", {"code": "INVALID_STATE", "error": f"Cannot {name} at cycle boundary"})
+                    break
+
+                robot.disconnect()
+                hardware_connected = False
+                completed_task = args.task
+                emit_worker_event("HARDWARE_RELEASED", {"task": completed_task})
+                while _running:
+                    next_command = wait_for_worker_command()
+                    next_name = next_command.get("command")
+                    if next_name == "shutdown":
+                        break
+                    if next_name != "run_task":
+                        emit_worker_event("WORKER_ERROR", {"code": "INVALID_STATE", "error": f"Cannot {next_name} while hardware is released"})
+                        continue
+                    try:
+                        apply_run_task_command(args, policy, language_cache, next_command)
+                        robot.connect()
+                        hardware_connected = True
+                        step = 0
+                        cycle_start = 0
+                        emit_worker_event("HARDWARE_READY", {"task": args.task})
+                    except Exception as exc:
+                        emit_worker_event("WORKER_ERROR", {"code": "HARDWARE_CONNECT_FAILED", "error": str(exc)})
+                        break
+                    break
+                if not hardware_connected:
+                    break
 
     except Exception as e:
         print(f"[infer_python] Error: {e}")
@@ -428,8 +569,9 @@ def main():
     finally:
         print(f"[infer_python] Stopping after {step} steps")
         try:
-            robot.disconnect()
-            print("[infer_python] Robot disconnected")
+            if hardware_connected:
+                robot.disconnect()
+                print("[infer_python] Robot disconnected")
         except Exception as e:
             print(f"[infer_python] Disconnect error: {e}")
     return 0
