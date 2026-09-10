@@ -161,6 +161,28 @@ def test_cycle_limit_replans_only_remaining_work_with_completed_context():
     assert len(contexts[0]["verification_history"]) == 2
 
 
+def test_replacement_plan_is_prepared_before_its_first_step():
+    events = []
+    manager = VerifiedExecutionManager()
+    verdicts = iter(["continue", "success"])
+    manager.start(
+        "pick", {"steps": [step()]}, 0, settings(cycles=1),
+        lambda current, actions, stop: events.append(("execute", current["description"])) or {"ok": True},
+        lambda current: {"ok": True, "status": next(verdicts)},
+        lambda context: {"ok": True, "plan": {"steps": [step(1, "replacement")] }},
+        prepare=lambda plan, index: events.append(("prepare", plan["steps"][index]["description"])) or {"ok": True},
+    )
+
+    state = wait_terminal(manager)
+    assert state["state"] == "completed"
+    assert events == [
+        ("prepare", "pick up the bow"),
+        ("execute", "pick up the bow"),
+        ("prepare", "replacement"),
+        ("execute", "replacement"),
+    ]
+
+
 def test_replan_limit_enters_human_review():
     manager = VerifiedExecutionManager()
     manager.start(

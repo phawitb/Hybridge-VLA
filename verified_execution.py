@@ -222,6 +222,15 @@ class VerifiedExecutionManager:
                     if self._on_terminal:
                         self._on_terminal()
                     return
+                if prepare is not None:
+                    self._update(phase="loading_model")
+                    prepared = prepare(replacement_plan, 0)
+                    if self._stop_requested():
+                        return
+                    if not prepared.get("ok"):
+                        self._review(prepared.get("error", "VLA model preparation failed"))
+                        return
+                    self._update(phase="model_ready")
                 break
 
     def stop(self) -> dict:

@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import base64
 import copy
 import hashlib
@@ -38,7 +39,7 @@ from planner_config import (
     validation_feedback,
     validate_execution_loop_settings,
 )
-from vla_execution import VlaProcessManager, build_infer_command
+from vla_execution import VlaProcessManager, build_infer_command, build_worker_command
 from verified_execution import VerifiedExecutionManager
 
 ROOT = Path(__file__).parent
@@ -132,10 +133,15 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Hybridge VLA")
 vla_manager = VlaProcessManager(max_log_lines=500)
+atexit.register(vla_manager.stop)
 
 
 def _verified_run_terminal():
-    vla_manager.stop()
+    state = verified_manager.status().get("state") if "verified_manager" in globals() else "stopped"
+    if state == "completed":
+        vla_manager.release_hardware()
+    else:
+        vla_manager.stop()
     release_robot_operation("verified_run")
 
 
@@ -9236,10 +9242,47 @@ def _gemini_image_json(prompt: str, image_bytes: bytes, mime: str) -> dict:
     return {"raw": extract_text(response.json()), "data": response.json()}
 
 
+def _verified_prepare(plan: dict, start_index: int) -> dict:
+    steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    first_vla = next(
+        (
+            step for step in steps[start_index:]
+            if isinstance(step, dict) and step.get("method_id") == "vla_model"
+        ),
+        None,
+    )
+    if first_vla is None:
+        return {"ok": True, "model_required": False}
+    cfg = load_config()
+    model_id = str(first_vla.get("model_id", ""))
+    record = get_model_record(_load_model_registry(cfg), model_id)
+    if not record or not record.get("selectable"):
+        return {"ok": False, "error": f"Selected VLA model is not executable: {model_id}"}
+    model_path = (ROOT / str(record.get("local_path", ""))).resolve()
+    models_root = (ROOT / "models").resolve()
+    if models_root not in model_path.parents or not model_path.exists():
+        return {"ok": False, "error": "Model checkpoint is not available locally"}
+    resolved = {**record, "local_path": str(model_path)}
+    try:
+        command = build_worker_command(
+            python=sys.executable,
+            script=ROOT / "infer_python.py",
+            model=resolved,
+            robot=cfg.get("robot", {}),
+            cameras=cfg.get("robot", {}).get("cameras", {}),
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return vla_manager.ensure_model(command, model_id, timeout=120.0)
+
+
 def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threading.Event) -> dict:
     if step.get("method_id") == "ik_reach_object_v1":
         if stop_event.is_set():
             return {"ok": False, "error": "Stopped by user"}
+        released = vla_manager.release_hardware(timeout=10.0)
+        if not released.get("ok"):
+            return released
         if not calib_state.get("homography"):
             return {"ok": False, "error": "Not calibrated — go to Calibrate tab first"}
         bbox = step.get("target_bbox")
@@ -9273,10 +9316,12 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
     if robot_state.get("connected"):
         disconnect_robot()
     active = vla_manager.status()
+    model_id = str(step.get("model_id", ""))
+    task = str(step.get("description", ""))
     compatible = (
         active.get("state") == "waiting_for_verification"
-        and active.get("model_id") == str(step.get("model_id", ""))
-        and active.get("task") == str(step.get("description", ""))
+        and active.get("model_id") == model_id
+        and active.get("active_task") == task
     )
     previous_ready_count = int(active.get("cycle_ready_count", 0))
     if compatible:
@@ -9284,29 +9329,29 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
         if not resumed.get("ok"):
             return resumed
     else:
-        if active.get("running"):
-            vla_manager.stop()
+        if active.get("hardware_connected"):
+            released = vla_manager.release_hardware(timeout=10.0)
+            if not released.get("ok"):
+                return released
+        active = vla_manager.status()
+        if active.get("model_id") != model_id or not active.get("model_ready"):
+            prepared = _verified_prepare({"steps": [step]}, 0)
+            if not prepared.get("ok"):
+                return prepared
+        if robot_state.get("connected"):
+            disconnect_robot()
         verification_image = ROOT / "data" / "run_verification" / "latest.jpg"
         verification_image.parent.mkdir(parents=True, exist_ok=True)
-        resolved = {**record, "local_path": str(model_path)}
-        try:
-            command = build_infer_command(
-                python=sys.executable,
-                script=ROOT / "infer_python.py",
-                model=resolved,
-                task=str(step.get("description", "")),
-                robot=cfg.get("robot", {}),
-                cameras=cfg.get("robot", {}).get("cameras", {}),
-                max_steps=actions_per_cycle,
-                verification_image=verification_image,
-                verification_timeout=120.0,
-            )
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        started = vla_manager.start(command, str(step.get("model_id", "")), str(step.get("description", "")))
+        previous_ready_count = int(vla_manager.status().get("cycle_ready_count", 0))
+        started = vla_manager.run_task(
+            task,
+            actions_per_cycle,
+            str(verification_image),
+            verification_timeout=120.0,
+            timeout=30.0,
+        )
         if not started.get("ok"):
             return started
-        previous_ready_count = 0
     while True:
         if stop_event.wait(0.1):
             vla_manager.stop()
@@ -9347,7 +9392,9 @@ def _verified_completion(step: dict) -> dict:
             "visible_evidence": str(parsed.get("visible_evidence", "")),
         }
         if result["status"] == "success":
-            vla_manager.stop()
+            released = vla_manager.release_hardware(timeout=10.0)
+            if not released.get("ok"):
+                return released
         return result
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -9421,6 +9468,7 @@ async def run_session_start(request: Request):
             _verified_completion,
             _verified_replan,
             run_mode,
+            prepare=_verified_prepare,
         )
     except Exception:
         release_robot_operation("verified_run")

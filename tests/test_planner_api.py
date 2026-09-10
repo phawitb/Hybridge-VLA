@@ -59,6 +59,91 @@ def test_config_returns_planner_settings(monkeypatch, tmp_path):
     }
 
 
+def test_verified_prepare_loads_first_vla_before_preceding_ik(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    events = []
+    monkeypatch.setattr(
+        main.vla_manager,
+        "ensure_model",
+        lambda command, model_id, timeout=120.0: events.append((model_id, command)) or {"ok": True},
+    )
+    plan = {"steps": [
+        {"step_index": 1, "method_id": "ik_reach_object_v1", "target_bbox": [0.5, 0.5, 0.2, 0.2]},
+        {"step_index": 2, "method_id": "vla_model", "model_id": "model_a", "description": "pick up the bow"},
+    ]}
+
+    result = main._verified_prepare(plan, 0)
+
+    assert result["ok"] is True
+    assert events[0][0] == "model_a"
+    assert "--persistent-worker" in events[0][1]
+
+
+def test_verified_ik_releases_worker_hardware_before_connecting_robot(monkeypatch):
+    events = []
+    monkeypatch.setattr(main.vla_manager, "release_hardware", lambda timeout=10.0: events.append("release") or {"ok": True})
+    monkeypatch.setattr(main, "connect_robot", lambda: events.append("connect") or main.robot_state.update(connected=True))
+    monkeypatch.setattr(main, "robot_get_positions", lambda: {
+        "shoulder_pan": 0.0, "shoulder_lift": 0.0, "elbow_flex": 0.0,
+        "wrist_flex": 0.0, "wrist_roll": 0.0, "gripper": 0.0,
+    })
+    monkeypatch.setattr(main, "robot_send_positions", lambda target, owner=None: events.append("move"))
+    monkeypatch.setattr(main, "interpolate_joints_from_pixel", lambda *args, **kwargs: {
+        "shoulder_pan": 1.0, "shoulder_lift": 1.0, "elbow_flex": 1.0,
+        "wrist_flex": 1.0, "wrist_roll": 1.0,
+    })
+    monkeypatch.setattr(main, "load_config", lambda: {"robot": {"cameras": {"top": {"w": 640, "h": 480}}}})
+    monkeypatch.setitem(main.calib_state, "homography", [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    monkeypatch.setitem(main.robot_state, "connected", False)
+
+    result = main._verified_execute_step(
+        {"method_id": "ik_reach_object_v1", "target_bbox": [0.5, 0.5, 0.2, 0.2]},
+        100,
+        threading.Event(),
+    )
+
+    assert result["ok"] is True
+    assert events[:3] == ["release", "connect", "move"]
+
+
+def test_verified_vla_disconnects_main_robot_before_starting_warm_task(monkeypatch, tmp_path):
+    setup_config(monkeypatch, tmp_path)
+    events = []
+    state = {
+        "ok": True, "state": "model_ready", "running": True,
+        "model_id": "model_a", "model_ready": True,
+        "hardware_connected": False, "active_task": None,
+        "cycle_ready_count": 0, "pid": 123,
+    }
+
+    def disconnect():
+        events.append("disconnect")
+        main.robot_state["connected"] = False
+
+    def run_task(task, max_steps, image, verification_timeout=120.0, timeout=30.0):
+        events.append(("run", task))
+        state.update(
+            state="waiting_for_verification", hardware_connected=True,
+            active_task=task, cycle_ready_count=1,
+            verification_image=image,
+        )
+        return {"ok": True, "pid": 123}
+
+    monkeypatch.setattr(main, "disconnect_robot", disconnect)
+    monkeypatch.setattr(main.vla_manager, "status", lambda: dict(state))
+    monkeypatch.setattr(main.vla_manager, "run_task", run_task)
+    monkeypatch.setitem(main.robot_state, "connected", True)
+
+    result = main._verified_execute_step(
+        {"method_id": "vla_model", "model_id": "model_a", "description": "pick up the bow"},
+        100,
+        threading.Event(),
+    )
+
+    assert result["ok"] is True
+    assert events == ["disconnect", ("run", "pick up the bow")]
+
+
 def test_config_save_persists_execution_loop_settings(monkeypatch, tmp_path):
     setup_config(monkeypatch, tmp_path)
     client = TestClient(main.app)
@@ -290,8 +375,8 @@ class FakeVerifiedManager:
         self.started = None
         self.stopped = False
 
-    def start(self, *args):
-        self.started = args
+    def start(self, *args, **kwargs):
+        self.started = args + (kwargs.get("prepare"),)
         return {"ok": True, "state": "running"}
 
     def status(self):
@@ -330,6 +415,7 @@ def test_run_session_start_snapshots_config_and_full_plan(monkeypatch, tmp_path)
     )
     assert all(callable(adapter) for adapter in manager.started[4:7])
     assert manager.started[7] == "all"
+    assert callable(manager.started[8])
 
 
 def test_run_session_start_rejects_generate3d_hardware_owner(monkeypatch, tmp_path):
@@ -424,19 +510,29 @@ def test_verified_execution_resumes_compatible_persistent_process(monkeypatch, t
             self.starts = 0
             self.continues = 0
             self.ready = 0
+            self.model_ready = False
+            self.hardware_connected = False
+            self.task = None
 
         def status(self):
-            if not self.ready:
-                return {"state": "idle", "running": False, "cycle_ready_count": 0, "lines": []}
+            if not self.model_ready:
+                return {"state": "idle", "running": False, "cycle_ready_count": 0, "lines": [], "model_ready": False, "hardware_connected": False}
             return {
-                "state": "waiting_for_verification", "running": True,
-                "cycle_ready_count": self.ready, "model_id": "model_a", "task": "pick up the bow",
+                "state": "waiting_for_verification" if self.hardware_connected else "model_ready", "running": True,
+                "cycle_ready_count": self.ready, "model_id": "model_a", "task": self.task,
+                "active_task": self.task, "model_ready": True, "hardware_connected": self.hardware_connected,
                 "pid": 123, "verification_image": "/tmp/frame.jpg", "lines": [],
             }
 
-        def start(self, command, model_id, task):
+        def ensure_model(self, command, model_id, timeout=120.0):
             self.starts += 1
-            self.ready = 1
+            self.model_ready = True
+            return {"ok": True, "pid": 123}
+
+        def run_task(self, task, max_steps, image, verification_timeout=120.0, timeout=30.0):
+            self.task = task
+            self.hardware_connected = True
+            self.ready += 1
             return {"ok": True, "pid": 123}
 
         def continue_cycle(self):
@@ -445,6 +541,11 @@ def test_verified_execution_resumes_compatible_persistent_process(monkeypatch, t
             return {"ok": True, "pid": 123}
 
         def stop(self):
+            return {"ok": True}
+
+        def release_hardware(self, timeout=10.0):
+            self.hardware_connected = False
+            self.task = None
             return {"ok": True}
 
     manager = PersistentManager()

@@ -57,6 +57,43 @@ def build_infer_command(
     return command
 
 
+def build_worker_command(
+    python: str,
+    script: Path,
+    model: dict,
+    robot: dict,
+    cameras: dict,
+) -> list[str]:
+    required_names = [
+        feature.rsplit(".", 1)[-1]
+        for feature in model.get("camera_features", [])
+    ]
+    missing = [name for name in required_names if name not in cameras]
+    if missing:
+        raise ValueError(f"Missing configured cameras: {', '.join(missing)}")
+    camera_indices = {
+        name: int(cameras[name].get("index", 0))
+        for name in required_names
+    }
+    first_camera = cameras[required_names[0]] if required_names else {}
+    command = [
+        python,
+        str(script),
+        f"--model-path={model['local_path']}",
+        f"--model-id={model['id']}",
+        f"--robot-port={robot.get('port', '')}",
+        f"--robot-id={robot.get('id', 'my_awesome_follower_arm')}",
+        f"--cameras={json.dumps(camera_indices, separators=(',', ':'))}",
+        f"--fps={int(first_camera.get('fps', 30))}",
+        f"--width={int(first_camera.get('w', first_camera.get('width', 320)))}",
+        f"--height={int(first_camera.get('h', first_camera.get('height', 240)))}",
+        "--persistent-worker",
+    ]
+    if model.get("policy_type") == "smolvla":
+        command.append("--cache-language")
+    return command
+
+
 class VlaProcessManager:
     def __init__(self, max_log_lines: int = 500):
         self.max_log_lines = max_log_lines

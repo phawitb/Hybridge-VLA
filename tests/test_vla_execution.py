@@ -11,7 +11,7 @@ from infer_python import (
     reset_policy_task_state,
     should_continue,
 )
-from vla_execution import VlaProcessManager, build_infer_command
+from vla_execution import VlaProcessManager, build_infer_command, build_worker_command
 
 
 def selectable_model(local_path: Path, cameras: list[str]) -> dict:
@@ -231,6 +231,23 @@ def test_build_infer_command_rejects_missing_required_camera(tmp_path):
         assert str(exc) == "Missing configured cameras: wrist"
     else:
         raise AssertionError("missing camera must fail")
+
+
+def test_build_worker_command_loads_model_without_fixed_task_or_cycle(tmp_path):
+    model_path = tmp_path / "models" / "model_a"
+    command = build_worker_command(
+        python="/env/bin/python",
+        script=Path("infer_python.py"),
+        model=selectable_model(model_path, ["observation.images.top"]),
+        robot={"port": "/dev/follower", "id": "arm"},
+        cameras={"top": {"index": 1, "w": 320, "h": 240}},
+    )
+
+    assert "--persistent-worker" in command
+    assert "--model-id=model_a" in command
+    assert "--model-path=" + str(model_path) in command
+    assert not any(item.startswith("--task=") for item in command)
+    assert not any(item.startswith("--max-steps=") for item in command)
 
 
 def test_process_manager_tracks_real_subprocess_completion():
