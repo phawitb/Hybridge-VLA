@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+from robot_handoff import disconnect_robot_hardware
+
 
 WORKER_COMMANDS = {"run_task", "continue", "release_hardware", "shutdown"}
 
@@ -65,6 +67,13 @@ def reset_policy_task_state(policy, language_cache: dict) -> None:
 
 def emit_worker_event(name: str, payload: dict) -> None:
     print(f"{name} {json.dumps(payload, separators=(',', ':'))}", flush=True)
+
+
+def release_worker_hardware(runtime: dict, keep_torque: bool = True) -> None:
+    robot = runtime.get("robot")
+    if robot is not None and runtime.get("hardware_connected"):
+        disconnect_robot_hardware(robot, keep_torque=keep_torque)
+    runtime["hardware_connected"] = False
 
 
 def run_worker_protocol_test(model_id: str) -> int:
@@ -535,8 +544,9 @@ def main():
                     emit_worker_event("WORKER_ERROR", {"code": "INVALID_STATE", "error": f"Cannot {name} at cycle boundary"})
                     break
 
-                robot.disconnect()
-                hardware_connected = False
+                handoff_runtime = {"robot": robot, "hardware_connected": hardware_connected}
+                release_worker_hardware(handoff_runtime, keep_torque=True)
+                hardware_connected = handoff_runtime["hardware_connected"]
                 completed_task = args.task
                 emit_worker_event("HARDWARE_RELEASED", {"task": completed_task})
                 while _running:
@@ -570,7 +580,7 @@ def main():
         print(f"[infer_python] Stopping after {step} steps")
         try:
             if hardware_connected:
-                robot.disconnect()
+                disconnect_robot_hardware(robot, keep_torque=False)
                 print("[infer_python] Robot disconnected")
         except Exception as e:
             print(f"[infer_python] Disconnect error: {e}")

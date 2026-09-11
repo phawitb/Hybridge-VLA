@@ -116,8 +116,8 @@ def test_verified_vla_disconnects_main_robot_before_starting_warm_task(monkeypat
         "cycle_ready_count": 0, "pid": 123,
     }
 
-    def disconnect():
-        events.append("disconnect")
+    def disconnect(*, keep_torque=False):
+        events.append(("disconnect", keep_torque))
         main.robot_state["connected"] = False
 
     def run_task(task, max_steps, image, verification_timeout=120.0, timeout=30.0):
@@ -141,7 +141,7 @@ def test_verified_vla_disconnects_main_robot_before_starting_warm_task(monkeypat
     )
 
     assert result["ok"] is True
-    assert events == ["disconnect", ("run", "pick up the bow")]
+    assert events == [("disconnect", True), ("run", "pick up the bow")]
 
 
 def test_config_save_persists_execution_loop_settings(monkeypatch, tmp_path):

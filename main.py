@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from generate3d_task import Generate3DTaskManager, TaskResolutionError, resolve_pick_place_objects
 from generate3d_flow import FlowValidationError, Generate3DFlowManager, parse_flow_plan
 from model_registry import get_model_record, load_local_models, load_remote_models, merge_model_records
+from robot_handoff import disconnect_robot_hardware
 from planner_config import (
     execution_loop_settings,
     planner_settings,
@@ -1207,7 +1208,7 @@ def connect_robot():
         threading.Thread(target=loop, daemon=True).start()
 
 
-def disconnect_robot():
+def disconnect_robot(*, keep_torque: bool = False):
     """Disconnect robot + release cameras. Waits for camera threads to finish."""
     if robot_operation_owner == "generate3d" and g3d_task_manager.status().get("running"):
         g3d_task_manager.stop()
@@ -1224,9 +1225,10 @@ def disconnect_robot():
         rob = robot_state["robot"]
         if rob:
             try:
-                rob.disconnect()
+                disconnect_robot_hardware(rob, keep_torque=keep_torque)
             except Exception:
-                pass
+                if keep_torque:
+                    raise
         robot_state["robot"] = None
         robot_state["connected"] = False
     print("[Camera Calibrate] Robot disconnected")
@@ -9314,7 +9316,10 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
     if models_root not in model_path.parents or not model_path.exists():
         return {"ok": False, "error": "Model checkpoint is not available locally"}
     if robot_state.get("connected"):
-        disconnect_robot()
+        try:
+            disconnect_robot(keep_torque=True)
+        except Exception as exc:
+            return {"ok": False, "error": f"Robot handoff failed: {exc}"}
     active = vla_manager.status()
     model_id = str(step.get("model_id", ""))
     task = str(step.get("description", ""))
@@ -9339,7 +9344,10 @@ def _verified_execute_step(step: dict, actions_per_cycle: int, stop_event: threa
             if not prepared.get("ok"):
                 return prepared
         if robot_state.get("connected"):
-            disconnect_robot()
+            try:
+                disconnect_robot(keep_torque=True)
+            except Exception as exc:
+                return {"ok": False, "error": f"Robot handoff failed: {exc}"}
         verification_image = ROOT / "data" / "run_verification" / "latest.jpg"
         verification_image.parent.mkdir(parents=True, exist_ok=True)
         previous_ready_count = int(vla_manager.status().get("cycle_ready_count", 0))
