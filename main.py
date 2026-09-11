@@ -1612,6 +1612,132 @@ async def remove_dataset_camera(name: str, request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/datasets/{name}/remove-beginning")
+async def remove_dataset_beginning(name: str, request: Request):
+    """Create a dataset copy with a fixed duration removed from every episode start."""
+    import shutil
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    body = await request.json()
+    try:
+        seconds = float(body.get("seconds", 2))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Seconds must be a number"}
+    output_name = str(body.get("output_name", "")).strip().replace(" ", "-").replace("/", "-")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return {"ok": False, "error": "Invalid source dataset name"}
+    if not output_name or not re.fullmatch(r"[A-Za-z0-9_.-]+", output_name):
+        return {"ok": False, "error": "Invalid output name. Use letters, numbers, dash, underscore, or dot."}
+    if not math.isfinite(seconds) or seconds <= 0:
+        return {"ok": False, "error": "Seconds must be greater than zero"}
+
+    source_dir = ROOT / "data" / name
+    output_dir = ROOT / "data" / output_name
+    info_path = source_dir / "meta" / "info.json"
+    if not info_path.exists():
+        return {"ok": False, "error": "Dataset not found"}
+    if output_dir.exists():
+        return {"ok": False, "error": f"Dataset '{output_name}' already exists"}
+
+    try:
+        info = json.loads(info_path.read_text())
+        fps = float(info.get("fps", 0))
+        if not math.isfinite(fps) or fps <= 0:
+            return {"ok": False, "error": "Dataset FPS must be greater than zero"}
+        remove_count = max(1, int(round(seconds * fps)))
+
+        data_rows_by_episode = {}
+        for parquet_path in sorted((source_dir / "data").rglob("*.parquet")):
+            for row in pq.read_table(parquet_path).to_pylist():
+                data_rows_by_episode.setdefault(int(row["episode_index"]), []).append(row)
+        for rows in data_rows_by_episode.values():
+            rows.sort(key=lambda row: row.get("frame_index", 0))
+        if not data_rows_by_episode:
+            return {"ok": False, "error": "No frame data found"}
+        for episode_index, rows in sorted(data_rows_by_episode.items()):
+            if len(rows) <= remove_count:
+                return {"ok": False, "error": f"Removing {seconds:g}s would empty episode {episode_index}"}
+
+        episode_meta = {}
+        for parquet_path in sorted((source_dir / "meta" / "episodes").rglob("*.parquet")):
+            for row in pq.read_table(parquet_path).to_pylist():
+                episode_meta[int(row["episode_index"])] = row
+
+        new_rows = []
+        new_episodes = []
+        timestamp_shift = remove_count / fps
+        for episode_index, rows in sorted(data_rows_by_episode.items()):
+            retained = rows[remove_count:]
+            dataset_from_index = len(new_rows)
+            for frame_index, row in enumerate(retained):
+                new_row = dict(row)
+                new_row["frame_index"] = frame_index
+                new_row["index"] = len(new_rows)
+                if new_row.get("timestamp") is not None:
+                    new_row["timestamp"] = max(0.0, float(new_row["timestamp"]) - timestamp_shift)
+                new_rows.append(new_row)
+
+            meta = dict(episode_meta.get(episode_index, {"episode_index": episode_index}))
+            meta["length"] = len(retained)
+            meta["dataset_from_index"] = dataset_from_index
+            meta["dataset_to_index"] = len(new_rows)
+            for key, value in list(meta.items()):
+                if key.startswith("videos/") and key.endswith("/from_timestamp") and value is not None:
+                    meta[key] = float(value) + timestamp_shift
+            new_episodes.append(meta)
+
+        shutil.copytree(source_dir, output_dir)
+        shutil.rmtree(output_dir / "data", ignore_errors=True)
+        shutil.rmtree(output_dir / "meta" / "episodes", ignore_errors=True)
+        data_output = output_dir / "data" / "chunk-000"
+        episode_output = output_dir / "meta" / "episodes" / "chunk-000"
+        data_output.mkdir(parents=True)
+        episode_output.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pylist(new_rows), data_output / "file-000.parquet")
+        pq.write_table(pa.Table.from_pylist(new_episodes), episode_output / "file-000.parquet")
+
+        new_info = dict(info)
+        new_info["total_frames"] = len(new_rows)
+        (output_dir / "meta" / "info.json").write_text(json.dumps(new_info, indent=4))
+        _compute_stats_json(new_rows, output_dir)
+        stats_path = output_dir / "meta" / "stats.json"
+        stats = json.loads(stats_path.read_text())
+        cameras = [
+            key for key, feature in info.get("features", {}).items()
+            if key.startswith("observation.images.") and isinstance(feature, dict) and feature.get("dtype") == "video"
+        ]
+        for key in list(stats):
+            if key.startswith("observation.images.") and key not in cameras:
+                stats.pop(key)
+        for camera in cameras:
+            stats.setdefault(camera, {
+                "min": [[[0.0]], [[0.0]], [[0.0]]], "max": [[[1.0]], [[1.0]], [[1.0]]],
+                "mean": [[[0.485]], [[0.456]], [[0.406]]], "std": [[[0.229]], [[0.224]], [[0.225]]],
+                "count": [len(new_rows)], "q01": [[[0.01]], [[0.01]], [[0.01]]],
+                "q10": [[[0.1]], [[0.1]], [[0.1]]], "q50": [[[0.5]], [[0.5]], [[0.5]]],
+                "q90": [[[0.9]], [[0.9]], [[0.9]]], "q99": [[[0.99]], [[0.99]], [[0.99]]],
+            })
+        stats_path.write_text(json.dumps(stats, indent=2))
+        (output_dir / "meta" / "beginning_removal.json").write_text(json.dumps({
+            "source_dataset": name,
+            "requested_seconds": seconds,
+            "removed_frames_per_episode": remove_count,
+            "effective_seconds": timestamp_shift,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=4))
+        return {
+            "ok": True, "name": output_name, "episodes": len(new_episodes),
+            "frames": len(new_rows), "removed_frames": remove_count * len(new_episodes), "seconds": seconds,
+        }
+    except Exception as e:
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/datasets/{name}/episodes")
 async def list_dataset_episodes(name: str):
     """List episodes in a dataset with full metadata.

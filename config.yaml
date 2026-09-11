@@ -267,10 +267,10 @@ click_to_move:
   target_height: 0.0
   safety_height: 10.0
 data_collection:
-  repo_id: phawitbinabik/DS5_2B2O_VV_rand25
-  dataset_root: ./data/DS5_2B2O_VV_rand25
-  task: pick up the star to the white bowl
-  num_episodes: 200
+  repo_id: phawitbinabik/DS_Hybridge
+  dataset_root: ./data/DS_Hybridge
+  task: pick up the blue star
+  num_episodes: 100
   encoder_threads: 4
   push_to_hub: false
   resume: true

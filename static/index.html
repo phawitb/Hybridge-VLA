@@ -1334,6 +1334,7 @@ bump_height = min(overshoot + 2, 10) degrees
       <button class="btn btn-sm btn-danger" id="vizDeleteDsBtn" onclick="vizShowDeleteDataset()" style="display:none">Delete Dataset</button>
       <button class="btn btn-sm" id="vizRemoveIdleBtn" onclick="vizRemoveIdle()" style="display:none;background:#795548;color:#fff">Remove Idle</button>
       <button class="btn btn-sm" id="vizExtendLastBtn" onclick="vizExtendLastFrame()" style="display:none;background:#546e7a;color:#fff">Extend Last Frame</button>
+      <button class="btn btn-sm" id="vizRemoveBeginningBtn" onclick="vizShowRemoveBeginning()" style="display:none;background:#8d6e63;color:#fff">Delete Beginning Frames</button>
       <button class="btn btn-sm" id="vizRemoveCameraBtn" onclick="vizShowRemoveCamera()" style="display:none;background:#c62828;color:#fff">Remove Camera</button>
       <button class="btn btn-sm" id="vizAugBtn" onclick="vizShowAugment()" style="display:none;background:#e8710a">Augment</button>
       <button class="btn btn-sm" id="vizPushHfBtn" onclick="vizShowPushHf()" style="display:none;background:#ff9d00;color:#000">Push to HF</button>
@@ -2748,7 +2749,16 @@ Effective: ~370ms / 50 = 7.4ms per action (amortized)</pre>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
               <button class="btn" id="trainDlBtn" onclick="trainDownloadDs()" style="background:#00897b;color:#fff">Download to Server</button>
               <button class="btn" id="trainStartBtn" onclick="trainStart()" style="background:#e8710a;color:#fff">Start Training</button>
+              <button class="btn btn-outline" id="trainCommandBtn" onclick="trainShowServerCommand()">Show Server Command</button>
               <span id="trainActionStatus" style="font-size:0.85rem;color:#888"></span>
+            </div>
+            <div id="trainServerCommand" style="display:none;margin-top:12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+                <span style="font-size:0.78rem;font-weight:600;color:#555">Run directly on the training server (no API)</span>
+                <button class="btn btn-sm" id="trainCopyCommandBtn" onclick="trainCopyServerCommand()" style="background:#555;padding:3px 10px">Copy</button>
+              </div>
+              <pre id="trainServerCommandText" style="margin:0;padding:10px 12px;background:#1e1e1e;color:#d4d4d4;border-radius:6px;font-size:0.72rem;line-height:1.55;overflow-x:auto;white-space:pre;word-break:normal"></pre>
+              <div style="font-size:0.72rem;color:#888;margin-top:5px">The dataset must already exist at the shown <code>dataset.root</code> path.</div>
             </div>
             <div id="trainActionLog" style="display:none;margin-top:10px;background:#1e1e1e;color:#d4d4d4;font-family:'SF Mono','Menlo','Consolas',monospace;font-size:0.72rem;line-height:1.5;padding:10px 12px;border-radius:6px;max-height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
           </div>
@@ -5249,6 +5259,7 @@ document.getElementById('vizDatasetSelect').addEventListener('change', async fun
   document.getElementById('vizDeleteDsBtn').style.display = name ? '' : 'none';
   document.getElementById('vizRemoveIdleBtn').style.display = name ? '' : 'none';
   document.getElementById('vizExtendLastBtn').style.display = name ? '' : 'none';
+  document.getElementById('vizRemoveBeginningBtn').style.display = name ? '' : 'none';
   document.getElementById('vizRemoveCameraBtn').style.display = 'none';
   document.getElementById('vizAugBtn').style.display = name ? '' : 'none';
   document.getElementById('vizPushHfBtn').style.display = name ? '' : 'none';
@@ -5446,6 +5457,73 @@ function vizShowRemoveCamera() {
   const select = document.getElementById('removeCameraSelect');
   if (vizCurrentCameras.includes('observation.images.top')) select.value = 'observation.images.top';
   vizUpdateRemoveCameraName();
+}
+
+function vizRemoveBeginningDefaultName(seconds) {
+  return `${vizCurrentDataset}_remove_${Number(seconds)}s`;
+}
+
+function vizShowRemoveBeginning() {
+  if (!vizCurrentDataset) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    <h3 style="margin-top:0;margin-bottom:8px;color:#6d4c41">Delete Beginning Frames</h3>
+    <p style="font-size:0.84rem;color:#666;line-height:1.5;margin-bottom:14px">
+      Creates a new dataset with the selected duration removed from the beginning of every episode.
+      The original dataset is not changed.
+    </p>
+    <label class="form-label">Duration to remove (seconds)</label>
+    <input id="removeBeginningSeconds" type="number" value="2" min="0.01" step="0.1"
+      oninput="vizUpdateRemoveBeginningName()" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;margin-bottom:12px">
+    <label class="form-label">New dataset name</label>
+    <input id="removeBeginningOutput" value="${vizRemoveBeginningDefaultName(2)}"
+      style="width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;margin-bottom:16px">
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm" onclick="closeModal()" style="background:#eee;color:#444">Cancel</button>
+      <button class="btn btn-sm" id="removeBeginningConfirmBtn" onclick="vizDoRemoveBeginning()" style="background:#6d4c41;color:#fff">Generate Dataset</button>
+    </div>
+    <div id="removeBeginningStatus" style="font-size:0.82rem;margin-top:10px"></div>`;
+  document.getElementById('modalOverlay').classList.add('visible');
+}
+
+function vizUpdateRemoveBeginningName() {
+  const seconds = document.getElementById('removeBeginningSeconds')?.value;
+  const output = document.getElementById('removeBeginningOutput');
+  if (output && seconds) output.value = vizRemoveBeginningDefaultName(seconds);
+}
+
+async function vizDoRemoveBeginning() {
+  const seconds = Number(document.getElementById('removeBeginningSeconds').value);
+  const outputName = document.getElementById('removeBeginningOutput').value.trim();
+  const button = document.getElementById('removeBeginningConfirmBtn');
+  const status = document.getElementById('removeBeginningStatus');
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    status.textContent = 'Duration must be greater than zero.'; status.style.color = '#c62828'; return;
+  }
+  if (!outputName) { status.textContent = 'Enter a new dataset name.'; status.style.color = '#c62828'; return; }
+  button.disabled = true;
+  button.textContent = 'Generating...';
+  status.textContent = 'Removing beginning frames from every episode...';
+  status.style.color = '#666';
+  try {
+    const response = await fetch(`/api/datasets/${vizCurrentDataset}/remove-beginning`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({seconds, output_name: outputName}),
+    });
+    const result = await response.json();
+    if (!result.ok) throw new Error(result.error || 'Generate failed');
+    status.textContent = `Created ${result.name}: removed ${result.removed_frames} frames.`;
+    status.style.color = '#2e7d32';
+    await vizRefreshDatasets();
+    document.getElementById('vizDatasetSelect').value = result.name;
+    document.getElementById('vizDatasetSelect').dispatchEvent(new Event('change'));
+    setTimeout(closeModal, 900);
+  } catch (error) {
+    status.textContent = error.message;
+    status.style.color = '#c62828';
+    button.disabled = false;
+    button.textContent = 'Generate Dataset';
+  }
 }
 
 function vizUpdateRemoveCameraName() {
@@ -7002,22 +7080,13 @@ async function trainDownloadDs() {
   }
 }
 
-async function trainStart() {
-  if (!trainSelectedRepoId) { document.getElementById('trainActionStatus').textContent = 'Select a dataset first'; return; }
-  const st = document.getElementById('trainActionStatus');
-  const logEl = document.getElementById('trainActionLog');
-  const btn = document.getElementById('trainStartBtn');
-  btn.disabled = true;
-  st.textContent = 'Starting training...';
-  st.style.color = '#888';
-  logEl.style.display = '';
-
+function trainReadConfig() {
+  if (!trainSelectedRepoId) return null;
   const dsName = trainSelectedRepoId.split('/').pop();
   const hfUser = cfg.hf_repo_name || 'phawitbinabik';
   const policyType = document.getElementById('trainPolicyType').value;
   const jobName = document.getElementById('trainJobName').value.trim() || `${policyType}_${dsName}`;
-
-  const body = {
+  const config = {
     policy_type: policyType,
     dataset_repo_id: trainSelectedRepoId,
     dataset_root: `./data/${dsName}`,
@@ -7032,36 +7101,123 @@ async function trainStart() {
     job_name: jobName,
     policy_repo_id: `${hfUser}/${policyType}_${dsName}`,
   };
-  // Gradient checkpointing
-  if (document.getElementById('trainGradCkpt').checked) body.gradient_checkpointing = true;
-  // Policy-specific fields
+  if (document.getElementById('trainGradCkpt').checked) config.gradient_checkpointing = true;
   if (policyType === 'smolvla') {
-    body.vlm_model_name = document.getElementById('trainVlmModel').value;
-    body.load_vlm_weights = document.getElementById('trainLoadVlm').checked;
-    body.train_expert_only = document.getElementById('trainExpertOnly').checked;
-    body.freeze_vision_encoder = document.getElementById('trainFreezeVision').checked;
+    config.vlm_model_name = document.getElementById('trainVlmModel').value;
+    config.load_vlm_weights = document.getElementById('trainLoadVlm').checked;
+    config.train_expert_only = document.getElementById('trainExpertOnly').checked;
+    config.freeze_vision_encoder = document.getElementById('trainFreezeVision').checked;
     const cs = parseInt(document.getElementById('trainSmolvlaChunkSize').value);
-    if (cs > 0) body.chunk_size = cs;
+    if (cs > 0) config.chunk_size = cs;
     const nas = parseInt(document.getElementById('trainSmolvlaNActionSteps').value);
-    if (nas > 0) body.n_action_steps = nas;
+    if (nas > 0) config.n_action_steps = nas;
   } else if (policyType === 'act') {
     const vb = document.getElementById('trainVisionBackbone').value;
-    if (vb) body.vision_backbone = vb;
+    if (vb) config.vision_backbone = vb;
     const cs = parseInt(document.getElementById('trainChunkSize').value);
-    if (cs > 0) body.chunk_size = cs;
+    if (cs > 0) config.chunk_size = cs;
     const nas = parseInt(document.getElementById('trainActNActionSteps').value);
-    if (nas > 0) body.n_action_steps = nas;
-    if (document.getElementById('trainUseVae').checked) body.use_vae = true;
+    if (nas > 0) config.n_action_steps = nas;
+    if (document.getElementById('trainUseVae').checked) config.use_vae = true;
   } else if (policyType === 'pi05') {
     const pg = document.getElementById('trainPaligemma').value;
-    if (pg) body.paligemma_variant = pg;
+    if (pg) config.paligemma_variant = pg;
     const ae = document.getElementById('trainActionExpert').value;
-    if (ae) body.action_expert_variant = ae;
+    if (ae) config.action_expert_variant = ae;
     const cs = parseInt(document.getElementById('trainPi05ChunkSize').value);
-    if (cs > 0) body.chunk_size = cs;
+    if (cs > 0) config.chunk_size = cs;
     const nas = parseInt(document.getElementById('trainPi05NActionSteps').value);
-    if (nas > 0) body.n_action_steps = nas;
+    if (nas > 0) config.n_action_steps = nas;
   }
+  return config;
+}
+
+function trainBuildServerCommand(config) {
+  const value = raw => {
+    const text = String(raw);
+    return /^[A-Za-z0-9_./:@+-]+$/.test(text) ? text : `'${text.replace(/'/g, `'"'"'`)}'`;
+  };
+  const policyType = config.policy_type === 'pi05' ? 'pi0' : config.policy_type;
+  const args = [
+    `--policy.type=${value(policyType)}`,
+    `--dataset.repo_id=${value(config.dataset_repo_id)}`,
+    `--dataset.root=${value(config.dataset_root)}`,
+    `--policy.use_amp=${config.use_amp ? 'true' : 'false'}`,
+    `--steps=${value(config.steps)}`,
+    `--batch_size=${value(config.batch_size)}`,
+    `--policy.optimizer_lr=${value(config.optimizer_lr)}`,
+  ];
+
+  if (config.policy_type === 'smolvla') {
+    args.push(`--policy.load_vlm_weights=${config.load_vlm_weights ? 'true' : 'false'}`);
+    args.push(`--policy.vlm_model_name=${value(config.vlm_model_name)}`);
+    args.push(`--policy.train_expert_only=${config.train_expert_only ? 'true' : 'false'}`);
+    args.push(`--policy.freeze_vision_encoder=${config.freeze_vision_encoder ? 'true' : 'false'}`);
+  } else if (config.policy_type === 'act') {
+    if (config.vision_backbone) args.push(`--policy.vision_backbone=${value(config.vision_backbone)}`);
+    if (config.use_vae) args.push('--policy.use_vae=true');
+  } else if (config.policy_type === 'pi05') {
+    args.push('--policy.pretrained_path=lerobot/pi0.5');
+    if (config.paligemma_variant) args.push(`--policy.paligemma_variant=${value(config.paligemma_variant)}`);
+    if (config.action_expert_variant) args.push(`--policy.action_expert_variant=${value(config.action_expert_variant)}`);
+  }
+  if (config.chunk_size) args.push(`--policy.chunk_size=${value(config.chunk_size)}`);
+  if (config.n_action_steps) args.push(`--policy.n_action_steps=${value(config.n_action_steps)}`);
+  if (config.gradient_checkpointing) args.push('--policy.gradient_checkpointing=true');
+  args.push(`--wandb.enable=${config.wandb_enable ? 'true' : 'false'}`);
+  if (config.wandb_enable) {
+    args.push(`--wandb.project=${value(config.wandb_project)}`);
+    if (config.wandb_entity) args.push(`--wandb.entity=${value(config.wandb_entity)}`);
+  }
+  args.push(`--output_dir=${value(`outputs/train/${config.job_name}`)}`);
+  args.push(`--job_name=${value(config.job_name)}`);
+  args.push(`--policy.repo_id=${value(config.policy_repo_id)}`);
+  if (config.resume) args.push('--resume=true');
+
+  const commandLines = args.map((arg, index) => `  ${arg}${index < args.length - 1 ? ' \\' : ''}`);
+  return ['cd /home/jupyter-phawit/so101-v2', 'conda run -n lerobot lerobot-train \\', ...commandLines].join('\n');
+}
+
+function trainShowServerCommand() {
+  const config = trainReadConfig();
+  const status = document.getElementById('trainActionStatus');
+  if (!config) {
+    status.textContent = 'Select a dataset first';
+    status.style.color = '#d93025';
+    return;
+  }
+  document.getElementById('trainServerCommandText').textContent = trainBuildServerCommand(config);
+  document.getElementById('trainServerCommand').style.display = '';
+  status.textContent = 'Server command generated from the current config.';
+  status.style.color = '#34a853';
+}
+
+function trainCopyServerCommand() {
+  const text = document.getElementById('trainServerCommandText').textContent;
+  if (!text) return;
+  const done = () => {
+    const btn = document.getElementById('trainCopyCommandBtn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(() => vizCopyFallback(text, done));
+  } else {
+    vizCopyFallback(text, done);
+  }
+}
+
+async function trainStart() {
+  if (!trainSelectedRepoId) { document.getElementById('trainActionStatus').textContent = 'Select a dataset first'; return; }
+  const st = document.getElementById('trainActionStatus');
+  const logEl = document.getElementById('trainActionLog');
+  const btn = document.getElementById('trainStartBtn');
+  btn.disabled = true;
+  st.textContent = 'Starting training...';
+  st.style.color = '#888';
+  logEl.style.display = '';
+
+  const body = trainReadConfig();
 
   try {
     const r = await fetch('/api/training/train', {
